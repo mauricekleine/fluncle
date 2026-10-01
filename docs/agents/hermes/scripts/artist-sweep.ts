@@ -10,7 +10,7 @@ import {
 const BATCH_CAP = 5;
 const QUEUE_LIMIT = 50;
 
-const IMAGE_BACKFILL_LIMIT = 50;
+const IMAGE_BACKFILL_LIMIT = 20;
 const EXPECTED_INTERVAL_MS = 60 * 60_000;
 
 const CLI_CALL_TIMEOUT_MS = 120_000;
@@ -210,7 +210,6 @@ function main(): void {
     failed: 0,
     imagesBudgetLimited: false,
     imagesChecked: 0,
-    imagesDeferredReason: null as null | string,
     imagesFailed: 0,
     imagesFilled: 0,
     imagesRateLimited: false,
@@ -248,37 +247,8 @@ function main(): void {
   }
 
   summary.queueRemaining = Math.max(0, queue.length - summary.resolved - summary.noop);
-  let quota: { quotaHoldState?: "clear" | "held" | "unknown"; quotaHoldUntil?: null | string } = {
-    quotaHoldState: "unknown",
-  };
-  try {
-    quota = fluncleJson<{
-      quotaHoldState?: "clear" | "held" | "unknown";
-      quotaHoldUntil?: null | string;
-    }>(["admin", "catalogue", "anchor-breaker"]);
-  } catch (error) {
-    log(`anchor-breaker read failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  const imagesDeferredReason =
-    quota.quotaHoldState === "unknown"
-      ? "quota_hold_unknown"
-      : quota.quotaHoldUntil
-        ? "quota_hold"
-        : null;
-  const images = imagesDeferredReason
-    ? {
-        budgetLimited: true,
-        checked: 0,
-        failed: 0,
-        filled: 0,
-        queueDepth: null,
-        rateLimited: false,
-        repairPending: false,
-        skipped: 0,
-      }
-    : drainArtistImages();
+  const images = drainArtistImages();
   summary.imagesBudgetLimited = images.budgetLimited;
-  summary.imagesDeferredReason = imagesDeferredReason;
   summary.imagesChecked = images.checked;
   summary.imagesFailed = images.failed;
   summary.imagesFilled = images.filled;

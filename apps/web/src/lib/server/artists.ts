@@ -50,7 +50,7 @@ import {
 } from "./labels";
 import { logEvent } from "./log";
 import { bestArtistAvatarUrl } from "../media";
-import { fetchArtistImages } from "./spotify";
+import { fetchArtistImages } from "./artist-images";
 import { deriveRemixerNames, fold } from "./track-match";
 import {
   type ArtistOverviewItem,
@@ -1283,11 +1283,23 @@ export async function fillMissingArtistImages(spotifyArtistIds: string[]): Promi
 
   const db = await getDb();
   const placeholders = ids.map(() => "?").join(",");
-  const missing = typedRows<{ id: string; spotify_artist_id: string }>(
+  const missing = typedRows<{
+    deezer_track_id: string | null;
+    id: string;
+    mbid: string | null;
+    name: string;
+    spotify_artist_id: string;
+  }>(
     (
       await db.execute({
         args: ids,
-        sql: `select id, spotify_artist_id from artists
+        sql: `select id, mbid, name, spotify_artist_id,
+                     (select t.deezer_track_id
+                      from track_artists ta join tracks t on t.track_id = ta.track_id
+                      where ta.artist_id = artists.id and t.deezer_verified_at is not null
+                        and t.deezer_track_id is not null
+                      order by t.deezer_verified_at desc limit 1) as deezer_track_id
+              from artists
               where spotify_artist_id in (${placeholders})
                 and image_url is null
                 and image_state = 'pending'`,
@@ -1299,7 +1311,14 @@ export async function fillMissingArtistImages(spotifyArtistIds: string[]): Promi
     return 0;
   }
 
-  const result = await fetchArtistImages(missing.map((row) => row.spotify_artist_id));
+  const result = await fetchArtistImages(
+    missing.map((row) => ({
+      deezerTrackId: row.deezer_track_id,
+      mbid: row.mbid,
+      name: row.name,
+      spotifyArtistId: row.spotify_artist_id,
+    })),
+  );
   const nowIso = new Date().toISOString();
   let filled = 0;
 

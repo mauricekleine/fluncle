@@ -66,6 +66,7 @@ export const PUBLIC_PROJECTION_PRODUCER_POLICIES = [
     "artist-edge-backfill-stamp",
     "artist-edge-rank-restale",
     "artist-image-backfill-fill",
+    "artist-image-backfill-failure",
     "artist-image-backfill-none",
     "artist-image-fill",
     "artist-mbid-mint",

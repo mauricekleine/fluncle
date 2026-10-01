@@ -57,7 +57,7 @@ function throttle<T>(call: () => Promise<T>): Promise<T> {
 
 function noop(): void {}
 
-export type MbResult<T> = { data: T | null; rateLimited: boolean };
+export type MbResult<T> = { data: T | null; rateLimited: boolean; status?: number };
 
 export type MbRequestContext = {
   nodeKind: "artist" | "label" | "release";
@@ -108,7 +108,7 @@ export function mbFetch<T>(path: string, context?: MbRequestContext): Promise<Mb
 
       if (response.status === 503) {
         record("throttled");
-        return { data: null, rateLimited: true };
+        return { data: null, rateLimited: true, status: response.status };
       }
 
       if (!response.ok) {
@@ -119,13 +119,13 @@ export function mbFetch<T>(path: string, context?: MbRequestContext): Promise<Mb
           statusText: response.statusText,
         });
 
-        return { data: null, rateLimited: false };
+        return { data: null, rateLimited: false, status: response.status };
       }
 
       try {
         const data = (await response.json()) as T;
         record("body");
-        return { data, rateLimited: false };
+        return { data, rateLimited: false, status: response.status };
       } catch (error) {
         record("invalid");
         throw error;

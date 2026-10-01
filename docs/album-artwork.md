@@ -24,7 +24,7 @@ The `backfill_cover_masters` sweep (`apps/web/src/lib/server/cover-masters.ts`) 
 
 **Artist:**
 
-1. **`spotify`** — the stored `artists.image_url` (Spotify's largest profile image, ≤640). The floor and, today, the only rung. An Apple artist-artwork template is the future higher-res source decision A leaves room for; it would slot in above.
+1. **`spotify` or `deezer`** — the stored `artists.image_url` (Spotify oEmbed's 640px `i.scdn.co` rendition or Deezer's `picture_xl`). The source host determines `image_source`; the owned master remains a bounded display derivative. Raw source URLs are served until the owned master exists, so both hosts are allowed by the web image policy. This is the only artist rung today. An Apple artist-artwork template would slot in above.
 
 An entity with no usable source is terminal `image_state='none'` and falls through to the raw URL — nothing regresses.
 
@@ -41,7 +41,7 @@ https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.flun
 - **The fixed ladder is 64 / 300 / 640 / 1200** (`OWNED_COVER_WIDTH` in `media.ts`). `ownedCoverUrl` builds the base at 640; `albumCoverAtSize(url, size)` rewrites the `width=` to `small`/`tile`/`medium`/`large`/`xl` at each surface — and it also still resizes a Spotify URL, so every existing call site upgrades for free.
 - **A pending Cover Art Archive fallback uses CAA's own thumbnail ladder.** `albumCoverAtSize` maps its release-front URL to 250px for small and hub tiles, 500px for medium covers, and 1200px for xl; large preserves the stored URL used by the lead and full-size artwork. The owned master remains preferred; Cloudflare Images transforms accept only our own zone, so CAA's 250px thumbnail is the smallest available fallback.
 - **A failed cover falls back to the eclipse artwork.** `TrackArtwork` checks the image element on mount because a third-party image can fail before React hydrates and its `onError` handler attaches. It compares the browser's absolute `currentSrc` with an absolute form of the requested URL, and retries when that URL changes.
-- **The DTO prefers the owned master server-side.** `bestAlbumCoverUrl` / `bestArtistAvatarUrl` return the CF Images URL once the sweep resolved one, else the Spotify chain (the label `logoKey ?? image_url` precedent). The finding DTO (`toLeanTrackListItem`) emits it as `albumImageUrl`, so **web, mobile, and the video pipeline all upgrade at once** — no consumer changes.
+- **The DTO prefers the owned master server-side.** `bestAlbumCoverUrl` / `bestArtistAvatarUrl` return the CF Images URL once the sweep resolved one, else the stored source URL (the label `logoKey ?? image_url` precedent). The finding DTO (`toLeanTrackListItem`) emits it as `albumImageUrl`, so **web, mobile, and the video pipeline all upgrade at once** — no consumer changes.
 - **The `?v` bust.** A replaced master bumps `image_updated_at`; the `?v=<epoch>` rides the source URL, so Cloudflare re-keys every rendition. A transform cache survives a zone purge (the video-variants lesson), so the `?v` is the ONLY reliable rendition eviction.
 
 ## The sweep (agent-tier, Worker-paced)
@@ -76,4 +76,4 @@ curl -sI 'https://found.fluncle.com/cdn-cgi/image/width=300,format=auto/https://
 # → HTTP 200, content-type image/webp (or image/avif), NOT a 404/redirect.
 ```
 
-A 404 or a pass-through of the original `content-type` (never `image/webp`) means the zone toggle is off or the source is not on the allowed zone — the DTO still works (it falls back to the Spotify chain), but the owned masters are not being served until it is fixed.
+A 404 or a pass-through of the original `content-type` (never `image/webp`) means the zone toggle is off or the source is not on the allowed zone — the DTO still works (it falls back to the stored source URL), but the owned masters are not being served until it is fixed.

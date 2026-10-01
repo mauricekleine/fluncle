@@ -188,7 +188,24 @@ export function spotifyCoverMasterUrl(imageUrl: string | null): string | undefin
   return albumCoverAtSize(imageUrl, "large");
 }
 
-export type CoverMasterSource = "apple" | "coverart" | "spotify";
+export type CoverMasterSource = "apple" | "coverart" | "deezer" | "spotify";
+
+function artistCoverMasterSource(
+  imageUrl: string | null,
+): { source: "deezer" | "spotify"; url: string } | undefined {
+  if (!imageUrl || !URL.canParse(imageUrl)) {
+    return undefined;
+  }
+  const url = new URL(imageUrl);
+  if (url.protocol !== "https:") {
+    return undefined;
+  }
+  if (url.hostname === "cdn-images.dzcdn.net") {
+    return { source: "deezer", url: url.href };
+  }
+  const spotifyUrl = spotifyCoverMasterUrl(imageUrl);
+  return spotifyUrl ? { source: "spotify", url: spotifyUrl } : undefined;
+}
 
 type ResolveOutcome =
   | { imageKey: string; kind: "resolved"; source: CoverMasterSource }
@@ -567,14 +584,9 @@ async function resolveOneArtist(
   bucket: Pick<R2Bucket, "put">,
 ): Promise<ResolveOutcome> {
   try {
+    const image = artistCoverMasterSource(row.image_url);
     return (
-      (await tryRung(
-        bucket,
-        "artist",
-        row.slug,
-        spotifyCoverMasterUrl(row.image_url),
-        "spotify",
-      )) ?? {
+      (await tryRung(bucket, "artist", row.slug, image?.url, image?.source ?? "spotify")) ?? {
         kind: "none",
       }
     );

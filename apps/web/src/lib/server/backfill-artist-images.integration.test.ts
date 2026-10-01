@@ -14,6 +14,7 @@ import { createIntegrationDb } from "./integration-db";
 import { fillMissingArtistImages } from "./artists";
 
 let db: Client;
+const SPOTIFY_ARTIST_ID = "0TnOYISbd1XYRBk9myaseg";
 
 beforeEach(async () => {
   db = await createIntegrationDb();
@@ -29,7 +30,7 @@ beforeEach(async () => {
           values (?, ?, ?, ?, ?, ?)`,
   });
   await db.execute({
-    args: ["artist-1", "No Portrait", "no-portrait", "spotify-1", nowIso, nowIso],
+    args: ["artist-1", "No Portrait", "no-portrait", SPOTIFY_ARTIST_ID, nowIso, nowIso],
     sql: `insert into artists
             (id, name, slug, spotify_artist_id, image_state, image_failures, created_at, updated_at)
           values (?, ?, ?, ?, 'pending', 3, ?, ?)`,
@@ -42,11 +43,17 @@ afterEach(() => {
 });
 
 describe("artist-image backfill SQL", () => {
-  it("terminally stamps a matching 200 no-image artist and never selects it again", async () => {
+  it("terminally stamps an oEmbed miss without a verified Deezer track", async () => {
     const fetchMock = vi.fn(async (url: string) => {
-      expect(url).toBe("https://api.spotify.com/v1/artists/spotify-1");
-
-      return new Response(JSON.stringify({ id: "spotify-1", images: [] }), { status: 200 });
+      if (url.startsWith("https://open.spotify.com/oembed?")) {
+        return new Response(
+          JSON.stringify({
+            iframe_url: `https://open.spotify.com/embed/artist/${SPOTIFY_ARTIST_ID}`,
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -73,7 +80,7 @@ describe("artist-image backfill SQL", () => {
       image_url: null,
     });
 
-    await expect(fillMissingArtistImages(["spotify-1"])).resolves.toBe(0);
+    await expect(fillMissingArtistImages([SPOTIFY_ARTIST_ID])).resolves.toBe(0);
 
     const second = await backfillArtistImages(50, false);
 
@@ -83,17 +90,23 @@ describe("artist-image backfill SQL", () => {
       skippedCount: 0,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.every(([url]) => !url.includes("api.spotify.com"))).toBe(true);
   });
 
   it("stores an available avatar while leaving it pending for owned-master ingestion", async () => {
+    const alternateId = "1uNFoZAHBGtllmzznpCI3s";
+    await db.execute({
+      args: [alternateId, "artist-1"],
+      sql: `update artists set spotify_artist_id = ? where id = ?`,
+    });
     vi.stubGlobal(
       "fetch",
       vi.fn(
         async () =>
           new Response(
             JSON.stringify({
-              id: "spotify-1",
-              images: [{ url: "https://i.scdn.co/image/spotify-1", width: 640 }],
+              iframe_url: `https://open.spotify.com/embed/artist/${alternateId}`,
+              thumbnail_url: "https://i.scdn.co/image/spotify-1",
             }),
             { status: 200 },
           ),
@@ -115,9 +128,104 @@ describe("artist-image backfill SQL", () => {
             from artists where id = ?`,
     });
     expect(stored.rows[0]).toMatchObject({
-      image_failures: 3,
+      image_failures: 0,
       image_state: "pending",
       image_url: "https://i.scdn.co/image/spotify-1",
     });
+  });
+
+  it("keeps an artist pending through five vendor throttle ticks", async () => {
+    const id = "2YZyLoL8N0Wb9xBt1NhZWg";
+    await db.execute({
+      args: [id, "artist-1"],
+      sql: `update artists set spotify_artist_id = ?, image_failures = 0 where id = ?`,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 429 })),
+    );
+
+    for (let tick = 0; tick < 5; tick += 1) {
+      const result = await backfillArtistImages(20, false);
+      expect(result).toMatchObject({ failedCount: 0, queueDepth: 1, rateLimited: true });
+    }
+
+    const stored = await db.execute({
+      args: ["artist-1"],
+      sql: `select image_failures, image_state from artists where id = ?`,
+    });
+    expect(stored.rows[0]).toMatchObject({ image_failures: 0, image_state: "pending" });
+  });
+
+  it("fills a newly linked artist through oEmbed without a Spotify Web API call", async () => {
+    const id = "4dpARuHxo51G3z768sgnrY";
+    await db.execute({
+      args: [id, "artist-1"],
+      sql: `update artists set spotify_artist_id = ? where id = ?`,
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toContain("https://open.spotify.com/oembed?");
+      return new Response(
+        JSON.stringify({
+          iframe_url: `https://open.spotify.com/embed/artist/${id}`,
+          thumbnail_url:
+            "https://image-cdn-ak.spotifycdn.com/image/ab67616100005174e75db75543a89589514259b2",
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await fillMissingArtistImages([id])).toBe(1);
+    const stored = await db.execute({
+      args: ["artist-1"],
+      sql: `select image_url from artists where id = ?`,
+    });
+    expect(stored.rows[0]?.image_url).toBe(
+      "https://i.scdn.co/image/ab6761610000e5ebe75db75543a89589514259b2",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles a failing queue head at the cap and still fills the next artist", async () => {
+    const firstId = "3TVXtAsR1Inumwj472S9r4";
+    const secondId = "7dGJo4pcD2V6oG8kP0tJRR";
+    const nowIso = new Date().toISOString();
+    await db.execute({
+      args: [firstId, "artist-1"],
+      sql: `update artists set spotify_artist_id = ?, image_failures = 4 where id = ?`,
+    });
+    await db.execute({
+      args: ["artist-2", "Second Artist", "second-artist", secondId, nowIso, nowIso],
+      sql: `insert into artists
+              (id, name, slug, spotify_artist_id, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?)`,
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes(firstId)) {
+        throw new Error("oEmbed connection failed");
+      }
+      return new Response(
+        JSON.stringify({
+          iframe_url: `https://open.spotify.com/embed/artist/${secondId}`,
+          thumbnail_url: "https://i.scdn.co/image/second-artist",
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await backfillArtistImages(20, false);
+    expect(first.checkedCount).toBe(2);
+    expect(first.failed).toEqual([{ artistId: "artist-1", error: "oEmbed connection failed" }]);
+    expect(first.filled).toEqual(["artist-2"]);
+    expect(first.queueDepth).toBe(0);
+
+    const stored = await db.execute({
+      args: ["artist-1"],
+      sql: `select image_state, image_failures from artists where id = ?`,
+    });
+    expect(stored.rows[0]).toMatchObject({ image_failures: 5, image_state: "none" });
+    const second = await backfillArtistImages(20, false);
+    expect(second.checkedCount).toBe(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

@@ -53,7 +53,7 @@ export const backfillArtistImages = oc
     method: "POST",
     operationId: "backfillArtistImages",
     path: "/admin/backfill/artist-images",
-    summary: "Back-fill artist Spotify avatars (image_url) for existing artists (bounded)",
+    summary: "Back-fill artist avatars (image_url) for existing artists (bounded)",
     tags: ["Admin"],
   })
   .input(

@@ -3495,9 +3495,9 @@ JSON field reference:
 
   backfill
     .command("artist-images")
-    .description("Back-fill artist Spotify avatars (image_url) for existing artists")
+    .description("Back-fill artist avatars (image_url) for existing artists")
     .option("--dry-run", "Report which artists would be filled without touching the DB", false)
-    .option("--limit <limit>", "Max artists to process", "50")
+    .option("--limit <limit>", "Max artists to check", "20")
     .option("--json", "Print JSON", false)
     .action(async (options: BackfillSyncOptions) => {
       const { backfillArtistImagesCommand } = await import("./commands/admin-artists");
@@ -5377,8 +5377,8 @@ async function runBackfillArtistImages(
   let queueDepth = 0;
   let rateLimited = false;
 
-  while (filled.length < limit) {
-    const remaining = limit - filled.length;
+  while (checkedCount < limit) {
+    const remaining = limit - checkedCount;
     const result = await backfillArtistImagesCommand(remaining, options.dryRun, cursor);
     budgetLimited ||= result.budgetLimited;
     checkedCount += result.checkedCount;
@@ -5424,7 +5424,7 @@ async function runBackfillArtistImages(
 
   const verb = dryRun ? "Would fill" : "Filled";
   console.log(
-    `${verb} ${filled.length} artist avatar(s); checked ${checkedCount}; ${failed.length} failed; ${skipped.length} without a Spotify image; ${queueDepth} queued.`,
+    `${verb} ${filled.length} artist avatar(s); checked ${checkedCount}; ${failed.length} failed; ${skipped.length} without an image; ${queueDepth} queued.`,
   );
 
   for (const artistId of filled) {

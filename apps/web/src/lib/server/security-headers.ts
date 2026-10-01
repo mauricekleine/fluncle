@@ -19,7 +19,7 @@ export const CONTENT_POLICY = [
   "script-src 'self' 'unsafe-inline' https://scripts.simpleanalyticscdn.com https://static.cloudflareinsights.com",
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self'",
-  "img-src 'self' data: blob: https://found.fluncle.com https://radio.fluncle.com https://i.scdn.co https://coverartarchive.org https://archive.org https://*.archive.org https://lh3.googleusercontent.com https://queue.simpleanalyticscdn.com",
+  "img-src 'self' data: blob: https://found.fluncle.com https://radio.fluncle.com https://i.scdn.co https://cdn-images.dzcdn.net https://coverartarchive.org https://archive.org https://*.archive.org https://lh3.googleusercontent.com https://queue.simpleanalyticscdn.com",
   "media-src 'self' https://found.fluncle.com",
   [
     "connect-src 'self'",

@@ -138,7 +138,11 @@ export const DUE_WORK_PRODUCER_INVENTORY = [
   },
   {
     file: "backfill-artist-images.ts",
-    producers: ["artist-image-backfill-fill", "artist-image-backfill-none"],
+    producers: [
+      "artist-image-backfill-failure",
+      "artist-image-backfill-fill",
+      "artist-image-backfill-none",
+    ],
     subjects: ["artist"],
   },
   {
