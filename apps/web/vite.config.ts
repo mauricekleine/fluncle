@@ -93,8 +93,8 @@ function crawlerBannerPlugin(): Plugin {
   return {
     apply: "build",
     enforce: "post",
-    generateBundle(options: Rollup.NormalizedOutputOptions, bundle: Rollup.OutputBundle) {
-      if (!options.dir?.endsWith("client")) {
+    generateBundle(_options: Rollup.NormalizedOutputOptions, bundle: Rollup.OutputBundle) {
+      if (this.environment.name !== "client") {
         return;
       }
 
