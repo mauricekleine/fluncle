@@ -60,7 +60,7 @@ vi.mock("./db", () => ({
   typedRows: <T>(rows: T[]): T[] => rows,
 }));
 
-import { fetchArtistImages, searchTrackCandidates } from "./spotify";
+import { fetchArtistImages, fetchSpotifyAlbumTracks, searchTrackCandidates } from "./spotify";
 
 const TOKEN_URL = "https://accounts.spotify.com/api/token";
 const ARTIST_PREFIX = "https://api.spotify.com/v1/artists/";
@@ -68,6 +68,50 @@ const SEARCH_PREFIX = "https://api.spotify.com/v1/search";
 
 const future = () => new Date(Date.now() + 3_600_000).toISOString();
 const past = () => new Date(Date.now() - 1_000).toISOString();
+
+it("pages album tracks and normalizes the cached fields", async () => {
+  selectQueue = [{ access_token: "album-token", expires_at: future(), refresh_token: "refresh" }];
+  const paths: string[] = [];
+  const onPage = vi.fn(async () => undefined);
+  vi.stubGlobal("fetch", async (url: string) => {
+    paths.push(url);
+    const offset = Number(new URL(url).searchParams.get("offset"));
+    const items = Array.from({ length: offset === 0 ? 50 : 1 }, (_, index) => ({
+      artists: [
+        {
+          external_urls: { spotify: "https://open.spotify.com/artist/artist-1" },
+          href: "https://api.spotify.com/v1/artists/artist-1",
+          id: "artist-1",
+          name: "Etherwood",
+          type: "artist",
+          uri: "spotify:artist:artist-1",
+        },
+      ],
+      disc_number: 1,
+      duration_ms: 260_000,
+      id: `track-${offset + index}`,
+      name: "Weightless",
+      track_number: offset + index + 1,
+    }));
+    return Response.json({ items, total: 51 });
+  });
+  const tracks = await fetchSpotifyAlbumTracks("album-id", onPage);
+  expect(paths).toEqual([
+    "https://api.spotify.com/v1/albums/album-id/tracks?limit=50&offset=0",
+    "https://api.spotify.com/v1/albums/album-id/tracks?limit=50&offset=50",
+  ]);
+  expect(onPage).toHaveBeenCalledTimes(2);
+  expect(tracks).toHaveLength(51);
+  expect(tracks[50]).toEqual({
+    artists: [{ id: "artist-1", name: "Etherwood" }],
+    discNumber: 1,
+    durationMs: 260_000,
+    isrc: null,
+    spotifyTrackId: "track-50",
+    title: "Weightless",
+    trackNumber: 51,
+  });
+});
 
 function stubFetch(
   refresh: { kind: "invalid_grant" } | { kind: "ok"; access_token: string; refresh_token?: string },

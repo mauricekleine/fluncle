@@ -232,6 +232,222 @@ test("a rejected actor start disarms paid admission before the next fifteen-row 
   expect(summary.apifyActorErrors).toBe(1);
 });
 
+test("release links settle sibling rows before the phased waterfall and count only new anchors", async () => {
+  const phaseRows: string[][] = [];
+  const summary = await runAnchorTick(3, {
+    fetchQueue: () =>
+      Promise.resolve(
+        ["mb_first", "mb_sibling", "mb_other"].map((trackId) => ({
+          anchorQuery: trackId,
+          trackId,
+        })),
+      ),
+    log: () => {},
+    now: () => new Date("2026-10-01T02:00:00Z").getTime(),
+    report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+    resolveFree: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+    resolveFreeBatch: (items) => {
+      phaseRows.push(items.map((item) => item.trackId));
+      return Promise.resolve(
+        items.map(() => ({
+          status: "done" as const,
+          verdict: {
+            anchored: true,
+            apifyEligible: false,
+            source: "listenbrainz-metadata" as const,
+            verifiedBy: "search" as const,
+          },
+        })),
+      );
+    },
+    resolveRelease: (trackId) =>
+      Promise.resolve({
+        albumFetchFailed: 0,
+        albumsFetched: trackId === "mb_first" ? 1 : 0,
+        anchored: trackId !== "mb_other",
+        anchoredCount: trackId === "mb_first" ? 2 : 0,
+        backoffSkipped: 0,
+        cacheHits: 0,
+        noAlbum: trackId === "mb_other" ? 1 : 0,
+        throttled: false,
+        verifiedBy: trackId === "mb_other" ? null : "isrc",
+      }),
+    runActor: () => Promise.resolve([]),
+    searchDeezer: () => Promise.resolve([]),
+    sleep: () => Promise.resolve(),
+  });
+  expect(phaseRows).toEqual([["mb_other"]]);
+  expect(summary.anchoredByReleaseLink).toBe(2);
+  expect(summary.releaseLinkAlbumsFetched).toBe(1);
+  expect(summary.releaseLinkNoAlbum).toBe(1);
+  expect(summary.anchoredByListenbrainzMetadata).toBe(1);
+  expect(summary.produced).toBe(3);
+  expect(summary.queueDepth).toBe(0);
+});
+
+test("release admission yield pauses the tick instead of counting a row error", async () => {
+  let freeCalls = 0;
+  const summary = await runAnchorTick(1, {
+    fetchQueue: () => Promise.resolve([{ anchorQuery: "first", trackId: "first" }]),
+    log: () => {},
+    now: () => new Date("2026-10-01T02:00:00Z").getTime(),
+    report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+    resolveFree: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+    resolveFreeBatch: () => {
+      freeCalls += 1;
+      return Promise.resolve([]);
+    },
+    resolveRelease: () => Promise.reject(new AnchorAdmissionYieldError("queue")),
+    runActor: () => Promise.resolve([]),
+    searchDeezer: () => Promise.resolve([]),
+    sleep: () => Promise.resolve(),
+  });
+  expect(summary.reason).toBe("database_admission");
+  expect(summary.admissionOutcome).toBe("phase-yielded");
+  expect(summary.errors).toBe(0);
+  expect(freeCalls).toBe(0);
+});
+
+test("release errors and throttles continue to the free resolver", async () => {
+  let freeCalls = 0;
+  const releaseAsks: boolean[] = [];
+  const phaseAsks: boolean[] = [];
+  const summary = await runAnchorTick(3, {
+    fetchQueue: () =>
+      Promise.resolve([
+        { anchorQuery: "first", trackId: "first" },
+        { anchorQuery: "second", trackId: "second" },
+        { anchorQuery: "third", trackId: "third" },
+      ]),
+    log: () => {},
+    now: () => new Date("2026-10-01T02:00:00Z").getTime(),
+    report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+    resolveFree: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+    resolveFreeBatch: (items) => {
+      freeCalls += items.length;
+      phaseAsks.push(...items.map((item) => item.spotifySearch));
+      return Promise.resolve(
+        items.map(() => ({
+          status: "done" as const,
+          verdict: {
+            anchored: true,
+            apifyEligible: false,
+            source: "listenbrainz-metadata" as const,
+            verifiedBy: "search" as const,
+          },
+        })),
+      );
+    },
+    resolveRelease: (trackId, spotifySearch) => {
+      releaseAsks.push(spotifySearch);
+      return trackId === "first"
+        ? Promise.reject(new Error("release unavailable"))
+        : Promise.resolve({
+            albumFetchFailed: 0,
+            albumsFetched: 0,
+            anchored: false,
+            anchoredCount: 0,
+            backoffSkipped: 0,
+            cacheHits: 0,
+            noAlbum: 0,
+            throttled: true,
+            verifiedBy: null,
+          });
+    },
+    runActor: () => Promise.resolve([]),
+    searchDeezer: () => Promise.resolve([]),
+    sleep: () => Promise.resolve(),
+  });
+  expect(freeCalls).toBe(3);
+  expect(summary.anchoredByListenbrainzMetadata).toBe(3);
+  expect(releaseAsks).toEqual([true, true, false]);
+  expect(phaseAsks).toEqual([false, false, false]);
+  expect(summary.releaseLinkErrors).toBe(1);
+});
+
+test("release links count a sibling anchor when the triggering row does not match", async () => {
+  const summary = await runAnchorTick(1, {
+    fetchQueue: () => Promise.resolve([{ anchorQuery: "first", trackId: "first" }]),
+    log: () => {},
+    now: () => new Date("2026-10-01T02:00:00Z").getTime(),
+    report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+    resolveFree: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+    resolveFreeBatch: () =>
+      Promise.resolve([
+        {
+          status: "done" as const,
+          verdict: { anchored: false, apifyEligible: false, verifiedBy: null },
+        },
+      ]),
+    resolveRelease: () =>
+      Promise.resolve({
+        albumFetchFailed: 0,
+        albumsFetched: 1,
+        anchored: false,
+        anchoredCount: 1,
+        backoffSkipped: 0,
+        cacheHits: 0,
+        noAlbum: 0,
+        throttled: false,
+        verifiedBy: null,
+      }),
+    runActor: () => Promise.resolve([]),
+    searchDeezer: () => Promise.resolve([]),
+    sleep: () => Promise.resolve(),
+  });
+  expect(summary.anchoredByReleaseLink).toBe(1);
+  expect(summary.produced).toBe(1);
+  expect(summary.queueDepth).toBe(0);
+});
+
+test("release probe budget skips later rows and reports both counts", async () => {
+  const probed: string[] = [];
+  const askState = { ...newSpotifyAskState(25, "0-8"), releaseProbeLimit: 1 };
+  const summary = await runAnchorTick(
+    2,
+    {
+      fetchQueue: () =>
+        Promise.resolve([
+          { anchorQuery: "first", trackId: "first" },
+          { anchorQuery: "second", trackId: "second" },
+        ]),
+      log: () => {},
+      now: () => new Date("2026-10-01T02:00:00Z").getTime(),
+      report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+      resolveFree: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+      resolveFreeBatch: (items) =>
+        Promise.resolve(
+          items.map(() => ({
+            status: "done" as const,
+            verdict: { anchored: false, apifyEligible: false, verifiedBy: null },
+          })),
+        ),
+      resolveRelease: (trackId) => {
+        probed.push(trackId);
+        return Promise.resolve({
+          albumFetchFailed: 0,
+          albumsFetched: 0,
+          anchored: false,
+          anchoredCount: 0,
+          backoffSkipped: 0,
+          cacheHits: 0,
+          noAlbum: 0,
+          throttled: false,
+          verifiedBy: null,
+        });
+      },
+      runActor: () => Promise.resolve([]),
+      searchDeezer: () => Promise.resolve([]),
+      sleep: () => Promise.resolve(),
+    },
+    15,
+    askState,
+  );
+  expect(probed).toEqual(["first"]);
+  expect(summary.releaseLinkProbes).toBe(1);
+  expect(summary.releaseLinkBudgetSkipped).toBe(1);
+});
+
 test("a contract fault disarms paid admission before the next fifteen-row phase", async () => {
   const allowed: boolean[][] = [];
   const rows = Array.from({ length: 30 }, (_, index) => ({
@@ -2662,6 +2878,7 @@ describe("runAnchorSweep — the firing preflight", () => {
     );
 
     expect(summary.rungsSkipped).toEqual([
+      "release-links",
       "listenbrainz",
       "deezer-isrc-recovery",
       "spotify-search",

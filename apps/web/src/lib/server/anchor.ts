@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { ReleaseLinkProbeSchema } from "@fluncle/contracts/orpc";
 
 import {
   ANCHOR_APIFY_REFUND_ACTION,
@@ -27,14 +28,24 @@ import {
 import { type DeezerIsrcCandidate, searchDeezerCandidates } from "./deezer";
 import { readEnv } from "./env";
 import { FILL_ISRC_SQL } from "./isrc";
-import { lookupSpotifyIdsByMbid } from "./listenbrainz";
+import { lookupSpotifyIdsByMbid, lookupSpotifyIdsByMetadata } from "./listenbrainz";
 import { logEvent } from "./log";
+import {
+  commitReleaseLinks,
+  emptyReleaseLinkResult,
+  isEligibleReleaseSibling,
+  probeReleaseLinks,
+  resolveReleaseLinks,
+  type ReleaseLinkProbe,
+  type ReleaseLinkResult,
+} from "./anchor-release-links";
 import { updateTrackDuplicateIsrcStatement } from "./track-duplicate-keys";
 import { ANCHOR_MAX_ATTEMPTS } from "./track-work";
 import {
   fetchTrackMetadata,
   findSpotifyTrackByIsrc,
   searchTrackCandidates,
+  type SpotifyAlbumTrack,
   type TrackSearchResult,
 } from "./spotify";
 import { canonicalizeSearchTitle, matchKey, normalizeArtists, splitTitle } from "./track-match";
@@ -367,10 +378,16 @@ export async function recordAnchorValidationFailure(
   return { attempts: Number(row?.attempts ?? 0), terminal: Boolean(row?.terminal_error) };
 }
 
+// oxlint-disable-next-line complexity
 export async function anchorTrack(
   trackId: string,
   candidates: AnchorCandidate[],
-  options: { paidResultToken?: string; source?: AnchorReviewSource; stampOnMiss?: boolean } = {},
+  options: {
+    paidResultToken?: string;
+    skipVersionReview?: boolean;
+    source?: AnchorReviewSource;
+    stampOnMiss?: boolean;
+  } = {},
 ): Promise<{ anchored: boolean; verifiedBy: AnchorGateVerification }> {
   const { source = "apify", stampOnMiss = true } = options;
   const db = await getDb();
@@ -486,17 +503,19 @@ export async function anchorTrack(
       : null;
 
   if (!verified) {
-    const suspect = detectVersionMismatch(
-      rowArtists,
-      row.title,
-      durationMs,
-      candidates.map((candidate) => ({
-        artists: candidate.artists.map((artist) => artist.name),
-        candidate,
-        durationMs: candidate.durationMs,
-        title: candidate.title,
-      })),
-    );
+    const suspect = options.skipVersionReview
+      ? null
+      : detectVersionMismatch(
+          rowArtists,
+          row.title,
+          durationMs,
+          candidates.map((candidate) => ({
+            artists: candidate.artists.map((artist) => artist.name),
+            candidate,
+            durationMs: candidate.durationMs,
+            title: candidate.title,
+          })),
+        );
 
     if (suspect) {
       await recordAnchorReview(db, trackId, row.title, suspect.candidate, source, now);
@@ -584,7 +603,12 @@ export async function anchorTrack(
   return { anchored: true, verifiedBy };
 }
 
-export type AnchorResolveSource = "listenbrainz" | "spotify-isrc" | "spotify-search";
+export type AnchorResolveSource =
+  | "listenbrainz"
+  | "listenbrainz-metadata"
+  | "release-link"
+  | "spotify-isrc"
+  | "spotify-search";
 
 export type ListenBrainzAnchorOutcome =
   | "anchored"
@@ -610,6 +634,12 @@ export type AnchorResolveResult = {
   freeDurationMsOmitted: number;
   isrcRecoveredByDeezer: boolean;
   listenbrainzOutcome: ListenBrainzAnchorOutcome;
+  anchoredByReleaseLink?: number;
+  releaseLinkAlbumsFetched?: number;
+  releaseLinkCacheHits?: number;
+  releaseLinkNoAlbum?: number;
+  releaseLinkBackoffSkipped?: number;
+  releaseLinkAlbumFetchFailed?: number;
   paidResultToken?: string;
   source: AnchorResolveSource | null;
   spotifyIsrcAsked: boolean;
@@ -644,6 +674,135 @@ const NO_SPOTIFY_OUTCOME: FreeResolveOutcome = {
   spotifyThrottled: false,
   verifiedBy: null,
 };
+
+async function anchorReleaseSibling(
+  siblingId: string,
+  tracks: SpotifyAlbumTrack[],
+): Promise<boolean> {
+  if (!(await isEligibleReleaseSibling(siblingId))) {
+    return false;
+  }
+  const candidates = tracks.map(
+    (track: SpotifyAlbumTrack): AnchorCandidate => ({
+      artists: track.artists,
+      durationMs: track.durationMs,
+      isrc: track.isrc,
+      spotifyTrackId: track.spotifyTrackId,
+      title: track.title,
+    }),
+  );
+  try {
+    return (
+      await anchorTrack(siblingId, candidates, {
+        skipVersionReview: true,
+        source: "release-link",
+        stampOnMiss: false,
+      })
+    ).anchored;
+  } catch (error) {
+    if (error instanceof AnchorTrackError) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+export async function resolveReleaseLinkForTrack(
+  trackId: string,
+  recordingMbid: null | string,
+  now: Date,
+  spotifyAllowed: boolean,
+): Promise<ReleaseLinkResult> {
+  return resolveReleaseLinks(trackId, recordingMbid, now, spotifyAllowed, anchorReleaseSibling);
+}
+
+export async function probeAnchorReleaseLink(
+  trackId: string,
+  now: Date = new Date(),
+  spotifyAllowed = true,
+): Promise<ReleaseLinkProbe> {
+  const db = await getDb();
+  const found = await db.execute({
+    args: [trackId],
+    sql: "select mb_recording_id from tracks where track_id = ? limit 1",
+  });
+  const row = typedRows<{ mb_recording_id: null | string }>(found.rows)[0];
+  if (!row) {
+    throw new AnchorTrackError("not_found", `No track with id ${trackId}`);
+  }
+  return probeReleaseLinks(trackId, row.mb_recording_id, now, spotifyAllowed);
+}
+
+export async function signAnchorReleaseProbe(probe: ReleaseLinkProbe): Promise<string> {
+  const parsed = ReleaseLinkProbeSchema.parse(probe);
+  return createHmac("sha256", await anchorPhaseKey())
+    .update("anchor-release:v1")
+    .update(canonicalReleaseJson(parsed))
+    .digest("base64url");
+}
+
+function canonicalReleaseJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalReleaseJson).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalReleaseJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export async function commitAnchorReleaseLink(
+  probe: ReleaseLinkProbe,
+  proof: string,
+  cursor: number,
+): Promise<ReleaseLinkResult> {
+  const expected = await signAnchorReleaseProbe(probe);
+  const actualBytes = Buffer.from(proof);
+  const expectedBytes = Buffer.from(expected);
+  if (
+    actualBytes.length !== expectedBytes.length ||
+    !timingSafeEqual(actualBytes, expectedBytes) ||
+    !Number.isSafeInteger(probe.issuedAt) ||
+    probe.issuedAt > Date.now() ||
+    Date.now() - probe.issuedAt > 30 * 60 * 1000
+  ) {
+    throw new Error("invalid or expired release probe");
+  }
+  return commitReleaseLinks(probe, anchorReleaseSibling, cursor);
+}
+
+function releaseLinkFields(result: ReleaseLinkResult) {
+  return {
+    ...(result.anchoredCount > 0 ? { anchoredByReleaseLink: result.anchoredCount } : {}),
+    ...(result.albumsFetched > 0 ? { releaseLinkAlbumsFetched: result.albumsFetched } : {}),
+    ...(result.cacheHits > 0 ? { releaseLinkCacheHits: result.cacheHits } : {}),
+    ...(result.noAlbum > 0 ? { releaseLinkNoAlbum: result.noAlbum } : {}),
+    ...(result.backoffSkipped > 0 ? { releaseLinkBackoffSkipped: result.backoffSkipped } : {}),
+    ...(result.albumFetchFailed > 0
+      ? { releaseLinkAlbumFetchFailed: result.albumFetchFailed }
+      : {}),
+  };
+}
+
+export async function resolveAnchorReleaseLink(
+  trackId: string,
+  now: Date = new Date(),
+  spotifyAllowed = true,
+): Promise<ReleaseLinkResult> {
+  const db = await getDb();
+  const found = await db.execute({
+    args: [trackId],
+    sql: "select mb_recording_id from tracks where track_id = ? limit 1",
+  });
+  const row = typedRows<{ mb_recording_id: null | string }>(found.rows)[0];
+  if (!row) {
+    throw new AnchorTrackError("not_found", `No track with id ${trackId}`);
+  }
+  return resolveReleaseLinkForTrack(trackId, row.mb_recording_id, now, spotifyAllowed);
+}
 
 function isSpotifyThrottle(error: unknown): boolean {
   return error instanceof Error && error.message.includes("429");
@@ -681,7 +840,7 @@ async function metadataCandidate(
 
 type ListenBrainzResolveResult = {
   durationMsOmitted?: number;
-
+  source?: "listenbrainz" | "listenbrainz-metadata";
   throttled?: boolean;
 } & (
   | {
@@ -696,17 +855,24 @@ type ListenBrainzResolveResult = {
 async function resolveViaListenBrainz(
   trackId: string,
   mbid: null | string,
+  artistName: string,
+  releaseName: string,
+  trackName: string,
   now: Date,
 ): Promise<ListenBrainzResolveResult> {
-  if (!mbid?.trim()) {
-    return { outcome: "no-mbid" };
+  let lookup = mbid?.trim() ? await lookupSpotifyIdsByMbid(mbid) : { outcome: "no-map" as const };
+  let source: "listenbrainz" | "listenbrainz-metadata" = "listenbrainz";
+  if (lookup.outcome === "no-map" || lookup.outcome === "empty-ids") {
+    const metadata = await lookupSpotifyIdsByMetadata(artistName, releaseName, trackName);
+    if (metadata.outcome === "match") {
+      lookup = metadata;
+      source = "listenbrainz-metadata";
+    }
   }
-
-  const lookup = await lookupSpotifyIdsByMbid(mbid);
 
   if (lookup.outcome !== "match") {
     if (lookup.outcome === "no-map") {
-      return { outcome: "no-map" };
+      return { outcome: mbid?.trim() ? "no-map" : "no-mbid" };
     }
 
     if (lookup.outcome === "empty-ids") {
@@ -737,7 +903,7 @@ async function resolveViaListenBrainz(
   }
 
   const verdict = await anchorTrack(trackId, [read.candidate], {
-    source: "listenbrainz",
+    source,
     stampOnMiss: false,
   });
 
@@ -751,6 +917,7 @@ async function resolveViaListenBrainz(
   return {
     durationMsOmitted: typeof read.candidate.durationMs === "number" ? 0 : 1,
     outcome: "anchored",
+    source,
     verifiedBy: verdict.verifiedBy,
   };
 }
@@ -1267,6 +1434,7 @@ async function admitToApifyRung(
   };
 }
 
+// oxlint-disable-next-line complexity
 export async function resolveAnchorFree(
   trackId: string,
   now: Date = new Date(),
@@ -1285,10 +1453,11 @@ export async function resolveAnchorFree(
 
   const found = await db.execute({
     args: [trackId],
-    sql: `select mb_recording_id, isrc, artists_json, title, duration_ms, spotify_isrc_asked_at
+    sql: `select mb_recording_id, isrc, artists_json, album, title, duration_ms, spotify_isrc_asked_at
           from tracks where track_id = ? limit 1`,
   });
   const row = typedRows<{
+    album: null | string;
     artists_json: null | string;
     duration_ms: null | number;
     isrc: null | string;
@@ -1336,7 +1505,49 @@ export async function resolveAnchorFree(
     }
   }
 
-  const listenbrainz = await resolveViaListenBrainz(trackId, row.mb_recording_id, now);
+  const releaseLink = await resolveReleaseLinkForTrack(
+    trackId,
+    row.mb_recording_id,
+    now,
+    options.spotifySearch !== false,
+  ).catch((error: unknown) => {
+    logEvent("warn", "anchor.release-rung-failed", { error, trackId });
+    return emptyReleaseLinkResult();
+  });
+  if (releaseLink.anchored) {
+    const { spotifyIsrcCleanMiss: _ignored, ...noSpotify } = NO_SPOTIFY_OUTCOME;
+    return {
+      ...noSpotify,
+      ...releaseLinkFields(releaseLink),
+      anchored: true,
+      ...(await admitToApifyRung(db, trackId, now, {
+        allowPaid: options.allowPaid,
+        anchored: true,
+        apifyEnabled,
+        gateReason,
+        hasIsrc: Boolean(isrc?.trim()),
+        priorAsk,
+        spotifyIsrcCleanMiss: false,
+        spotifySearchEnabled,
+        spotifySearchSettled: false,
+      })),
+      apifyEnabled,
+      isrcRecoveredByDeezer,
+      listenbrainzOutcome: "not-attempted",
+      source: "release-link",
+      spotifySearchEnabled,
+      stamped: false,
+      verifiedBy: releaseLink.verifiedBy,
+    };
+  }
+  const listenbrainz = await resolveViaListenBrainz(
+    trackId,
+    row.mb_recording_id,
+    rowArtists[0] ?? "",
+    row.album ?? "",
+    row.title ?? "",
+    now,
+  );
   const listenbrainzDurationMsOmitted = listenbrainz.durationMsOmitted ?? 0;
 
   if (listenbrainz.outcome === "anchored") {
@@ -1344,6 +1555,7 @@ export async function resolveAnchorFree(
 
     return {
       ...noSpotify,
+      ...releaseLinkFields(releaseLink),
       anchored: true,
       ...(await admitToApifyRung(db, trackId, now, {
         allowPaid: options.allowPaid,
@@ -1360,7 +1572,7 @@ export async function resolveAnchorFree(
       freeDurationMsOmitted: listenbrainzDurationMsOmitted,
       isrcRecoveredByDeezer,
       listenbrainzOutcome: "anchored",
-      source: "listenbrainz",
+      source: listenbrainz.source ?? "listenbrainz",
       spotifySearchEnabled,
       stamped: false,
       verifiedBy: listenbrainz.verifiedBy,
@@ -1382,6 +1594,7 @@ export async function resolveAnchorFree(
 
     return {
       ...noSpotify,
+      ...releaseLinkFields(releaseLink),
 
       ...(await admitToApifyRung(db, trackId, now, {
         allowPaid: options.allowPaid,
@@ -1424,6 +1637,7 @@ export async function resolveAnchorFree(
 
   return {
     ...searchWire,
+    ...releaseLinkFields(releaseLink),
 
     ...(await admitToApifyRung(db, trackId, now, {
       allowPaid: options.allowPaid,
@@ -1457,6 +1671,7 @@ function newAnchorAdmissionReceipt(now: Date): string {
 }
 
 type AnchorPhaseRow = {
+  album: null | string;
   artists_json: null | string;
   certified: number;
   duration_ms: null | number;
@@ -1572,7 +1787,7 @@ async function readAnchorPhaseRow(trackId: string): Promise<AnchorPhaseRow> {
   const db = await getDb();
   const found = await db.execute({
     args: [trackId],
-    sql: `select t.artists_json, t.duration_ms, t.isrc, t.isrc_recovery_attempted_at,
+    sql: `select t.album, t.artists_json, t.duration_ms, t.isrc, t.isrc_recovery_attempted_at,
                  t.mb_recording_id,
                  t.spotify_anchor_attempted_at, t.spotify_anchor_paid_admitted_at,
                  t.spotify_anchor_paid_state,
@@ -1651,6 +1866,7 @@ export async function prepareAnchorFreePhase(
     }
     missing = true;
     row = {
+      album: null,
       artists_json: null,
       certified: 0,
       duration_ms: null,
@@ -1899,6 +2115,7 @@ type AnchorListenBrainzProbe = {
   candidates: AnchorCandidate[];
   durationMsOmitted: number;
   outcome: ListenBrainzAnchorOutcome;
+  source: "listenbrainz" | "listenbrainz-metadata";
   throttled: boolean;
 };
 
@@ -1913,10 +2130,23 @@ async function probeListenBrainzPhase(
       candidates: [],
       durationMsOmitted: 0,
       outcome: "no-mbid",
+      source: "listenbrainz",
       throttled: false,
     };
   }
-  const lookup = await lookupSpotifyIdsByMbid(mbid);
+  let lookup = await lookupSpotifyIdsByMbid(mbid);
+  let source: "listenbrainz" | "listenbrainz-metadata" = "listenbrainz";
+  if (lookup.outcome === "no-map" || lookup.outcome === "empty-ids") {
+    const metadata = await lookupSpotifyIdsByMetadata(
+      parseArtistsJson(plan.row.artists_json ?? "[]")[0] ?? "",
+      plan.row.album ?? "",
+      plan.row.title ?? "",
+    );
+    if (metadata.outcome === "match") {
+      lookup = metadata;
+      source = "listenbrainz-metadata";
+    }
+  }
   if (lookup.outcome !== "match") {
     const outcome =
       lookup.outcome === "no-map" || lookup.outcome === "empty-ids"
@@ -1924,7 +2154,14 @@ async function probeListenBrainzPhase(
         : lookup.outcome === "invalid-mbid"
           ? "no-mbid"
           : "request-failed";
-    return { candidate: null, candidates: [], durationMsOmitted: 0, outcome, throttled: false };
+    return {
+      candidate: null,
+      candidates: [],
+      durationMsOmitted: 0,
+      outcome,
+      source,
+      throttled: false,
+    };
   }
   const spotifyTrackId = lookup.match.spotifyTrackIds[0];
   if (!spotifyTrackId) {
@@ -1933,6 +2170,7 @@ async function probeListenBrainzPhase(
       candidates: [],
       durationMsOmitted: 0,
       outcome: "empty-ids",
+      source,
       throttled: false,
     };
   }
@@ -1942,6 +2180,7 @@ async function probeListenBrainzPhase(
       candidates: [],
       durationMsOmitted: 0,
       outcome: "yielded-on-breaker",
+      source,
       throttled: false,
     };
   }
@@ -1952,6 +2191,7 @@ async function probeListenBrainzPhase(
       candidates: [],
       durationMsOmitted: 0,
       outcome: "metadata-failed",
+      source,
       throttled: read.throttled,
     };
   }
@@ -1961,6 +2201,7 @@ async function probeListenBrainzPhase(
     candidates: [read.candidate],
     durationMsOmitted: typeof read.candidate.durationMs === "number" ? 0 : 1,
     outcome: accepted ? "anchored" : "gate-rejected",
+    source,
     throttled: false,
   };
 }
@@ -2068,12 +2309,13 @@ export async function probeAnchorFreePhase(
         candidates: [],
         durationMsOmitted: 0,
         outcome: "not-attempted",
+        source: "listenbrainz",
         throttled: false,
       }
     : await probeListenBrainzPhase(plan, now);
   const attempts: AnchorProbeEvidence["attempts"] =
     listenbrainz.candidates.length > 0
-      ? [{ candidates: listenbrainz.candidates, source: "listenbrainz" }]
+      ? [{ candidates: listenbrainz.candidates, source: listenbrainz.source }]
       : [];
   let spotify: AnchorSpotifyProbe = {
     candidate: null,
@@ -2108,7 +2350,7 @@ export async function probeAnchorFreePhase(
     }
   }
   const candidate = listenbrainz.candidate ?? spotify.candidate;
-  const source = listenbrainz.candidate ? "listenbrainz" : spotify.source;
+  const source = listenbrainz.candidate ? listenbrainz.source : spotify.source;
   return signAnchorPhase({
     attempts,
     candidate,
@@ -2359,6 +2601,8 @@ export type AnchorReviewSource =
   | "apify"
   | "deezer"
   | "listenbrainz"
+  | "listenbrainz-metadata"
+  | "release-link"
   | "spotify-isrc"
   | "spotify-search";
 

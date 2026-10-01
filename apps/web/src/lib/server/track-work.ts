@@ -161,7 +161,7 @@ export function anchorRefusalReason(row: AnchorEligibilityRow): AnchorRefusalRea
   return undefined;
 }
 
-const ANCHOR_RULED_OUT_LABEL_CLAUSE = `(t.label_id is null
+export const ANCHOR_RULED_OUT_LABEL_CLAUSE = `(t.label_id is null
               or t.label_id not in (select id from labels where seed_state = 'disabled'))`;
 
 export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string } {

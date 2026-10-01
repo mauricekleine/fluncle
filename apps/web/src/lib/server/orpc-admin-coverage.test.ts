@@ -271,6 +271,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 
   "POST /admin/catalogue/anchor/receipt": "get_anchor_receipt",
 
+  "POST /admin/catalogue/anchor/release/commit": "commit_anchor_release",
+
+  "POST /admin/catalogue/anchor/release/probe": "resolve_anchor_release_probe",
+
   "POST /admin/catalogue/anchor/requeue": "requeue_anchor",
 
   "POST /admin/catalogue/anchor/resolve": "resolve_anchor",
@@ -460,6 +464,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PUT /admin/catalogue/capture-budget": "set_capture_budget",
 
   "PUT /admin/catalogue/dismissed": "set_track_dismissed",
+
   "PUT /admin/catalogue/label-releases-budget": "set_label_releases_budget",
 
   "PUT /admin/clips/drip/state": "set_clip_drip",

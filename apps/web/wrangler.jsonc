@@ -45,5 +45,11 @@
       "binding": "SOURCE_AUDIO",
       "bucket_name": "fluncle-source-audio"
     }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "SPOTIFY_ALBUM_TRACKS",
+      "id": "a495cc659e554f5dbcd8246e4f9771bb"
+    }
   ]
 }

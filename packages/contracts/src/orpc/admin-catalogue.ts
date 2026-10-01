@@ -781,6 +781,7 @@ export const DeezerIsrcCandidateSchema = z
 
 const AnchorResolveResultSchema = z.object({
   anchored: z.boolean(),
+  anchoredByReleaseLink: z.number().int().nonnegative().optional(),
   apifyBudgetRemaining: z.number().int().nonnegative(),
   apifyEligible: z.boolean(),
   apifyEnabled: z.boolean(),
@@ -802,7 +803,20 @@ const AnchorResolveResultSchema = z.object({
   ]),
   ok: z.literal(true),
   paidResultToken: z.string().optional(),
-  source: z.enum(["listenbrainz", "spotify-isrc", "spotify-search"]).nullable(),
+  releaseLinkAlbumFetchFailed: z.number().int().nonnegative().optional(),
+  releaseLinkAlbumsFetched: z.number().int().nonnegative().optional(),
+  releaseLinkBackoffSkipped: z.number().int().nonnegative().optional(),
+  releaseLinkCacheHits: z.number().int().nonnegative().optional(),
+  releaseLinkNoAlbum: z.number().int().nonnegative().optional(),
+  source: z
+    .enum([
+      "listenbrainz",
+      "listenbrainz-metadata",
+      "release-link",
+      "spotify-isrc",
+      "spotify-search",
+    ])
+    .nullable(),
   spotifyIsrcAsked: z.boolean(),
   spotifySearchDone: z.boolean(),
   spotifySearchEnabled: z.boolean(),
@@ -1010,7 +1024,7 @@ export const resolveAnchor = oc
     operationId: "resolveAnchor",
     path: "/admin/catalogue/anchor/resolve",
     summary:
-      "Resolve a catalogue row's Spotify anchor from the free rungs (ListenBrainz + dark Spotify search)",
+      "Resolve a catalogue row's Spotify anchor from release links, ListenBrainz, and Spotify search",
     tags: ["Admin"],
   })
   .input(
@@ -1022,6 +1036,78 @@ export const resolveAnchor = oc
     }),
   )
   .output(AnchorResolveResultSchema);
+
+const ReleaseLinkResultSchema = z.object({
+  albumFetchFailed: z.number().int().nonnegative(),
+  albumsFetched: z.number().int().nonnegative(),
+  anchored: z.boolean(),
+  anchoredCount: z.number().int().nonnegative(),
+  backoffSkipped: z.number().int().nonnegative(),
+  cacheHits: z.number().int().nonnegative(),
+  noAlbum: z.number().int().nonnegative(),
+  ok: z.literal(true),
+  remainder: z.number().int().nonnegative().nullable(),
+  throttled: z.boolean(),
+  verifiedBy: z.enum(["isrc", "search", "search-subset"]).nullable(),
+});
+
+export const ReleaseLinkProbeSchema = z.object({
+  evidence: z
+    .array(
+      z.object({
+        albumId: z.string().nullable(),
+        checkedAt: z.string().nullable(),
+        recordingIds: z.array(z.string()).max(1000),
+        releaseId: z.string(),
+        siblingTrackIds: z.array(z.string()).max(1000),
+        tracks: z
+          .array(
+            z.object({
+              artists: z.array(z.object({ id: z.string(), name: z.string() })),
+              discNumber: z.number(),
+              durationMs: z.number(),
+              isrc: z.string().nullable(),
+              spotifyTrackId: z.string(),
+              title: z.string(),
+              trackNumber: z.number(),
+            }),
+          )
+          .max(1000),
+      }),
+    )
+    .max(3),
+  issuedAt: z.number().int().nonnegative(),
+  result: ReleaseLinkResultSchema.omit({ ok: true }),
+  trackId: z.string().min(1),
+});
+
+export const resolveAnchorReleaseProbe = oc
+  .route({
+    method: "POST",
+    operationId: "resolveAnchorReleaseProbe",
+    path: "/admin/catalogue/anchor/release/probe",
+    summary: "Probe MusicBrainz release links and Spotify album tracks",
+    tags: ["Admin"],
+  })
+  .input(z.object({ spotifySearch: z.boolean().optional(), trackId: z.string().min(1) }))
+  .output(z.object({ ok: z.literal(true), probe: ReleaseLinkProbeSchema, proof: z.string() }));
+
+export const commitAnchorRelease = oc
+  .route({
+    method: "POST",
+    operationId: "commitAnchorRelease",
+    path: "/admin/catalogue/anchor/release/commit",
+    summary: "Commit release mappings and a bounded sibling anchor batch",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      cursor: z.number().int().nonnegative(),
+      probe: ReleaseLinkProbeSchema,
+      proof: z.string(),
+    }),
+  )
+  .output(ReleaseLinkResultSchema);
 
 export const resolveAnchorReview = oc
   .route({
@@ -1339,6 +1425,7 @@ export const adminCatalogueContract = {
   clear_wrong_audio: clearWrongAudio,
   commit_anchor: commitAnchor,
   commit_anchor_batch: commitAnchorBatch,
+  commit_anchor_release: commitAnchorRelease,
   commit_crawl_nodes: commitCrawlNodes,
   crawl_catalogue: crawlCatalogue,
   flag_wrong_audio: flagWrongAudio,
@@ -1367,6 +1454,7 @@ export const adminCatalogueContract = {
   resolve_anchor: resolveAnchor,
   resolve_anchor_candidate: resolveAnchorCandidate,
   resolve_anchor_paid_result: resolveAnchorPaidResult,
+  resolve_anchor_release_probe: resolveAnchorReleaseProbe,
   resolve_anchor_review: resolveAnchorReview,
   resolve_crawl_hold: resolveCrawlHold,
   set_anchor_apify: setAnchorApify,

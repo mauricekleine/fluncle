@@ -64,7 +64,7 @@ function mockVendorFetch() {
 beforeEach(() => {
   process.env.FIRECRAWL_API_KEY = "test-firecrawl";
   process.env.OPENROUTER_API_KEY = "test-openrouter";
-  delete process.env.OPENROUTER_CONTEXT_MODEL;
+  Reflect.deleteProperty(process.env, "OPENROUTER_CONTEXT_MODEL");
   execute.mockReset().mockResolvedValue({ rowsAffected: 1 });
   getDb.mockReset().mockResolvedValue({ execute });
   setOpenRouterBody(OPENROUTER_BODY_MEASURED);

@@ -31,7 +31,7 @@ describe("production migration journal", () => {
     );
     const entries = parseMigrationJournal(journal);
 
-    expect(entries.at(-1)?.tag).toBe("0200_moaning_piledriver");
+    expect(entries.at(-1)?.tag).toBe("0201_legal_trish_tilby");
     expect(entries.map((entry) => entry.idx)).toEqual(entries.map((_, index) => index));
   });
 

@@ -34,6 +34,7 @@ vi.mock("./listenbrainz", () => ({
 
     return { match: result, outcome: "match" };
   },
+  lookupSpotifyIdsByMetadata: async () => ({ outcome: "no-map" }),
 }));
 
 vi.mock("./spotify", async (importOriginal) => {
