@@ -185,7 +185,7 @@ Use the globally installed `mk-agent-orchestration` skill for provider, model, e
 
 - MUST: Write Effect only in server code (`apps/web/src/lib/server/**`, and `apps/cli` once it adopts it). `packages/contracts` stays on zod, and mobile, the extensions and every client chunk stay Effect-free; the `fluncle-client-chunk-purity` gate fails the build when `effect` reaches a client chunk.
 - MUST: Write Effect 4 from `node_modules/effect/AGENTS.md`, `node_modules/effect/ai-docs` and the package's `.d.ts` files, never from memory: v3 idioms (`Context.Tag`, `Effect.Service`, `@effect/schema`, `@effect/platform`) are wrong here. `apps/web`'s `typecheck` runs `effect-tsgo diagnostics --strict`, which flags them.
-- MUST: Keep a migrated module's exports Promise-based until its callers are Effect, and cross that edge with `runServerEffect` (`lib/server/effect/runtime.ts`); it rejects with the typed failure itself, so `instanceof ApiError` and `apiFault` keep working. Define errors with `Schema.TaggedError`, use `Effect.tryPromise` with its abort signal plus `Effect.timeout` for outbound calls, and `keepAlive` (`lib/server/effect/wait-until.ts`) for background work.
+- MUST: Keep a migrated module's exports Promise-based until its callers are Effect, and cross that edge with `runServerEffect` (`lib/server/effect/runtime.ts`); it rejects with the typed failure itself, so `instanceof ApiError` and `apiFault` keep working. Define errors with `Data.TaggedError` (`Schema.TaggedError` pulls the whole `Schema` module into the Worker), use `Effect.tryPromise` with its abort signal plus `Effect.timeout` for outbound calls, and `keepAlive` (`lib/server/effect/wait-until.ts`) for background work.
 
 ## UI Components
 

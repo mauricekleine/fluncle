@@ -1,11 +1,9 @@
-import { Effect, Schema } from "effect";
+import { Data, Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../spotify";
 import { runServerEffect } from "./runtime";
 
-class UpstreamDown extends Schema.TaggedError<UpstreamDown>()("UpstreamDown", {
-  status: Schema.Finite,
-}) {}
+class UpstreamDown extends Data.TaggedError("UpstreamDown")<{ status: number }> {}
 
 describe("runServerEffect", () => {
   it("resolves with the effect's value", async () => {

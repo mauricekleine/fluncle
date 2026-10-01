@@ -1,12 +1,10 @@
 import { takeWaitUntilPromises } from "@/test/cloudflare-workers-stub";
-import { Effect, Schema } from "effect";
+import { Data, Effect } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serverLoggerLayer } from "./logger";
 import { keepAlive } from "./wait-until";
 
-class ZoneBusy extends Schema.TaggedError<ZoneBusy>()("ZoneBusy", {
-  zone: Schema.String,
-}) {}
+class ZoneBusy extends Data.TaggedError("ZoneBusy")<{ zone: string }> {}
 
 afterEach(() => {
   vi.restoreAllMocks();
