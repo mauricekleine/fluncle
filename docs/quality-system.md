@@ -35,23 +35,9 @@ Static policy bans JS/TS comments through the root oxlint config and the web pac
 
 Formatting exclusions stay in `.oxfmtrc.json`: `.prettierignore` also feeds oxlint ignores, so putting Raycast there would silently exempt it from lint. Vendored HTML/Rust and upstream policy files remain byte-for-byte. Its `**/*.jsonc` override disables trailing commas so oxfmt cannot reintroduce syntax the strict-JSON gate rejects. Turbo hashes `patches/**` and `bunfig.toml` so a patch or Bun test preload change cannot reuse stale output; its strict environment declares the Sentry release and source-map variables so the build sees them and cannot cache a tokenless upload artifact.
 
-## Local start early, join late
+## Local checks
 
-Agent edit hooks run `bun run quality:preflight -- start --quiet` (skipped under `FLUNCLE_UNATTENDED=1`, the unattended box sweeps' marker — the lanes do not fit the Hermes container's memory cap; see `.claude/README.md`). It fingerprints the resulting tracked worktree tree, every untracked path and file body, Node, and classifier configuration; the same bytes therefore keep one identity across unstaged, staged, and committed states. It starts selected leaves in the background and returns immediately. Concurrent edit hooks use an atomic, recoverable launch election so one detached worker owns the shared worktree state. Repeated edits update the desired fingerprint instead of blocking the writer after each edit; the worker starts a fingerprint only after it has been quiet for four seconds, so a burst of edits costs one run.
-
-Local preflight classifies the worktree against its merge-base with `origin/main`, so a committed branch keeps its real closure and a clean branch selects nothing. A checkout without a merge-base with `origin/main` (no remote ref, or a shallow clone) runs the full matrix, and the comparison base is part of the fingerprint, so a pass never carries over to a different base. CI and explicit backstops keep the fail-closed empty-change rule. Local package lanes run web Vitest without V8 coverage (`FLUNCLE_VITEST_COVERAGE=false`); the coverage thresholds are enforced by Quality Checks and `deploy:gate`.
-
-Independent lightweight leaves run in parallel. Package, script, and browser suites run as separate waves on the shared local host so their deadline-bearing tests do not compete for CPU; CI still runs core and browser evidence concurrently on separate hosted runners. A failed wave is recorded immediately and stops later work, making `status` actionable without wasting the remaining expensive evidence.
-
-Use:
-
-```sh
-bun run quality:preflight -- start
-bun run quality:preflight -- status
-bun run quality:preflight -- join
-```
-
-`join` is the commit and handoff boundary and is also called by the Husky pre-commit hook when dependencies are present. If content changes while work is running, the worker interrupts each running lane's process group as Ctrl-C would (SIGINT, so Playwright tears down its web server), escalates to SIGKILL only if the group outlives a twenty-second grace, and waits for the group to exit, rejects the old result, and converges on the new fingerprint instead of finishing obsolete waves. Failures print the owning lane's log. A successful result for any other fingerprint is never accepted.
+Agent edit hooks only format the touched file. Before a commit or handoff, run the checks for the packages you changed; `bun run quality:classify` names the affected leaves, and `run-lane.mjs --plan <file> --lane <lane>` runs one lane of that plan. Husky's pre-commit runs lint-staged. Quality Checks and `deploy:gate` own the full matrix, including coverage thresholds.
 
 ## CI topology and measurement
 

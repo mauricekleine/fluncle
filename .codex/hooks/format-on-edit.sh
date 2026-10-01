@@ -15,7 +15,6 @@ while IFS= read -r file; do
 	case "$file" in
 	*.ts | *.tsx | *.js | *.jsx | *.mjs | *.cjs)
 		bunx oxfmt --write "$file" >/dev/null 2>&1 || true
-		bunx oxlint --fix "$file" >/dev/null 2>&1 || true
 		;;
 	*.go)
 		gofmt -w "$file" >/dev/null 2>&1 || true

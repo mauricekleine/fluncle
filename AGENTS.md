@@ -68,7 +68,7 @@ Use the globally installed `mk-agent-orchestration` skill for provider, model, e
 ## Quality Checks
 
 - Every change uses the dependency-closure contract in `scripts/quality/classifier.mjs`; unknown paths, lockfiles, root configuration, workflow topology, and scheduled/manual runs fail closed to the full matrix. `bun run quality:classify -- --base <sha> --head <sha>` explains the selected leaves.
-- Edit hooks start the fingerprinted affected preflight without blocking. Run `bun run quality:preflight -- status` while working and `bun run quality:preflight -- join` before a commit or handoff; a content or configuration change rejects stale results and queues the new fingerprint. Targeted browser tests are early feedback only; the selected web closure still gates on the full deterministic E2E suite.
+- Edit hooks only format the touched file. Before a commit or handoff, run the checks for the packages you changed; `bun run quality:classify` names the affected leaves. Quality Checks and `deploy:gate` run the full matrix.
 - To inspect or verify a running UI, use the global `agent-browser` skill (the pinned `agent-browser` CLI); use Chrome DevTools MCP only for performance traces.
 - TypeScript: `bun run typecheck` from the repo root, or the nearest package `typecheck` for focused changes.
 - Lint and format: `bun run check` from the repo root for broad validation.
@@ -110,7 +110,7 @@ Use the globally installed `mk-agent-orchestration` skill for provider, model, e
 - [DESIGN.md](./DESIGN.md) - the visual canon (the Nostalgic Cosmos) and its named visual rules.
 - [VOICE.md](./VOICE.md) - the language canon: persona, vocabulary, voice rules, surface registers.
 - [docs/local-database.md](./docs/local-database.md) - read before touching databases, dev/worktree DB setup, or the migrate step; holds the hosted-vs-local query shapes.
-- [docs/quality-system.md](./docs/quality-system.md) - read when changing CI, the classifier, preflight, or deploy verification.
+- [docs/quality-system.md](./docs/quality-system.md) - read when changing CI, the classifier or deploy verification.
 - [docs/database-performance.md](./docs/database-performance.md) - read before any database performance or scale claim, budget, or fixture change.
 - [docs/track-lifecycle.md](./docs/track-lifecycle.md) - read when changing how a track is added, enriched, updated, or tagged.
 - [docs/admin-shell.md](./docs/admin-shell.md) - read before building or changing any `/admin` surface, admin auth, or the admin browser fixtures.
@@ -227,7 +227,7 @@ cd packages/ui && bunx --bun shadcn@latest add dialog
 ## Git
 
 - SHOULD: Two git modes, decided by **where the work runs**, not by who is running it. Work in the **main checkout** commits straight on `main` — no feature branch, no PR. Work running in a **delegated sub-agent's isolated worktree is delivered as a PR**: a worktree sub-agent opens a PR and does **not** push to `main` (unless its brief says otherwise); the orchestrating session reviews the diff and merges it (`gh pr merge --squash --admin --delete-branch`). See the `mk-agent-orchestration` skill. Either way, a push to `main` auto-deploys (mind the coalescing note under External Effects).
-- For draft-guarded CI, keep the PR draft through edits, local preflight, and local review; mark it ready once for protected contexts, then follow the normal reviewed PR path after they succeed on that head.
+- For draft-guarded CI, keep the PR draft through edits, local checks, and local review; mark it ready once for protected contexts, then follow the normal reviewed PR path after they succeed on that head.
 - MUST: If `git commit` fails because Git cannot write commit metadata or access signing helpers, retry the commit with elevated permissions before changing Git config.
 - On headless/automation runs the 1Password SSH agent can be unavailable — signing and SSH push fail even with the sandbox off; fetch/push over HTTPS with `git -c credential.helper='!gh auth git-credential'` instead (`gh` itself is keyring-backed, so it also needs the sandbox off).
 - NEVER: Disable commit signing with `commit.gpgsign=false` unless the user explicitly asks for an unsigned commit.

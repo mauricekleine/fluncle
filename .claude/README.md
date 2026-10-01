@@ -4,9 +4,7 @@ Checked-in Claude Code config for this repo. Personal overrides go in `settings.
 
 ## Hooks (`settings.json` → `hooks/`)
 
-- **`format-on-edit.sh`** — PostToolUse(Edit|Write). Formats the touched file with `oxfmt` (JS/TS) or `gofmt` (Go) and runs `oxlint --fix`. Best-effort; never blocks an edit.
-- **`preflight-on-edit.sh`** — PostToolUse(Edit|Write). Queues the fingerprinted dependency closure in the background (`bun run quality:preflight -- start --quiet`); `bun run quality:preflight -- join` is the explicit commit/handoff gate.
-- **Unattended box sweeps skip both PostToolUse hooks.** `FLUNCLE_UNATTENDED=1` (exported by the agentic sweeps, the same marker that promotes the guard to its strict tier) makes `format-on-edit.sh` and `preflight-on-edit.sh` exit at once: `.oxlintrc.json` is type-aware, so even a one-file `oxlint --fix` loads the TypeScript program through tsgolint (2.5–3 GB), and the preflight lanes run it whole — both are killed by the Hermes container's memory cap, and a headless `claude -p` inherits the hooks on every edit it makes. The box's scoped verification is `docs/agents/hermes/scripts/audit/verify.sh`; the PR's CI runs the full lanes. `unattended-skip.test.ts` asserts both halves (attended: invoked; unattended: nothing spawned).
+- **`format-on-edit.sh`** — PostToolUse(Edit|Write). Formats the touched file with `oxfmt` (JS/TS) or `gofmt` (Go). Formatting only: `.oxlintrc.json` is type-aware, so lint runs in lint-staged at commit and in CI, not per edit. Best-effort; never blocks an edit.
 - **`guard-protected-files.sh`** — PreToolUse(Edit|Write). Blocks hand-edits to generated Drizzle migrations under `apps/web/drizzle/` (use `bun run --cwd apps/web db:generate`) and to `.env`/secret files. Its protected-path matcher uses Bash `[[ =~ ]]` expressions rather than GNU ERE `\b`, whose behavior differs between the shipped macOS Bash 3.2 and Linux Bash 5.
 
 ## Subagents (`agents/`)
@@ -26,4 +24,4 @@ export GITHUB_PERSONAL_ACCESS_TOKEN=ghp_...   # least-privilege scopes; never co
 
 ## Codex
 
-The same guard, formatter, and affected-preflight hooks are mirrored for Codex in `../.codex/` (`hooks.json` + `hooks/`), adapted to Codex's `apply_patch` edit tool and allow/deny model. See `../.codex/README.md`.
+The same guard and formatter hooks are mirrored for Codex in `../.codex/` (`hooks.json` + `hooks/`), adapted to Codex's `apply_patch` edit tool and allow/deny model. See `../.codex/README.md`.
