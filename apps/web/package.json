@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "bench:context-distil": "bun run scripts/bench-context-distil.ts",
-    "build": "bun run scripts/copy-sprites.ts && NODE_OPTIONS=--max-old-space-size=6144 vite build",
+    "build": "bun run scripts/copy-sprites.ts && NODE_OPTIONS=--max-old-space-size=6144 vite build && bun run scripts/prune-worker-manifest.ts",
     "capture:distil-corpus": "bun run scripts/capture-distil-corpus.ts",
     "db:admission-store": "bun run scripts/database-admission-store.ts",
     "db:backfill-due-work": "bun run scripts/backfill-due-work.ts",
@@ -26,13 +26,13 @@
     "db:refresh-dev": "bun run scripts/db-refresh.ts",
     "db:restore-drill": "bun run scripts/restore-drill.ts",
     "db:secrets": "bun run scripts/render-dev-vars.ts",
-    "deploy": "bun run build && wrangler deploy",
-    "deploy:cf": "bun run db:migrate:production && bun run db:migrate:telemetry:production && bun run scripts/repair-hidden-graph-counts.ts && wrangler deploy && bun run scripts/backfill-mixable-artists-projection.ts --activate && bun scripts/purge-edge-cache.ts",
+    "deploy": "bun run build && cf deploy --prebuilt",
+    "deploy:cf": "bun run db:migrate:production && bun run db:migrate:telemetry:production && bun run scripts/repair-hidden-graph-counts.ts && cf deploy --prebuilt && bun run scripts/backfill-mixable-artists-projection.ts --activate && bun scripts/purge-edge-cache.ts",
     "dev": "bun run scripts/dev.ts",
     "dev:vite": "bun run scripts/copy-sprites.ts && vite dev --host 127.0.0.1 --port 3000",
     "lint": "oxlint",
     "postinstall": "fumadocs-mdx",
-    "preview": "bun run build && wrangler dev",
+    "preview": "bun run build && vite preview",
     "probe": "bun run scripts/post-deploy-probe.ts",
     "pretypecheck": "fumadocs-mdx",
     "r2:cors": "wrangler r2 bucket cors set fluncle-videos --file r2-cors.json",
@@ -47,7 +47,7 @@
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium",
     "test:e2e:report": "playwright show-report",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "cf workers types && tsc --noEmit",
     "test": "node ../../node_modules/vitest/vitest.mjs run --coverage.enabled=${FLUNCLE_VITEST_COVERAGE:-true}"
   },
   "dependencies": {
@@ -97,7 +97,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "~1.53.1",
+    "@cloudflare/vite-plugin": "~1.61.0",
     "@fluncle/test-support": "workspace:*",
     "@huggingface/transformers": "~4.3.0",
     "@modelcontextprotocol/client": "~2.1.0",
@@ -107,6 +107,7 @@
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "~6.1.0",
     "@vitest/coverage-v8": "~4.1.11",
+    "cf": "1.0.0-beta.8",
     "drizzle-kit": "catalog:",
     "oxc-parser": "~0.146.0",
     "playwright-core": "catalog:",

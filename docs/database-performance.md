@@ -269,7 +269,7 @@ Any query scanning a table that grows with the archive needs an attended hosted 
 
 ## Worker placement
 
-The web Worker runs beside the database. `apps/web/wrangler.jsonc` sets a Placement Hint (`placement.region`) naming the cloud region of the Turso primary, so each statement pays an in-region round trip rather than an intercontinental one. A request issues most of its statements in sequence, so that round trip multiplies across the request, and the public database-span and end-to-end budgets above assume it. When the primary moves to another region, the placement hint moves in the same change; `turso db show` names the primary's location.
+The web Worker runs beside the database. `apps/web/cloudflare.config.ts` sets a Placement Hint (`placement.region`) naming the cloud region of the Turso primary, so each statement pays an in-region round trip rather than an intercontinental one. A request issues most of its statements in sequence, so that round trip multiplies across the request, and the public database-span and end-to-end budgets above assume it. When the primary moves to another region, the placement hint moves in the same change; `turso db show` names the primary's location.
 
 Placement changes where the Worker executes and nothing else:
 

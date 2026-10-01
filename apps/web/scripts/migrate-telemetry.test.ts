@@ -115,7 +115,7 @@ describe("deploy:cf telemetry ordering", () => {
   it("requires telemetry migration after the primary migration and before Worker publication", () => {
     const primaryAt = chain.indexOf("bun run db:migrate:production");
     const telemetryAt = chain.indexOf("bun run db:migrate:telemetry:production");
-    const deployAt = chain.indexOf("wrangler deploy");
+    const deployAt = chain.indexOf("cf deploy --prebuilt");
 
     expect(primaryAt).toBe(0);
     expect(telemetryAt).toBeGreaterThan(primaryAt);

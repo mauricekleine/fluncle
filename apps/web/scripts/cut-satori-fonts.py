@@ -9,7 +9,7 @@ Cloudflare Worker. Three facts collide there:
 
   1. Satori does NOT read woff2. It takes TTF/OTF/WOFF only — so `public/fonts/*.woff2`,
      the faces the web app ships, are unusable as-is.
-  2. A Worker has no system fonts, no `assets` binding (see `wrangler.jsonc`), and cannot
+  2. A Worker has no system fonts, no `assets` binding (see `cloudflare.config.ts`), and cannot
      fetch its own origin (that loops to the SPA fallback). So the bytes must be IN the
      bundle.
   3. Satori has no `@font-face`. It reads each TTF's own `hhea`/`OS/2` tables, which means

@@ -11,6 +11,7 @@ apps/web/.dev/
 apps/web/.source/
 .turbo/
 .wrangler/
+.cloudflare/
 __pycache__/
 node_modules/
 dist/

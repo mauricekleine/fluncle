@@ -11,7 +11,7 @@
         "SENTRY_PROJECT_WORKER",
         "WORKERS_CI_COMMIT_SHA"
       ],
-      "outputs": ["dist/**"]
+      "outputs": ["dist/**", ".cloudflare/output/**"]
     },
     "dev": {
       "cache": false,

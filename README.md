@@ -225,7 +225,7 @@ Private account endpoints are intentionally separate from anonymous archive DTOs
 
 ### Deploy Web To Cloudflare
 
-The web app deploys as a Cloudflare Worker through Wrangler. Keep secrets out of `wrangler.jsonc`; set them as Worker secrets.
+The web app deploys as a Cloudflare Worker with the `cf` CLI, configured in `apps/web/cloudflare.config.ts`. Keep secrets out of that file; set them as Worker secrets.
 
 The authoritative env inventory is the committed `apps/web/.dev.vars.tpl` — field for field, that template is the Worker secret set. Every var it carries must exist as a Worker secret for its feature to light up in production (the optional side-channels no-op cleanly when absent, so an unset one costs only that leg). The core five:
 
@@ -246,7 +246,7 @@ bun run --cwd apps/web db:refresh-dev
 bun run --cwd apps/web preview
 ```
 
-Production uses the `fluncle` Turso database through Wrangler secrets. Deploys run through Cloudflare Workers Builds on push to `main`, and migrations apply as part of the deploy step: the Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf`, which runs the primary migration, then the required telemetry migration, then the hidden-graph-count repair (`scripts/repair-hidden-graph-counts.ts`), then `wrangler deploy`, and only afterwards activates the mixable-artists projection and purges the edge cache.
+Production uses the `fluncle` Turso database through Worker secrets. Deploys run through Cloudflare Workers Builds on push to `main`, and migrations apply as part of the deploy step: the Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf`, which runs the primary migration, then the required telemetry migration, then the hidden-graph-count repair (`scripts/repair-hidden-graph-counts.ts`), then `cf deploy --prebuilt`, and only afterwards activates the mixable-artists projection and purges the edge cache.
 
 The primary runner validates the generated Drizzle journal against the loaded migration files, reads the target's `__drizzle_migrations` ledger, and applies the complete pending journal suffix as one atomic libSQL batch. Each migration's ledger stamp is part of the same transaction, so a failed statement rolls the schema changes and the stamps back together. The telemetry runner is required before publication; missing credentials and migration failures stop the command instead of leaving a new Worker ahead of its run-ledger schema. Applied migrations are never down-migrated: restore any required schema forward before rolling application code back. Local `db:migrate` behavior is unchanged. The complete commands, prerequisites, and rollback contract are in [the local database guide](./docs/local-database.md#production-deploy--migrations).
 

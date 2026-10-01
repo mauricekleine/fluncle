@@ -163,7 +163,7 @@ describe("production deploy migration boundary", () => {
   it("routes deploy:cf through the complete pending journal without a generic history sweep", () => {
     const chain = pkg.scripts["deploy:cf"] ?? "";
     const migrationAt = chain.indexOf("bun run db:migrate:production");
-    const deployAt = chain.indexOf("wrangler deploy");
+    const deployAt = chain.indexOf("cf deploy --prebuilt");
 
     expect(migrationAt).toBe(0);
     expect(deployAt).toBeGreaterThan(migrationAt);

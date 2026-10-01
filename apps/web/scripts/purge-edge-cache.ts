@@ -13,12 +13,14 @@ if (!token) {
   process.exit(0);
 }
 
-const wranglerPath = join(dirname(fileURLToPath(import.meta.url)), "..", "wrangler.jsonc");
-const wrangler = readFileSync(wranglerPath, "utf8");
-const zoneMatch = wrangler.match(/"CF_CACHE_PURGE_ZONE_ID":\s*"([0-9a-f]{32})"/);
+const configPath = join(dirname(fileURLToPath(import.meta.url)), "..", "cloudflare.config.ts");
+const config = readFileSync(configPath, "utf8");
+const zoneMatch = config.match(/CF_CACHE_PURGE_ZONE_ID:\s*bindings\.text\("([0-9a-f]{32})"\)/);
 
 if (!zoneMatch) {
-  console.error("purge-edge-cache: CF_CACHE_PURGE_ZONE_ID not found in wrangler.jsonc — skipping.");
+  console.error(
+    "purge-edge-cache: CF_CACHE_PURGE_ZONE_ID not found in cloudflare.config.ts — skipping.",
+  );
   process.exit(0);
 }
 

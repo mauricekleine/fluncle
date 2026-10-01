@@ -6,7 +6,7 @@ The spoken-delivery layer for the recovered-audio register. `voice.md` §5 ("Rec
 
 "Fluncle" — a cloned **Cartesia (Sonic)** voice (`CARTESIA_VOICE_ID`), an instant clone of the bespoke read. A weathered man in his early fifties, English with a faint, hard-to-place Dutch accent (fluent but subtly non-native, something off just a touch). Low and slow, dry and deadpan-calm, gravelly and lived-in but awake and present, faintly melancholic, with a touch of distance — as if recovered from far away. He's the uncle saying it to a mate over the tune, not a DJ working a crowd. Cartesia reads conversationally and keeps dreamy scripts present without dragging.
 
-The voice is swappable: it's the `CARTESIA_VOICE_ID` Worker var in `apps/web/wrangler.jsonc` (a non-secret config var holding the clone id). Change the var to change voices; a per-call `--voice-id` override exists for one-offs but the var is the canon.
+The voice is swappable: it's the `CARTESIA_VOICE_ID` Worker var in `apps/web/cloudflare.config.ts` (a non-secret config var holding the clone id). Change the var to change voices; a per-call `--voice-id` override exists for one-offs but the var is the canon.
 
 ## Voice settings
 

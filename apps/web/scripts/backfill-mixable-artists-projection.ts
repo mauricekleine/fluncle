@@ -67,7 +67,7 @@ export async function backfillMixableArtistsProjection(
 ): Promise<MixableArtistsProjectionBackfillResult> {
   const observed = await readState(client);
   if (options.activate !== true) {
-    throw new Error("mixable artist projection activation must run after wrangler deploy");
+    throw new Error("mixable artist projection activation must run after cf deploy");
   }
   if (observed === MIXABLE_ARTISTS_PROJECTION_COMPLETE_VALUE) {
     return { artists: 0, pages: 0, passes: 0, skipped: true };
