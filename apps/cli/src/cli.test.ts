@@ -1827,11 +1827,11 @@ describe("sweep commands surface partial failure", () => {
   );
 
   testCli(
-    "backfills artist-images counts only fills toward --limit and follows skip-only pages",
+    "backfills artist-images counts checked artists toward --limit and follows skip-only pages",
     async () => {
       const calls: Array<{ cursor: string | null; limit: string | null }> = [];
-      const skipped = Array.from({ length: 50 }, (_, index) => `skip-${index}`);
-      const filled = Array.from({ length: 50 }, (_, index) => `fill-${index}`);
+      const skipped = Array.from({ length: 20 }, (_, index) => `skip-${index}`);
+      const filled = Array.from({ length: 20 }, (_, index) => `fill-${index}`);
 
       await withStubApi(
         (req, url) => {
@@ -1844,30 +1844,30 @@ describe("sweep commands surface partial failure", () => {
             if (calls.length === 1) {
               return Response.json({
                 budgetLimited: false,
-                checkedCount: 50,
+                checkedCount: 20,
                 dryRun: false,
                 failed: [],
                 failedCount: 0,
                 filled: [],
                 filledCount: 0,
-                nextCursor: "a49",
+                nextCursor: "a19",
                 ok: true,
-                queueDepth: 50,
+                queueDepth: 20,
                 rateLimited: false,
                 skipped,
-                skippedCount: 50,
+                skippedCount: 20,
               });
             }
 
             return Response.json({
               budgetLimited: false,
-              checkedCount: 50,
+              checkedCount: 20,
               dryRun: false,
               failed: [],
               failedCount: 0,
               filled,
-              filledCount: 50,
-              nextCursor: "a99",
+              filledCount: 20,
+              nextCursor: "a39",
               ok: true,
               queueDepth: 12,
               rateLimited: false,
@@ -1883,7 +1883,7 @@ describe("sweep commands surface partial failure", () => {
         },
         async (baseUrl) => {
           const result = await runCli(
-            ["admin", "backfills", "artist-images", "--limit", "50", "--json"],
+            ["admin", "backfills", "artist-images", "--limit", "40", "--json"],
             {
               FLUNCLE_API_BASE_URL: baseUrl,
               FLUNCLE_API_TOKEN: "test-token",
@@ -1892,14 +1892,14 @@ describe("sweep commands surface partial failure", () => {
 
           expect(result.exitCode).toBe(0);
           expect(calls).toEqual([
-            { cursor: null, limit: "50" },
-            { cursor: "a49", limit: "50" },
+            { cursor: null, limit: "40" },
+            { cursor: "a19", limit: "20" },
           ]);
 
           const payload = JSON.parse(result.stdout) as Record<string, unknown>;
-          expect(payload.filledCount).toBe(50);
-          expect(payload.skippedCount).toBe(50);
-          expect(payload.checkedCount).toBe(100);
+          expect(payload.filledCount).toBe(20);
+          expect(payload.skippedCount).toBe(20);
+          expect(payload.checkedCount).toBe(40);
           expect(payload.queueDepth).toBe(12);
           expect(payload.filled).toEqual(filled);
           expect(payload.skipped).toEqual(skipped);

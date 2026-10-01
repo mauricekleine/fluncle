@@ -117,3 +117,20 @@ describe("mbFetch pacing", () => {
     expect(Math.abs((second ?? 0) - (first ?? 0))).toBeGreaterThanOrEqual(50);
   });
 });
+
+describe("mbFetch outcome", () => {
+  it("distinguishes an absent artist from a network error", async () => {
+    setMusicbrainzRateLimitForTests(0);
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 404 }))
+      .mockRejectedValueOnce(new Error("network unavailable")) as unknown as typeof fetch;
+
+    const missing = await mbFetch("/artist/missing");
+    const unavailable = await mbFetch("/artist/unavailable");
+
+    expect(missing).toMatchObject({ data: null, rateLimited: false, status: 404 });
+    expect(unavailable).toMatchObject({ data: null, rateLimited: false });
+    expect(unavailable.status).toBeUndefined();
+  });
+});

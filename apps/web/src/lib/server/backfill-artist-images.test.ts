@@ -29,7 +29,7 @@ vi.mock("./db", async () => {
 
 vi.mock("./due-work-cutover", () => ({ isDueWorkCutoverEnabled: async () => false }));
 
-vi.mock("./spotify", () => ({ fetchArtistImages }));
+vi.mock("./artist-images", () => ({ fetchArtistImages }));
 
 const { backfillArtistImages } = await import("./backfill-artist-images");
 
@@ -53,6 +53,7 @@ describe("backfillArtistImages", () => {
       budgetLimited: false,
       checkedCount: 2,
       checkedIds: ["s1", "s2"],
+      deferredIds: new Set(),
       failures: new Map(),
       images: new Map([["s1", "https://i.scdn.co/image/s1"]]),
       missingIds: new Set(["s2"]),
@@ -84,6 +85,7 @@ describe("backfillArtistImages", () => {
       budgetLimited: true,
       checkedCount: 0,
       checkedIds: [],
+      deferredIds: new Set(),
       failures: new Map(),
       images: new Map(),
       missingIds: new Set(),
@@ -112,6 +114,7 @@ describe("backfillArtistImages", () => {
       budgetLimited: false,
       checkedCount: 1,
       checkedIds: ["s1"],
+      deferredIds: new Set(["s1"]),
       failures: new Map(),
       images: new Map(),
       missingIds: new Set(),

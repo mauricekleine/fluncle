@@ -300,6 +300,36 @@ describe("resolveCoverMasters — the album ladder", () => {
 });
 
 describe("resolveCoverMasters — the artist floor + the shared cap", () => {
+  it("owns an oEmbed CDN thumbnail with its Spotify source", async () => {
+    const imageUrl = "https://i.scdn.co/image/ab6761610000e5ebportrait";
+    seedWorklist([{ image_failures: 0, image_url: imageUrl, slug: "oembed-artist" }]);
+    const fetchMock = stubImageFetch(jpegBytes(320, 320), "image/jpeg");
+    const { bucket } = fakeBucket();
+
+    const result = await resolveCoverMasters(bucket, "artist", 20, false);
+
+    expect(result.resolved).toEqual(["oembed-artist"]);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(imageUrl);
+    expect(
+      writtenCalls().find((call) => call.sql.includes("image_state = 'resolved'"))?.args,
+    ).toContain("spotify");
+  });
+
+  it("owns a Deezer picture and records Deezer as the source", async () => {
+    const imageUrl = "https://cdn-images.dzcdn.net/images/artist/portrait/1000x1000.jpg";
+    seedWorklist([{ image_failures: 0, image_url: imageUrl, slug: "deezer-artist" }]);
+    const fetchMock = stubImageFetch(jpegBytes(1000, 1000), "image/jpeg");
+    const { bucket } = fakeBucket();
+
+    const result = await resolveCoverMasters(bucket, "artist", 20, false);
+
+    expect(result.resolved).toEqual(["deezer-artist"]);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(imageUrl);
+    expect(
+      writtenCalls().find((call) => call.sql.includes("image_state = 'resolved'"))?.args,
+    ).toContain("deezer");
+  });
+
   it("owns the artist's Spotify avatar as a ≤1200 master", async () => {
     seedWorklist([
       {

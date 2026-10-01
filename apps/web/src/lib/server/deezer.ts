@@ -46,15 +46,15 @@ export type DeezerIsrcCandidate = {
   title: string;
 };
 
-const DEEZER_USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
+export const DEEZER_USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
 
 const DEEZER_TIMEOUT_MS = 10_000;
 
 const DEEZER_SEARCH_LIMIT = DEEZER_CANDIDATE_LIMIT;
 
-const DEEZER_QUOTA_ERROR_CODE = 4;
+export const DEEZER_QUOTA_ERROR_CODE = 4;
 
-const DEEZER_DATA_EXCEPTION_CODE = 800;
+export const DEEZER_DATA_EXCEPTION_CODE = 800;
 
 const DEEZER_QUOTA_RETRY_DELAYS_MS = [1_200, 2_500];
 

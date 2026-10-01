@@ -4,6 +4,8 @@ The rave-02 host trigger for the `--no-agent` **artist-resolution** sweep. `flun
 
 The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (source: [`../scripts/artist-sweep.sh`](../scripts/artist-sweep.sh) → [`../scripts/artist-sweep.ts`](../scripts/artist-sweep.ts)) — riding the image and auto-updating from `main` via pin-watch (Unit A). The host timer only triggers it.
 
+Each tick also calls `backfill_artist_images` with a 20-artist check limit. The Worker tries Spotify oEmbed and then an identity-checked Deezer picture, paces vendor requests, and leaves transient failures pending for the next tick. This image work does not use the Spotify Web API or its OAuth token.
+
 ## Why a host timer + the /status marker
 
 Every automation cron runs from a repo-checked-in host timer so the SCHEDULE is code. Because a `docker exec` sends stdout to journald, the sweep self-writes the `/status` marker (`# Cron Job: fluncle-artist-sweep`) via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper, so the [`fluncle-healthcheck`](../scripts/fluncle-healthcheck.ts) prober's `cron.artist-sweep` row stays honest. The prober is UNCHANGED.
@@ -24,4 +26,4 @@ journalctl -u fluncle-artist-sweep.service -n 40 --no-pager  # expect a { "ok": 
 systemctl list-timers fluncle-artist-sweep.timer
 ```
 
-Before the image backfill, the sweep reads the agent-allowed Spotify breaker state. An active global quota hold skips image calls while MusicBrainz artist resolution still runs. The Worker also enforces a 150-call UTC-day image budget and the shared atomic meter if this backfill still uses the Spotify Web API.
+The image backfill runs through a Spotify Web API quota hold because it uses public oEmbed and Deezer endpoints. The Worker paces those requests and reports vendor throttles in the sweep summary.

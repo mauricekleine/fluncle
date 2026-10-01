@@ -2198,7 +2198,7 @@ export const artists = sqliteTable(
     imageAttemptedAt: text("image_attempted_at"),
     imageFailures: integer("image_failures").notNull().default(0),
     imageKey: text("image_key"),
-    imageSource: text("image_source", { enum: ["apple", "coverart", "spotify"] }),
+    imageSource: text("image_source", { enum: ["apple", "coverart", "deezer", "spotify"] }),
     imageState: text("image_state", { enum: ["pending", "resolved", "none"] })
       .notNull()
       .default("pending"),
