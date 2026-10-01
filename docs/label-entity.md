@@ -98,9 +98,11 @@ A held release is its own source, `crawl-hold`: one row per `held` release, olde
 | ---------------------------- | -------------------------- | -------------------------------- |
 | `list_labels_admin`          | admin (agent-allowed read) | `GET /admin/labels`              |
 | `mint_label`                 | operator                   | `POST /admin/labels`             |
-| `update_label`               | operator                   | `PATCH /admin/labels/{id}`       |
+| `update_label`               | admin (agent applies)      | `PATCH /admin/labels/{id}`       |
 | `list_label_artist_rules`    | admin                      | `GET /admin/labels/{id}/artists` |
-| `replace_label_artist_rules` | operator                   | `PUT /admin/labels/{id}/artists` |
+| `replace_label_artist_rules` | admin (agent applies)      | `PUT /admin/labels/{id}/artists` |
+
+Ruling a label is the operator's editorial decision; applying it is mechanical. So the two writes a [label triage](../packages/skills/fluncle-label-triage/SKILL.md) round makes, `update_label` and `replace_label_artist_rules`, accept the agent token as well: an agent applies a round once the operator has ratified it. The server does not check that ratification; the triage procedure does. Minting, merging and global rules stay operator-only.
 
 Global artist rules ride their own contract file (`admin-artist-rules.ts`): `list_artist_rules` (admin) plus `add_artist_rule` / `remove_artist_rule` (operator) on `/admin/artist-rules` — they belong to the artist entity's surface ([artist-relationship.md](./artist-relationship.md)), not to any label. `replace_label_artist_rules` is a transactional whole-set swap that resolves each rule's Spotify bridge from the artist's MB url-rels at write and stamps `scope_changed_at`; `update_label` gains `rewalk` for a bare re-walk arm.
 

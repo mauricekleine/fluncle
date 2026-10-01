@@ -58,7 +58,8 @@ export const updateLabel = oc
     method: "PATCH",
     operationId: "updateLabel",
     path: "/admin/labels/{id}",
-    summary: "Update a label's crawl scope or arm a re-walk (operator; never storage)",
+    summary:
+      "Update a label's crawl scope or arm a re-walk (operator, or an agent applying a ratified triage round; never storage)",
     tags: ["Admin"],
   })
   .input(
@@ -93,7 +94,8 @@ export const replaceLabelArtistRules = oc
     method: "PUT",
     operationId: "replaceLabelArtistRules",
     path: "/admin/labels/{id}/artists",
-    summary: "Replace one label's complete artist-rule set (operator)",
+    summary:
+      "Replace one label's complete artist-rule set (operator, or an agent applying a ratified triage round)",
     tags: ["Admin"],
   })
   .input(

@@ -53,22 +53,19 @@ export function adminLabelsHandlers(os: Implementer) {
     }
   });
 
-  const updateLabelHandler = os.update_label
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
-      try {
-        const label = await updateLabelSeedState(input.id, input.seedState, input.rewalk);
+  const updateLabelHandler = os.update_label.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const label = await updateLabelSeedState(input.id, input.seedState, input.rewalk);
 
-        return { label, ok: true } as const;
-      } catch (error) {
-        if (error instanceof LabelNotFoundError) {
-          throw new ORPCError("NOT_FOUND", { message: error.message });
-        }
-
-        throw apiFault(error);
+      return { label, ok: true } as const;
+    } catch (error) {
+      if (error instanceof LabelNotFoundError) {
+        throw new ORPCError("NOT_FOUND", { message: error.message });
       }
-    });
+
+      throw apiFault(error);
+    }
+  });
 
   const listLabelArtistRulesHandler = os.list_label_artist_rules
     .use(adminAuth)
@@ -88,7 +85,6 @@ export function adminLabelsHandlers(os: Implementer) {
 
   const replaceLabelArtistRulesHandler = os.replace_label_artist_rules
     .use(adminAuth)
-    .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
         const rules = await replaceLabelArtistRules(input.id, input.rules, input.source);
