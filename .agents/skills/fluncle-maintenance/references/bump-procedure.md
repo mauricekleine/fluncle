@@ -16,7 +16,7 @@ Two inventory items (`package.json` `packageManager` and the Actions SHA-pins) a
 1. **Edit the pin in place** on a branch — the inventory tells you the exact line/marker per item. For bun, move the `FROM` tag + digest and `package.json` `packageManager` in one commit.
 2. **Run the repo-side gate locally**, then **open a PR** with the drift table, the per-item safety call, and (for a Dockerfile edit) a note that the on-box `fluncle-pin-watch` timer will self-deploy it after the merge (`docs/agents/hermes/pin-watch/`).
 3. **Wait for the PR's CI to go green** (Quality Checks + gitleaks + the Cloudflare build). A red check → **do not merge**; report and leave the PR for a human.
-4. **Merge** the green PR (`gh pr merge --squash --admin --delete-branch`). That is the routine's delivery.
+4. **Queue the merge** on the green PR (`gh pr merge --squash --auto --delete-branch`); the `hyperspeed-ci` reviewer approves and auto-merge lands it. Never pass `--admin`. That is the routine's delivery.
 5. **If the merged change includes a baked Dockerfile pin** — you are done. The on-box `fluncle-pin-watch` timer (rave-02) detects the new pin on `main`, rebuilds the image, pre-smokes it (versions, an agent-tier `{ok:true}`, a publish-class 403) BEFORE touching the live container, swaps, post-smokes, and **auto-rolls-back on any failure**, Discord-alerting on deploy or rollback. The routine never SSHes, never runs `docker`, never touches `op`. If only repo-side pins changed, you are also done — they shipped on the merge.
 
 ## The box's self-deploy (the pin-watch timer — for reference, not routine action)

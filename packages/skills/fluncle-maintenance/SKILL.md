@@ -43,7 +43,7 @@ The whole loop, bounded to one pass:
 4. **For the SHIP items — carry them all the way:**
    1. Edit each safe pin on a branch, run the local gate, open ONE PR (the auditable artifact + the CI gate).
    2. **Wait for the PR's CI to go green** (the deploy-gate + gitleaks + the Cloudflare build). A **red** check → do NOT merge; drop those items back to a report and leave the PR for a human.
-   3. **Merge** the green PR (squash). That is the routine's delivery.
+   3. **Queue the merge** on the green PR (squash, `--auto`); the `hyperspeed-ci` reviewer approves and auto-merge lands it. That is the routine's delivery.
    4. **If the merged change includes a baked Dockerfile pin** (a `fluncle`/Claude Code/yt-dlp/bun bump): the merge IS the deploy trigger — the routine does nothing further. The on-box `fluncle-pin-watch` timer (rave-02) detects the new pin on `main`, rebuilds the image, pre-smokes it (versions, an agent-tier `{ok:true}`, a publish-class 403) BEFORE touching the live container, swaps, post-smokes, and **auto-rolls-back on any failure**, Discord-alerting on deploy or rollback. (`docs/agents/hermes/pin-watch/`.)
    5. Fully-repo-side edits (Action SHA-pins, `package.json`, workflows) ship on the merge alone — no box step.
 5. **For the BRAKE items** — report the drift, the reason, and the bump-procedure pointer, so the operator decides and ships it themselves.
