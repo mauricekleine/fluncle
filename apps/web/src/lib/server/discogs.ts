@@ -1,5 +1,5 @@
 import { type DiscogsLabelCandidate, type DiscogsReleaseEvidence } from "@fluncle/contracts/orpc";
-import { Duration, Effect, Schema } from "effect";
+import { Data, Duration, Effect } from "effect";
 import { runServerEffect } from "./effect/runtime";
 import { makeSpacedQueue } from "./effect/spaced-queue";
 import { readOptionalEnv } from "./env";
@@ -29,10 +29,10 @@ const DISCOGS_REQUEST_TIMEOUT = Duration.seconds(15);
 
 const discogsQueue = makeSpacedQueue(() => rateLimitIntervalMs);
 
-class DiscogsUnreachable extends Schema.TaggedError<DiscogsUnreachable>()("DiscogsUnreachable", {
-  cause: Schema.Defect(),
-  url: Schema.String,
-}) {}
+class DiscogsUnreachable extends Data.TaggedError("DiscogsUnreachable")<{
+  cause: unknown;
+  url: string;
+}> {}
 
 function discogsGet(url: string, token: string): Effect.Effect<Response, DiscogsUnreachable> {
   return Effect.tryPromise({

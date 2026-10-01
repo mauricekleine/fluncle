@@ -1,4 +1,4 @@
-import { Duration, Effect, Schedule, Schema } from "effect";
+import { Data, Duration, Effect, Schedule } from "effect";
 import { runServerEffect } from "./effect/runtime";
 import { makeSpacedQueue } from "./effect/spaced-queue";
 
@@ -22,20 +22,19 @@ export function setMusicbrainzRateLimitForTests(ms: number): void {
 
 const queue = makeSpacedQueue(() => rateLimitIntervalMs);
 
-class MusicbrainzUnreachable extends Schema.TaggedError<MusicbrainzUnreachable>()(
-  "MusicbrainzUnreachable",
-  { cause: Schema.Defect() },
-) {}
+class MusicbrainzUnreachable extends Data.TaggedError("MusicbrainzUnreachable")<{
+  cause: unknown;
+}> {}
 
-class MusicbrainzUnavailable extends Schema.TaggedError<MusicbrainzUnavailable>()(
-  "MusicbrainzUnavailable",
-  { retryAfterSeconds: Schema.Finite, status: Schema.Finite },
-) {}
+class MusicbrainzUnavailable extends Data.TaggedError("MusicbrainzUnavailable")<{
+  retryAfterSeconds: number;
+  status: number;
+}> {}
 
-class MusicbrainzRejected extends Schema.TaggedError<MusicbrainzRejected>()("MusicbrainzRejected", {
-  status: Schema.Finite,
-  statusText: Schema.String,
-}) {}
+class MusicbrainzRejected extends Data.TaggedError("MusicbrainzRejected")<{
+  status: number;
+  statusText: string;
+}> {}
 
 export type MbResult<T> = { data: T | null; rateLimited: boolean; status?: number };
 
