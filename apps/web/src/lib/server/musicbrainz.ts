@@ -1,4 +1,6 @@
-import { logEvent } from "./log";
+import { Duration, Effect, Schedule, Schema } from "effect";
+import { runServerEffect } from "./effect/runtime";
+import { makeSpacedQueue } from "./effect/spaced-queue";
 
 export const MUSICBRAINZ_API_HOST = "musicbrainz.org";
 const MUSICBRAINZ_API_ROOT = `https://${MUSICBRAINZ_API_HOST}/ws/2`;
@@ -10,7 +12,7 @@ export function musicbrainzUrl(path: string): string {
 
 export const MB_USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
 
-const MB_REQUEST_TIMEOUT_MS = 15_000;
+const MB_REQUEST_TIMEOUT = Duration.seconds(15);
 
 let rateLimitIntervalMs = 1100;
 
@@ -18,44 +20,22 @@ export function setMusicbrainzRateLimitForTests(ms: number): void {
   rateLimitIntervalMs = ms;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+const queue = makeSpacedQueue(() => rateLimitIntervalMs);
 
-let nextSlotAt = 0;
-let tail: Promise<unknown> = Promise.resolve();
+class MusicbrainzUnreachable extends Schema.TaggedError<MusicbrainzUnreachable>()(
+  "MusicbrainzUnreachable",
+  { cause: Schema.Defect() },
+) {}
 
-const CHAIN_WAIT_FACTOR = 40;
+class MusicbrainzUnavailable extends Schema.TaggedError<MusicbrainzUnavailable>()(
+  "MusicbrainzUnavailable",
+  { retryAfterSeconds: Schema.Finite, status: Schema.Finite },
+) {}
 
-function throttle<T>(call: () => Promise<T>): Promise<T> {
-  const prev = tail;
-
-  const run = (async () => {
-    const chainWait = rateLimitIntervalMs * CHAIN_WAIT_FACTOR;
-
-    if (chainWait > 0) {
-      await Promise.race([prev.then(noop, noop), delay(chainWait)]);
-    } else {
-      await Promise.race([prev.then(noop, noop), Promise.resolve()]);
-    }
-
-    const now = Date.now();
-    const slotAt = Math.max(now, nextSlotAt);
-    nextSlotAt = slotAt + rateLimitIntervalMs;
-
-    if (slotAt > now) {
-      await delay(slotAt - now);
-    }
-
-    return call();
-  })();
-
-  tail = run.then(noop, noop);
-
-  return run;
-}
-
-function noop(): void {}
+class MusicbrainzRejected extends Schema.TaggedError<MusicbrainzRejected>()("MusicbrainzRejected", {
+  status: Schema.Finite,
+  statusText: Schema.String,
+}) {}
 
 export type MbResult<T> = { data: T | null; rateLimited: boolean; status?: number };
 
@@ -64,74 +44,113 @@ export type MbRequestContext = {
   requestKind: "artist_browse" | "label_browse" | "rearm_probe" | "release_detail" | "seed_search";
 };
 
-export function mbFetch<T>(path: string, context?: MbRequestContext): Promise<MbResult<T>> {
+const MAX_503_RETRIES = 2;
+
+function mbRequest<T>(path: string, context?: MbRequestContext): Effect.Effect<MbResult<T>> {
   const url = musicbrainzUrl(path);
-  const record = (outcome: string): void => {
-    if (context) {
-      logEvent("info", "crawl.musicbrainz-request", { ...context, outcome, source: "worker" });
-    }
-  };
+  const record = (outcome: string): Effect.Effect<void> =>
+    context
+      ? Effect.logInfo("crawl.musicbrainz-request").pipe(
+          Effect.annotateLogs({ ...context, outcome, source: "worker" }),
+        )
+      : Effect.void;
 
-  return throttle(async () => {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      let response: Response;
+  const attempt = Effect.gen(function* () {
+    const response = yield* Effect.tryPromise({
+      catch: (cause) => new MusicbrainzUnreachable({ cause }),
+      try: (signal) => fetch(url, { headers: { "User-Agent": MB_USER_AGENT }, signal }),
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: MB_REQUEST_TIMEOUT,
+        orElse: () => Effect.fail(new MusicbrainzUnreachable({ cause: "timeout" })),
+      }),
+    );
 
-      try {
-        response = await fetch(url, {
-          headers: { "User-Agent": MB_USER_AGENT },
-          signal: AbortSignal.timeout(MB_REQUEST_TIMEOUT_MS),
-        });
-      } catch (error) {
-        record("network_error");
-        logEvent("warn", "musicbrainz.request-threw", { error, path });
-
-        return { data: null, rateLimited: false };
-      }
-
-      if (response.status === 503 && attempt < 2) {
-        record("retry_503");
-        const retryAfter = Number(response.headers.get("Retry-After")) || 2;
-        logEvent("warn", "musicbrainz.retry", {
-          attempt: attempt + 1,
-          path,
-          retryAfterSeconds: retryAfter,
-          status: 503,
-        });
-
-        if (rateLimitIntervalMs !== 0) {
-          nextSlotAt = Math.max(nextSlotAt, Date.now() + retryAfter * 1000);
-        }
-
-        await delay(rateLimitIntervalMs === 0 ? 0 : retryAfter * 1000);
-        continue;
-      }
-
-      if (response.status === 503) {
-        record("throttled");
-        return { data: null, rateLimited: true, status: response.status };
-      }
-
-      if (!response.ok) {
-        record(`http_${response.status}`);
-        logEvent("warn", "musicbrainz.request-failed", {
-          path,
-          status: response.status,
-          statusText: response.statusText,
-        });
-
-        return { data: null, rateLimited: false, status: response.status };
-      }
-
-      try {
-        const data = (await response.json()) as T;
-        record("body");
-        return { data, rateLimited: false, status: response.status };
-      } catch (error) {
-        record("invalid");
-        throw error;
-      }
+    if (response.status === 503) {
+      return yield* new MusicbrainzUnavailable({
+        retryAfterSeconds: Number(response.headers.get("Retry-After")) || 2,
+        status: response.status,
+      });
     }
 
-    return { data: null, rateLimited: false };
+    if (!response.ok) {
+      return yield* new MusicbrainzRejected({
+        status: response.status,
+        statusText: response.statusText,
+      });
+    }
+
+    const data = yield* Effect.tryPromise(() => response.json() as Promise<T>).pipe(
+      Effect.tapError(() => record("invalid")),
+      Effect.orDie,
+    );
+    yield* record("body");
+
+    return { data, rateLimited: false, status: response.status } satisfies MbResult<T>;
   });
+
+  const retryOn503 = Schedule.recurs(MAX_503_RETRIES).pipe(
+    Schedule.setInputType<MusicbrainzUnavailable | MusicbrainzRejected | MusicbrainzUnreachable>(),
+    Schedule.while(({ input }) => input._tag === "MusicbrainzUnavailable"),
+    Schedule.modifyDelay(({ input }) =>
+      Effect.succeed(
+        rateLimitIntervalMs === 0 || input._tag !== "MusicbrainzUnavailable"
+          ? Duration.zero
+          : Duration.seconds(input.retryAfterSeconds),
+      ),
+    ),
+    Schedule.tap(({ attempt: retry, input, now }) =>
+      input._tag === "MusicbrainzUnavailable"
+        ? Effect.gen(function* () {
+            yield* record("retry_503");
+            yield* Effect.logWarning("musicbrainz.retry").pipe(
+              Effect.annotateLogs({
+                attempt: retry,
+                path,
+                retryAfterSeconds: input.retryAfterSeconds,
+                status: input.status,
+              }),
+            );
+
+            if (rateLimitIntervalMs !== 0) {
+              yield* queue.deferUntil(now + input.retryAfterSeconds * 1000);
+            }
+          })
+        : Effect.void,
+    ),
+  );
+
+  return queue.run(
+    attempt.pipe(
+      Effect.retry(retryOn503),
+      Effect.catchTags({
+        MusicbrainzRejected: (error) =>
+          record(`http_${error.status}`).pipe(
+            Effect.andThen(
+              Effect.logWarning("musicbrainz.request-failed").pipe(
+                Effect.annotateLogs({ path, status: error.status, statusText: error.statusText }),
+              ),
+            ),
+            Effect.as<MbResult<T>>({ data: null, rateLimited: false, status: error.status }),
+          ),
+        MusicbrainzUnavailable: (error) =>
+          record("throttled").pipe(
+            Effect.as<MbResult<T>>({ data: null, rateLimited: true, status: error.status }),
+          ),
+        MusicbrainzUnreachable: (error) =>
+          record("network_error").pipe(
+            Effect.andThen(
+              Effect.logWarning("musicbrainz.request-threw").pipe(
+                Effect.annotateLogs({ error: error.cause, path }),
+              ),
+            ),
+            Effect.as<MbResult<T>>({ data: null, rateLimited: false }),
+          ),
+      }),
+    ),
+  );
+}
+
+export function mbFetch<T>(path: string, context?: MbRequestContext): Promise<MbResult<T>> {
+  return runServerEffect(mbRequest<T>(path, context));
 }

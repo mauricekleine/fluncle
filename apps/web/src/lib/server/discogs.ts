@@ -1,4 +1,7 @@
 import { type DiscogsLabelCandidate, type DiscogsReleaseEvidence } from "@fluncle/contracts/orpc";
+import { Duration, Effect, Schema } from "effect";
+import { runServerEffect } from "./effect/runtime";
+import { makeSpacedQueue } from "./effect/spaced-queue";
 import { readOptionalEnv } from "./env";
 import { logEvent } from "./log";
 import {
@@ -22,45 +25,30 @@ export function __setRateLimitForTests(ms: number): void {
   setMusicbrainzRateLimitForTests(ms);
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+const DISCOGS_REQUEST_TIMEOUT = Duration.seconds(15);
+
+const discogsQueue = makeSpacedQueue(() => rateLimitIntervalMs);
+
+class DiscogsUnreachable extends Schema.TaggedError<DiscogsUnreachable>()("DiscogsUnreachable", {
+  cause: Schema.Defect(),
+  url: Schema.String,
+}) {}
+
+function discogsGet(url: string, token: string): Effect.Effect<Response, DiscogsUnreachable> {
+  return Effect.tryPromise({
+    catch: (cause) => new DiscogsUnreachable({ cause, url }),
+    try: (signal) =>
+      fetch(url, {
+        headers: { Authorization: `Discogs token=${token}`, "User-Agent": USER_AGENT },
+        signal,
+      }),
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: DISCOGS_REQUEST_TIMEOUT,
+      orElse: () => Effect.fail(new DiscogsUnreachable({ cause: "timeout", url })),
+    }),
+  );
 }
-
-function makeRateLimiter() {
-  let tail: Promise<unknown> = Promise.resolve();
-  let nextSlotAt = 0;
-  const CHAIN_WAIT_FACTOR = 40;
-
-  return <T>(call: () => Promise<T>): Promise<T> => {
-    const prev = tail;
-
-    const run = (async () => {
-      const chainWait = rateLimitIntervalMs * CHAIN_WAIT_FACTOR;
-
-      if (chainWait > 0) {
-        await Promise.race([prev.then(noop, noop), delay(chainWait)]);
-      }
-
-      const now = Date.now();
-      const slotAt = Math.max(now, nextSlotAt);
-      nextSlotAt = slotAt + rateLimitIntervalMs;
-
-      if (slotAt > now) {
-        await delay(slotAt - now);
-      }
-
-      return call();
-    })();
-
-    tail = run.then(noop, noop);
-
-    return run;
-  };
-}
-
-function noop(): void {}
-
-const throttleDiscogs = makeRateLimiter();
 
 export type DiscogsReleaseFacts = {
   catno?: string;
@@ -395,42 +383,30 @@ function discogsFetch<T>(
   token: string,
   signal?: RateLimitSignal,
 ): Promise<T | undefined> {
-  return throttleDiscogs(async () => {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const response = await fetch(`${DISCOGS_API_ROOT}${path}`, {
-        headers: {
-          Authorization: `Discogs token=${token}`,
-          "User-Agent": USER_AGENT,
-        },
-      });
+  return runServerEffect(
+    discogsQueue.run(
+      Effect.gen(function* () {
+        const response = yield* discogsGet(`${DISCOGS_API_ROOT}${path}`, token);
+        const remainingHeader = response.headers.get("X-Discogs-Ratelimit-Remaining");
+        const remaining = remainingHeader === null ? Number.NaN : Number(remainingHeader);
 
-      const remainingHeader = response.headers.get("X-Discogs-Ratelimit-Remaining");
-      const remaining = remainingHeader === null ? Number.NaN : Number(remainingHeader);
+        if (signal && ((Number.isFinite(remaining) && remaining <= 1) || response.status === 429)) {
+          signal.hit = true;
+          signal.vendor = "discogs";
+        }
 
-      if (signal && Number.isFinite(remaining) && remaining <= 1) {
-        signal.hit = true;
-        signal.vendor = "discogs";
-      }
+        if (!response.ok) {
+          yield* Effect.logWarning("discogs.request-failed").pipe(
+            Effect.annotateLogs({ path, status: response.status, statusText: response.statusText }),
+          );
 
-      if (response.status === 429 && signal) {
-        signal.hit = true;
-        signal.vendor = "discogs";
-      }
+          return undefined;
+        }
 
-      if (!response.ok) {
-        logEvent("warn", "discogs.request-failed", {
-          path,
-          status: response.status,
-          statusText: response.statusText,
-        });
-        return undefined;
-      }
-
-      return (await response.json()) as T;
-    }
-
-    return undefined;
-  });
+        return yield* Effect.promise(() => response.json() as Promise<T>);
+      }),
+    ),
+  );
 }
 
 function scoreRelease(input: DiscogsResolveInput, release: DiscogsReleaseEvidence): number {
@@ -867,43 +843,46 @@ export async function fetchDiscogsLabelImage(
       return { rateLimited: signal.hit };
     }
 
-    const image = await throttleDiscogs(async () => {
-      const response = await fetch(uri, {
-        headers: { Authorization: `Discogs token=${token}`, "User-Agent": USER_AGENT },
-      });
+    const image = await runServerEffect(
+      discogsQueue.run(
+        Effect.gen(function* () {
+          const response = yield* discogsGet(uri, token);
 
-      if (response.status === 429) {
-        signal.hit = true;
-        signal.vendor = "discogs";
+          if (response.status === 429) {
+            signal.hit = true;
+            signal.vendor = "discogs";
 
-        return undefined;
-      }
+            return undefined;
+          }
 
-      if (!response.ok) {
-        logEvent("warn", "discogs.label-image-failed", {
-          discogsLabelId,
-          status: response.status,
-        });
+          if (!response.ok) {
+            yield* Effect.logWarning("discogs.label-image-failed").pipe(
+              Effect.annotateLogs({ discogsLabelId, status: response.status }),
+            );
 
-        return undefined;
-      }
+            return undefined;
+          }
 
-      const contentType = response.headers.get("content-type") ?? "";
+          const contentType = response.headers.get("content-type") ?? "";
 
-      if (!contentType.startsWith("image/")) {
-        logEvent("warn", "discogs.label-image-not-image", { contentType, discogsLabelId });
+          if (!contentType.startsWith("image/")) {
+            yield* Effect.logWarning("discogs.label-image-not-image").pipe(
+              Effect.annotateLogs({ contentType, discogsLabelId }),
+            );
 
-        return undefined;
-      }
+            return undefined;
+          }
 
-      const bytes = await response.arrayBuffer();
+          const bytes = yield* Effect.promise(() => response.arrayBuffer());
 
-      if (bytes.byteLength === 0 || bytes.byteLength > MAX_LABEL_IMAGE_BYTES) {
-        return undefined;
-      }
+          if (bytes.byteLength === 0 || bytes.byteLength > MAX_LABEL_IMAGE_BYTES) {
+            return undefined;
+          }
 
-      return { bytes, mime: contentType.split(";")[0]?.trim() || "image/jpeg" };
-    });
+          return { bytes, mime: contentType.split(";")[0]?.trim() || "image/jpeg" };
+        }),
+      ),
+    );
 
     return { image, rateLimited: signal.hit };
   } catch (error) {
