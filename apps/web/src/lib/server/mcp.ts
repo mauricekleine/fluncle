@@ -42,7 +42,7 @@ type McpTool = {
 export const mcpOnlyTools: McpTool[] = [
   {
     description:
-      "Search Spotify for track candidates by name or Spotify track URL. Use a result's id and spotifyUrl with submit_track.",
+      "Search for track candidates to submit, by artist and title or a Spotify track URL. Covers Fluncle's catalogue and other music sources such as Deezer. Pass a result's id and provider to submit_track.",
     execute: async (args, request) => {
       const query = asTrimmedString(args.query);
 
@@ -55,7 +55,7 @@ export const mcpOnlyTools: McpTool[] = [
     inputSchema: {
       properties: {
         query: {
-          description: "Track search query or Spotify track URL, minimum 2 characters.",
+          description: "Artist and title, or a Spotify track URL, minimum 2 characters.",
           minLength: minQueryLength,
           type: "string",
         },
@@ -220,7 +220,7 @@ function serverCard() {
 }
 
 const SERVER_INSTRUCTIONS =
-  "Fluncle's drum & bass archive over MCP. TOOLS: list recent findings, list the newest releases (what just came out), read one in full by coordinate, pull a random one, search the archive itself, look up an artist or a label, browse every artist, album, and label in the archive A to Z (each flagged when Fluncle has certified a finding there), list the tracks on one album, artist, or label, find the artists nearest another in sound, chain a mixable set from a finding, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. RESOURCES: read the archive as a corpus, each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId>, its public record. PROMPTS: Fluncle-voiced starting points (recommend a finding for a mood, walk a recent night, decode a Log ID). A submission is a recommendation, not a publish; Fluncle listens before anything goes out.";
+  "Fluncle's drum & bass archive over MCP. TOOLS: list recent findings, list the newest releases (what just came out), read one in full by coordinate, pull a random one, search the archive itself, look up an artist or a label, browse every artist, album, and label in the archive A to Z (each flagged when Fluncle has certified a finding there), list the tracks on one album, artist, or label, find the artists nearest another in sound, chain a mixable set from a finding, check whether all of Fluncle's systems are operational, search for tracks to submit, submit a track for review, or board the newsletter. RESOURCES: read the archive as a corpus, each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId>, its public record. PROMPTS: Fluncle-voiced starting points (recommend a finding for a mood, walk a recent night, decode a Log ID). A submission is a recommendation, not a publish; Fluncle listens before anything goes out.";
 
 const SITE_ORIGINS = [
   new URL(siteUrl).origin,
@@ -266,7 +266,7 @@ function createServer(requestInfo?: Request): McpServer {
         inputSchema: z.object({
           query: z
             .string()
-            .describe("Track search query or Spotify track URL, minimum 2 characters.")
+            .describe("Artist and title, or a Spotify track URL, minimum 2 characters.")
             .meta({ minLength: minQueryLength }),
         }),
         title: tool.title,

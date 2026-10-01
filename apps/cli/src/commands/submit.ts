@@ -17,7 +17,7 @@ const SELECT_NON_INTERACTIVE_MESSAGE =
 
 export async function submitCommand(input: string | undefined): Promise<void> {
   const query =
-    input?.trim() || (await promptLine("Search or Spotify URL: ", PROMPT_NON_INTERACTIVE_MESSAGE));
+    input?.trim() || (await promptLine("Track or Spotify link: ", PROMPT_NON_INTERACTIVE_MESSAGE));
 
   if (!query) {
     throw new CliError("missing_query", "Missing search input");
@@ -28,7 +28,10 @@ export async function submitCommand(input: string | undefined): Promise<void> {
   );
 
   if (response.results.length === 0) {
-    throw new CliError("no_results", "No Spotify tracks found.");
+    throw new CliError(
+      "no_results",
+      "Nothing came back for that search. Try the artist and the title.",
+    );
   }
 
   const selected = await selectCandidate(response.results);
@@ -48,8 +51,11 @@ export async function submitCommand(input: string | undefined): Promise<void> {
     honeypot: "",
     note,
     source: "cli",
-    spotifyTrackId: selected.id,
-    spotifyUrl: selected.spotifyUrl,
+    ...(selected.provider === "deezer"
+      ? { deezerTrackId: selected.id }
+      : selected.provider === "catalogue"
+        ? { catalogueTrackId: selected.id }
+        : { spotifyTrackId: selected.id, spotifyUrl: selected.spotifyUrl }),
     title: selected.title,
   } satisfies SubmissionRequest);
 

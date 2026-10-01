@@ -17,10 +17,18 @@ vi.mock("./search-llm", () => ({ translateQuery }));
 
 const searchTrackCandidates = vi.hoisted(() => vi.fn<(query: string) => Promise<unknown[]>>());
 const fetchTrackMetadata = vi.hoisted(() => vi.fn<(trackId: string) => Promise<unknown>>());
+const findSpotifyTrackByIsrc = vi.hoisted(() => vi.fn());
+const getDeezerSubmissionTrack = vi.hoisted(() => vi.fn());
+
+vi.mock("./deezer", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./deezer")>()),
+  getDeezerSubmissionTrack,
+}));
 
 vi.mock("./spotify", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./spotify")>()),
   fetchTrackMetadata,
+  findSpotifyTrackByIsrc,
   searchTrackCandidates,
 }));
 
@@ -127,6 +135,8 @@ beforeEach(async () => {
   translateQuery.mockResolvedValue(null);
   searchTrackCandidates.mockReset();
   fetchTrackMetadata.mockReset();
+  findSpotifyTrackByIsrc.mockReset();
+  getDeezerSubmissionTrack.mockReset();
   addContactToSegment.mockReset();
   addContactToSegment.mockResolvedValue(undefined);
 });
@@ -646,12 +656,14 @@ describe("submit_track — the queue write", () => {
       albumImageUrl: "https://img.example/cover.jpg",
       artists: ["Someone"],
       durationMs: 200_000,
+      isrc: "GBTEST2600001",
       spotifyArtistIds: [],
       spotifyUri: `spotify:track:${TRACK_ID}`,
       spotifyUrl: SPOTIFY_URL,
       title: "Submitted Banger",
       trackId: TRACK_ID,
     });
+    findSpotifyTrackByIsrc.mockResolvedValue({ match: { trackId: TRACK_ID }, rateLimited: false });
   }
 
   it("drops a submission in the queue and persists a real row", async () => {
@@ -674,12 +686,51 @@ describe("submit_track — the queue write", () => {
     expect(rows.rows[0]?.status).toBe("pending");
   });
 
-  it("throws when Spotify matches no track", async () => {
-    searchTrackCandidates.mockResolvedValue([]);
+  it("applies the submit limiter before requesting Spotify metadata", async () => {
+    stubSpotify();
+    const submit = toolExecute("submit_track", ipRequest());
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await submit({ spotifyUrl: SPOTIFY_URL });
+    }
+
+    await expect(submit({ spotifyUrl: SPOTIFY_URL })).rejects.toMatchObject({
+      code: "rate_limited",
+      status: 429,
+    });
+    expect(fetchTrackMetadata).toHaveBeenCalledTimes(5);
+  });
+
+  it("accepts a Deezer candidate ID from search_tracks through the shared tool", async () => {
+    stubSpotify();
+    getDeezerSubmissionTrack.mockResolvedValue({
+      artists: ["Someone"],
+      durationMs: 200_000,
+      isrc: "GBTEST2600001",
+      title: "Submitted Banger",
+    });
+
+    const result = (await toolExecute(
+      "submit_track",
+      ipRequest(),
+    )({
+      candidateId: "3263968181",
+      provider: "deezer",
+    })) as { ok: boolean };
+
+    expect(result.ok).toBe(true);
+    expect(findSpotifyTrackByIsrc).toHaveBeenCalledWith("GBTEST2600001", "essential");
+    expect(
+      (await db.execute("select spotify_track_id from submissions")).rows[0]?.spotify_track_id,
+    ).toBe(TRACK_ID);
+  });
+
+  it("returns a retryable error when Spotify metadata is unavailable", async () => {
+    fetchTrackMetadata.mockRejectedValue(new Error("Spotify unavailable"));
 
     await expect(
       toolExecute("submit_track", ipRequest())({ spotifyUrl: SPOTIFY_URL }),
-    ).rejects.toThrow(/No track matched/);
+    ).rejects.toMatchObject({ code: "submission_unavailable", status: 503 });
   });
 
   it("throws without a Spotify URL", async () => {

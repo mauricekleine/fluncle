@@ -1,6 +1,6 @@
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createIntegrationDb, rowCount } from "./integration-db";
+import { createIntegrationDb, rowCount, seedCatalogueTrack } from "./integration-db";
 import { readJson, warmOrpcRouter } from "./orpc-test-kit";
 
 let db: Client;
@@ -24,6 +24,14 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 const fetchTrackMetadata = vi.fn();
+const searchTrackCandidates = vi.fn();
+const findSpotifyTrackByIsrc = vi.fn();
+const getDeezerSubmissionTrack = vi.fn();
+
+vi.mock("./deezer", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./deezer")>()),
+  getDeezerSubmissionTrack: (...args: unknown[]) => getDeezerSubmissionTrack(...args),
+}));
 
 vi.mock("./spotify", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./spotify")>();
@@ -31,6 +39,8 @@ vi.mock("./spotify", async (importOriginal) => {
   return {
     ...actual,
     fetchTrackMetadata: (...args: unknown[]) => fetchTrackMetadata(...args),
+    findSpotifyTrackByIsrc: (...args: unknown[]) => findSpotifyTrackByIsrc(...args),
+    searchTrackCandidates: (...args: unknown[]) => searchTrackCandidates(...args),
   };
 });
 
@@ -55,6 +65,7 @@ function trackMetadata(trackId: string) {
     albumImageUrl: "https://img.example/cover.jpg",
     artists: ["Some Artist"],
     durationMs: 270_000,
+    isrc: "GBTEST2600001",
     spotifyArtistIds: ["artist-1"],
     spotifyUri: `spotify:track:${trackId}`,
     spotifyUrl: `https://open.spotify.com/track/${trackId}`,
@@ -104,6 +115,28 @@ beforeEach(async () => {
   fetchTrackMetadata.mockImplementation((trackId: string) =>
     Promise.resolve(trackMetadata(trackId)),
   );
+  searchTrackCandidates.mockReset();
+  findSpotifyTrackByIsrc.mockReset();
+  findSpotifyTrackByIsrc.mockResolvedValue({
+    match: { trackId: VALID_TRACK_ID },
+    rateLimited: false,
+  });
+  searchTrackCandidates.mockResolvedValue([
+    {
+      artists: ["Some Artist"],
+      durationMs: 270_000,
+      id: VALID_TRACK_ID,
+      spotifyUrl: VALID_SPOTIFY_URL,
+      title: "Some Banger",
+    },
+  ]);
+  getDeezerSubmissionTrack.mockReset();
+  getDeezerSubmissionTrack.mockResolvedValue({
+    artists: ["Some Artist"],
+    durationMs: 270_000,
+    isrc: "GBTEST2600001",
+    title: "Some Banger",
+  });
   addContactToSegment.mockReset();
   addContactToSegment.mockResolvedValue(undefined);
 });
@@ -130,6 +163,349 @@ describe("submit_track through handleOrpc (real validation + rate limiter + DB)"
     });
     expect(await rowCount(db, "submissions")).toBe(0);
   });
+  it("resolves a Deezer selection only after submission and stores Spotify's verified metadata", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq(
+        "/submissions",
+        validSubmission({
+          deezerTrackId: "3263968181",
+          spotifyTrackId: undefined,
+          spotifyUrl: undefined,
+        }),
+        { ip: "1.1.1.8" },
+      ),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(getDeezerSubmissionTrack).toHaveBeenCalledWith("3263968181");
+    expect(findSpotifyTrackByIsrc).toHaveBeenCalledWith("GBTEST2600001", "essential");
+    expect(fetchTrackMetadata).toHaveBeenCalledOnce();
+    const rows = await db.execute("select spotify_track_id from submissions");
+    expect(rows.rows[0]?.spotify_track_id).toBe(VALID_TRACK_ID);
+  });
+
+  it("returns the Spotify deferred deadline during Deezer metadata verification", async () => {
+    const { SpotifyDeferredError } = await import("./spotify");
+    fetchTrackMetadata.mockRejectedValueOnce(
+      new SpotifyDeferredError("quota_hold", "2026-10-02T09:00:00.000Z"),
+    );
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq(
+        "/submissions",
+        validSubmission({
+          deezerTrackId: "3263968181",
+          spotifyTrackId: undefined,
+          spotifyUrl: undefined,
+        }),
+        { ip: "1.1.1.28" },
+      ),
+    );
+
+    expect(response?.status).toBe(503);
+    expect(await readJson(response)).toMatchObject({
+      code: "spotify_deferred",
+      until: "2026-10-02T09:00:00.000Z",
+    });
+    expect(findSpotifyTrackByIsrc).toHaveBeenCalledWith("GBTEST2600001", "essential");
+    expect(await rowCount(db, "submissions")).toBe(0);
+  });
+
+  it("accepts the legacy numeric selected id when the Spotify URL is empty", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq(
+        "/submissions",
+        validSubmission({
+          spotifyTrackId: "3263968181",
+          spotifyUrl: "",
+        }),
+        { ip: "1.1.1.18" },
+      ),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(getDeezerSubmissionTrack).toHaveBeenCalledWith("3263968181");
+    expect(await rowCount(db, "submissions")).toBe(1);
+  });
+
+  it("accepts the legacy catalogue selected id when the Spotify URL is empty", async () => {
+    await seedCatalogueTrack(db, {
+      artists: ["Some Artist"],
+      title: "Some Banger",
+      trackId: "mb_test",
+    });
+    await db.execute({
+      args: ["GBTEST2600001", "mb_test"],
+      sql: "update tracks set spotify_uri = null, spotify_url = null, isrc = ? where track_id = ?",
+    });
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq(
+        "/submissions",
+        validSubmission({
+          spotifyTrackId: "mb_test",
+          spotifyUrl: "",
+        }),
+        { ip: "1.1.1.19" },
+      ),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(findSpotifyTrackByIsrc).toHaveBeenCalledWith("GBTEST2600001", "essential");
+  });
+
+  it("accepts a remastered suffix when ISRC and duration identify the recording", async () => {
+    getDeezerSubmissionTrack.mockResolvedValueOnce({
+      artists: ["Some Artist"],
+      durationMs: 270_000,
+      isrc: "GB-TEST-26-00001",
+      title: "Some Banger (Remastered)",
+    });
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq(
+        "/submissions",
+        validSubmission({
+          deezerTrackId: "3263968181",
+          spotifyTrackId: undefined,
+          spotifyUrl: undefined,
+        }),
+        { ip: "1.1.1.20" },
+      ),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(findSpotifyTrackByIsrc).toHaveBeenCalledWith("GBTEST2600001", "essential");
+    expect(fetchTrackMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an ISRC match when duration differs by more than three seconds", async () => {
+    getDeezerSubmissionTrack.mockResolvedValueOnce({
+      artists: ["Some Artist"],
+      durationMs: 273_001,
+      isrc: "GBTEST2600001",
+      title: "Some Banger",
+    });
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq(
+        "/submissions",
+        validSubmission({
+          deezerTrackId: "3263968181",
+          spotifyTrackId: undefined,
+          spotifyUrl: undefined,
+        }),
+        { ip: "1.1.1.23" },
+      ),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(await rowCount(db, "submissions")).toBe(0);
+  });
+
+  it("turns a Deezer fetch failure into a stable retryable response", async () => {
+    getDeezerSubmissionTrack.mockRejectedValueOnce(new Error("network"));
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq(
+        "/submissions",
+        validSubmission({
+          deezerTrackId: "3263968181",
+          spotifyTrackId: undefined,
+          spotifyUrl: undefined,
+        }),
+        { ip: "1.1.1.21" },
+      ),
+    );
+
+    expect(response?.status).toBe(503);
+    expect(await readJson(response)).toMatchObject({ code: "submission_unavailable" });
+    expect(findSpotifyTrackByIsrc).not.toHaveBeenCalled();
+    expect(await rowCount(db, "submissions")).toBe(0);
+  });
+
+  it("turns Spotify quota on the direct id path into a retryable response", async () => {
+    fetchTrackMetadata.mockRejectedValueOnce(
+      Object.assign(new Error("QUOTA_EXCEEDED"), { retryAfterMs: 1000 }),
+    );
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq("/submissions", validSubmission(), { ip: "1.1.1.22" }),
+    );
+
+    expect(response?.status).toBe(429);
+    expect(await readJson(response)).toMatchObject({ code: "spotify_rate_limited" });
+    expect(await rowCount(db, "submissions")).toBe(0);
+  });
+
+  it("accepts a co-credited recording after ISRC and duration verification", async () => {
+    fetchTrackMetadata.mockResolvedValueOnce({
+      ...trackMetadata(VALID_TRACK_ID),
+      artists: ["Some Artist", "Guest Artist"],
+    });
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq(
+        "/submissions",
+        validSubmission({
+          deezerTrackId: "3263968181",
+          spotifyTrackId: undefined,
+          spotifyUrl: undefined,
+        }),
+        { ip: "1.1.1.12" },
+      ),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(fetchTrackMetadata).toHaveBeenCalledWith(VALID_TRACK_ID, "essential");
+    expect(
+      (await db.execute("select spotify_track_id from submissions")).rows[0]?.spotify_track_id,
+    ).toBe(VALID_TRACK_ID);
+  });
+
+  it("resolves an unanchored catalogue candidate by its stored ISRC", async () => {
+    await seedCatalogueTrack(db, {
+      artists: ["Some Artist"],
+      title: "Some Banger",
+      trackId: "local-track",
+    });
+    await db.execute({
+      args: ["GBTEST2600001", "local-track"],
+      sql: "update tracks set spotify_uri = null, spotify_url = null, isrc = ? where track_id = ?",
+    });
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq(
+        "/submissions",
+        validSubmission({
+          catalogueTrackId: "local-track",
+          spotifyTrackId: undefined,
+          spotifyUrl: undefined,
+        }),
+        { ip: "1.1.1.9" },
+      ),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(findSpotifyTrackByIsrc).toHaveBeenCalledWith("GBTEST2600001", "essential");
+    expect(
+      (await db.execute("select spotify_track_id from submissions")).rows[0]?.spotify_track_id,
+    ).toBe(VALID_TRACK_ID);
+  });
+
+  it("submits an anchored catalogue track without an ISRC through its stored Spotify id", async () => {
+    await seedCatalogueTrack(db, {
+      artists: ["Some Artist"],
+      title: "Some Banger",
+      trackId: "local-track",
+    });
+    await db.execute({
+      args: [`spotify:track:${VALID_TRACK_ID}`, "local-track"],
+      sql: "update tracks set spotify_uri = ?, isrc = null where track_id = ?",
+    });
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq(
+        "/submissions",
+        validSubmission({
+          catalogueTrackId: "local-track",
+          spotifyTrackId: undefined,
+          spotifyUrl: undefined,
+        }),
+        { ip: "1.1.1.24" },
+      ),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(findSpotifyTrackByIsrc).not.toHaveBeenCalled();
+    expect(fetchTrackMetadata).toHaveBeenCalledWith(VALID_TRACK_ID, "essential");
+    expect(
+      (await db.execute("select spotify_track_id from submissions")).rows[0]?.spotify_track_id,
+    ).toBe(VALID_TRACK_ID);
+  });
+
+  it("rejects a nonexistent Spotify track id as invalid input", async () => {
+    fetchTrackMetadata.mockRejectedValueOnce(
+      new Error("Spotify API request failed: 404 Not Found"),
+    );
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq("/submissions", validSubmission(), { ip: "1.1.1.25" }),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(await readJson(response)).toMatchObject({
+      code: "invalid_request",
+      message: "Invalid selected track id",
+    });
+    expect(await rowCount(db, "submissions")).toBe(0);
+  });
+
+  it("rejects a mismatched ISRC result before writing a submission", async () => {
+    fetchTrackMetadata.mockResolvedValueOnce({
+      ...trackMetadata(VALID_TRACK_ID),
+      title: "Different Track",
+    });
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq(
+        "/submissions",
+        validSubmission({
+          deezerTrackId: "3263968181",
+          spotifyTrackId: undefined,
+          spotifyUrl: undefined,
+        }),
+        { ip: "1.1.1.10" },
+      ),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(await rowCount(db, "submissions")).toBe(0);
+  });
+
+  it("reports Spotify throttling without misclassifying the selected candidate", async () => {
+    findSpotifyTrackByIsrc.mockResolvedValueOnce({ rateLimited: true });
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq(
+        "/submissions",
+        validSubmission({
+          deezerTrackId: "3263968181",
+          spotifyTrackId: undefined,
+          spotifyUrl: undefined,
+        }),
+        { ip: "1.1.1.11" },
+      ),
+    );
+
+    expect(response?.status).toBe(429);
+    expect(fetchTrackMetadata).not.toHaveBeenCalled();
+    expect(await rowCount(db, "submissions")).toBe(0);
+  });
+
+  it("reports throttling when metadata verification is rate limited", async () => {
+    fetchTrackMetadata.mockRejectedValueOnce(
+      Object.assign(new Error("Spotify API request failed"), { retryAfterMs: 1000 }),
+    );
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      writeReq(
+        "/submissions",
+        validSubmission({
+          deezerTrackId: "3263968181",
+          spotifyTrackId: undefined,
+          spotifyUrl: undefined,
+        }),
+        { ip: "1.1.1.13" },
+      ),
+    );
+
+    expect(response?.status).toBe(429);
+    expect(await rowCount(db, "submissions")).toBe(0);
+  });
+
   it("accepts a valid submission AND lands the row (queried back from the DB)", async () => {
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(

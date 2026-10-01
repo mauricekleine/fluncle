@@ -512,6 +512,7 @@ type mixtape struct {
 
 type searchResult struct {
 	ID         string   `json:"id"`
+	Provider   string   `json:"provider,omitempty"`
 	SpotifyURL string   `json:"spotifyUrl"`
 	Title      string   `json:"title"`
 	Artists    []string `json:"artists"`
@@ -1061,7 +1062,7 @@ func (m model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch m.screen {
 		case screenSearchInput:
 			if len(value) < 2 {
-				m.err = "Enter at least two characters or a Spotify track URL."
+				m.err = "Enter at least two characters, or paste a Spotify link."
 				return m, nil
 			}
 			m.screen = screenSearch
@@ -1162,7 +1163,7 @@ func (m model) View() tea.View {
 	case screenMixtapeDetail:
 		content = m.renderMixtapeDetail()
 	case screenSearchInput:
-		content = m.renderInput("Search Spotify", "Spotify URL or track search")
+		content = m.renderInput("Submit a track", "track or Spotify link")
 	case screenSearch:
 		content = m.renderSearch()
 	case screenNoteInput:
@@ -1381,13 +1382,13 @@ func (m model) renderFresh() string {
 
 func (m model) renderSearch() string {
 	if m.loading {
-		return statusView("Search Spotify", "Scanning...")
+		return statusView("Submit a track", "Scanning...")
 	}
 	if m.err != "" {
-		return errorView("Search Spotify", m.err)
+		return errorView("Submit a track", m.err)
 	}
 	if len(m.results) == 0 {
-		return statusView("Search Spotify", "Nothing matched in this dimension. Try another search.")
+		return statusView("Submit a track", "Nothing matched in this dimension. Try another search.")
 	}
 
 	// Candidates count up #01.. (positions in the result set, not archive slots).
@@ -2270,16 +2271,18 @@ func (m model) search(query string) tea.Cmd {
 }
 
 type submissionRequest struct {
-	Album          string   `json:"album"`
-	Artists        []string `json:"artists"`
-	ArtworkURL     string   `json:"artworkUrl"`
-	Contact        string   `json:"contact"`
-	Honeypot       string   `json:"honeypot"`
-	Note           string   `json:"note"`
-	Source         string   `json:"source"`
-	SpotifyTrackID string   `json:"spotifyTrackId"`
-	SpotifyURL     string   `json:"spotifyUrl"`
-	Title          string   `json:"title"`
+	Album            string   `json:"album"`
+	Artists          []string `json:"artists"`
+	ArtworkURL       string   `json:"artworkUrl"`
+	Contact          string   `json:"contact"`
+	Honeypot         string   `json:"honeypot"`
+	Note             string   `json:"note"`
+	Source           string   `json:"source"`
+	SpotifyTrackID   string   `json:"spotifyTrackId"`
+	SpotifyURL       string   `json:"spotifyUrl"`
+	DeezerTrackID    string   `json:"deezerTrackId,omitempty"`
+	CatalogueTrackID string   `json:"catalogueTrackId,omitempty"`
+	Title            string   `json:"title"`
 }
 
 func (m model) submit() tea.Cmd {
@@ -2295,6 +2298,16 @@ func (m model) submit() tea.Cmd {
 		SpotifyTrackID: pending.ID,
 		SpotifyURL:     pending.SpotifyURL,
 		Title:          pending.Title,
+	}
+	if pending.Provider == "deezer" {
+		body.DeezerTrackID = pending.ID
+		body.SpotifyTrackID = ""
+		body.SpotifyURL = ""
+	}
+	if pending.Provider == "catalogue" {
+		body.CatalogueTrackID = pending.ID
+		body.SpotifyTrackID = ""
+		body.SpotifyURL = ""
 	}
 	return func() tea.Msg {
 		err := m.app.postJSON("/api/v1/submissions", body, nil)

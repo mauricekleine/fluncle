@@ -8,6 +8,17 @@ vi.mock("./mixtapes", () => ({
 }));
 
 const searchTrackCandidates = vi.fn();
+const searchDeezerSubmissionTracks = vi.fn();
+
+vi.mock("./db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./db")>()),
+  getDb: async () => ({ execute: async () => ({ rows: [] }) }),
+}));
+
+vi.mock("./deezer", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./deezer")>()),
+  searchDeezerSubmissionTracks: (...args: unknown[]) => searchDeezerSubmissionTracks(...args),
+}));
 
 vi.mock("./spotify", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./spotify")>();
@@ -55,6 +66,8 @@ warmOrpcRouter();
 beforeEach(async () => {
   listMixtapes.mockReset();
   searchTrackCandidates.mockReset();
+  searchDeezerSubmissionTracks.mockReset();
+  searchDeezerSubmissionTracks.mockResolvedValue([]);
   listTracks.mockReset();
   createSubmission.mockReset();
   subscribeToNewsletter.mockReset();
@@ -99,23 +112,24 @@ describe("oRPC public read — GET /search (search_tracks)", () => {
   };
 
   it("serves { ok: true, results } for a valid query", async () => {
-    searchTrackCandidates.mockResolvedValueOnce([RESULT]);
+    searchDeezerSubmissionTracks.mockResolvedValueOnce([RESULT]);
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/search?q=amen"));
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true, results: [RESULT] });
-    expect(searchTrackCandidates).toHaveBeenCalledWith("amen");
+    expect(searchDeezerSubmissionTracks).toHaveBeenCalledWith("amen", 8);
+    expect(searchTrackCandidates).not.toHaveBeenCalled();
   });
 
   it("trims the query before the length check and the search", async () => {
-    searchTrackCandidates.mockResolvedValueOnce([]);
+    searchDeezerSubmissionTracks.mockResolvedValueOnce([]);
 
     const { handleOrpc } = await import("./orpc");
     await handleOrpc(get("https://www.fluncle.com/api/v1/search?q=%20%20amen%20%20"));
 
-    expect(searchTrackCandidates).toHaveBeenCalledWith("amen");
+    expect(searchDeezerSubmissionTracks).toHaveBeenCalledWith("amen", 8);
   });
 
   it("400s a too-short query with the custom invalid_query code (byte parity)", async () => {

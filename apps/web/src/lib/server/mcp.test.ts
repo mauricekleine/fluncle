@@ -15,6 +15,23 @@ const assertRateLimitMock = vi.hoisted(() => vi.fn<() => Promise<void>>());
 const chargeRateLimitMock = vi.hoisted(() => vi.fn());
 
 const searchTrackCandidatesMock = vi.hoisted(() => vi.fn());
+const searchDeezerSubmissionTracksMock = vi.hoisted(() => vi.fn());
+const createSubmissionMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./submissions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./submissions")>()),
+  createSubmission: createSubmissionMock,
+}));
+
+vi.mock("./db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./db")>()),
+  getDb: async () => ({ execute: async () => ({ rows: [] }) }),
+}));
+
+vi.mock("./deezer", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./deezer")>()),
+  searchDeezerSubmissionTracks: searchDeezerSubmissionTracksMock,
+}));
 const getFindingsByArtistMock = vi.hoisted(() => vi.fn());
 const getFindingsByLabelMock = vi.hoisted(() => vi.fn());
 const getMixableTracksMock = vi.hoisted(() => vi.fn());
@@ -1031,7 +1048,14 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
   });
 
   it("advertises every newly-migrated tool in tools/list", async () => {
-    const body = (await rpc("tools/list")) as { result: { tools: Array<{ name: string }> } };
+    const body = (await rpc("tools/list")) as {
+      result: {
+        tools: Array<{
+          inputSchema?: { properties?: Record<string, { description?: string; enum?: string[] }> };
+          name: string;
+        }>;
+      };
+    };
     const names = body.result.tools.map((tool) => tool.name);
 
     for (const name of [
@@ -1053,7 +1077,36 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
     ]) {
       expect(names, `${name} advertised`).toContain(name);
     }
+
+    const submit = body.result.tools.find((tool) => tool.name === "submit_track");
+    expect(submit?.inputSchema?.properties?.candidateId?.description).toContain("candidate id");
+    expect(submit?.inputSchema?.properties?.provider?.description).toContain("Provider");
+    expect(submit?.inputSchema?.properties?.provider?.enum).toContain("spotify");
   });
+
+  it.each(["deezer", "catalogue"] as const)(
+    "submits a %s candidate through MCP",
+    async (provider) => {
+      createSubmissionMock.mockReset();
+      createSubmissionMock.mockResolvedValue({ id: "queued" });
+
+      const { data, isError } = await callTool("submit_track", {
+        candidateId: provider === "deezer" ? "3263968181" : "mb_candidate",
+        provider,
+      });
+
+      expect(isError).toBe(false);
+      expect(data).toMatchObject({ ok: true, submission: { id: "queued" } });
+      expect(createSubmissionMock).toHaveBeenCalledWith(
+        expect.objectContaining(
+          provider === "deezer"
+            ? { deezerTrackId: "3263968181" }
+            : { catalogueTrackId: "mb_candidate" },
+        ),
+        expect.any(Request),
+      );
+    },
+  );
 
   it("list_album_catalogue world-serves the flat catalogue list, each row certified-tagged", async () => {
     getAlbumBySlugMock.mockResolvedValue({ id: "alb-1", name: "Colours", slug: "colours" });
@@ -1211,12 +1264,13 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
   });
 });
 
-describe("MCP search_tracks — the shared Spotify-token guard", () => {
+describe("MCP search_tracks — the shared search budget", () => {
   beforeEach(() => {
     assertRateLimitMock.mockReset();
     assertRateLimitMock.mockResolvedValue(undefined);
     searchTrackCandidatesMock.mockReset();
-    searchTrackCandidatesMock.mockResolvedValue([]);
+    searchDeezerSubmissionTracksMock.mockReset();
+    searchDeezerSubmissionTracksMock.mockResolvedValue([]);
 
     __resetSearchCache();
   });
@@ -1231,7 +1285,9 @@ describe("MCP search_tracks — the shared Spotify-token guard", () => {
   });
 
   it("RATE-LIMITS on the HTTP twin's shared budget, then searches", async () => {
-    searchTrackCandidatesMock.mockResolvedValue([{ artists: ["Netsky"], id: "sp1", title: "Rio" }]);
+    searchDeezerSubmissionTracksMock.mockResolvedValue([
+      { artists: ["Netsky"], id: "sp1", spotifyUrl: "", title: "Rio" },
+    ]);
 
     const { data, isError } = await callTool("search_tracks", { query: "netsky rio" });
 
@@ -1240,8 +1296,11 @@ describe("MCP search_tracks — the shared Spotify-token guard", () => {
     expect(assertRateLimitMock).toHaveBeenCalledWith(
       expect.objectContaining({ action: "search_tracks", limit: 30, windowMs: 60_000 }),
     );
-    expect(searchTrackCandidatesMock).toHaveBeenCalledWith("netsky rio");
-    expect(data.results).toEqual([{ artists: ["Netsky"], id: "sp1", title: "Rio" }]);
+    expect(searchDeezerSubmissionTracksMock).toHaveBeenCalledWith("netsky rio", 8);
+    expect(searchTrackCandidatesMock).not.toHaveBeenCalled();
+    expect(data.results).toEqual([
+      { artists: ["Netsky"], id: "sp1", spotifyUrl: "", title: "Rio" },
+    ]);
   });
 
   it("charges the limiter on a cache hit too, so a repeat can't grind the token for free", async () => {
@@ -1250,7 +1309,7 @@ describe("MCP search_tracks — the shared Spotify-token guard", () => {
 
     expect(assertRateLimitMock).toHaveBeenCalledTimes(2);
 
-    expect(searchTrackCandidatesMock).toHaveBeenCalledTimes(1);
+    expect(searchDeezerSubmissionTracksMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns an isError result over the limit rather than throwing", async () => {
@@ -1265,28 +1324,35 @@ describe("MCP search_tracks — the shared Spotify-token guard", () => {
     expect(searchTrackCandidatesMock).not.toHaveBeenCalled();
   });
 
-  it("returns a stable deferred code and deadline when public Spotify search is held", async () => {
+  it("returns empty search results when public Spotify search is held", async () => {
     const { SpotifyDeferredError } = await import("./spotify");
     searchTrackCandidatesMock.mockRejectedValueOnce(
       new SpotifyDeferredError("quota_hold", "2026-10-02T09:00:00.000Z"),
     );
     const { data, isError } = await callTool("search_tracks", { query: "amen break" });
-    expect(isError).toBe(true);
+    expect(isError).toBe(false);
     expect(data).toMatchObject({
-      code: "spotify_deferred",
-      ok: false,
-      until: "2026-10-02T09:00:00.000Z",
+      ok: true,
+      results: [],
     });
+    expect(searchTrackCandidatesMock).toHaveBeenCalledWith("amen break", "public_search");
   });
 
-  it("uses the essential lane for submit_track and returns a deferred deadline if that lookup fails", async () => {
-    const { SpotifyDeferredError } = await import("./spotify");
-    searchTrackCandidatesMock
-      .mockReset()
-      .mockRejectedValueOnce(new SpotifyDeferredError("quota_hold", "2026-10-02T09:00:00.000Z"));
+  it("returns a deferred deadline from submit_track after parsing the URL locally", async () => {
+    createSubmissionMock.mockReset();
+    createSubmissionMock.mockRejectedValueOnce(
+      Object.assign(
+        new ApiError("spotify_deferred", "I can't check Spotify right now. Try again later.", 503),
+        { until: "2026-10-02T09:00:00.000Z" },
+      ),
+    );
     const spotifyUrl = "https://open.spotify.com/track/abcdefghij0123456789AB";
     const { data, isError } = await callTool("submit_track", { spotifyUrl });
-    expect(searchTrackCandidatesMock).toHaveBeenCalledWith(spotifyUrl, "essential");
+    expect(searchTrackCandidatesMock).not.toHaveBeenCalled();
+    expect(createSubmissionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ spotifyTrackId: "abcdefghij0123456789AB", spotifyUrl }),
+      expect.any(Request),
+    );
     expect(isError).toBe(true);
     expect(data).toMatchObject({
       code: "spotify_deferred",

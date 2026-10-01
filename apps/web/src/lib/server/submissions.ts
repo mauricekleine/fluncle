@@ -1,10 +1,12 @@
 import { type Submission, type SubmissionSource, type SubmissionStatus } from "@fluncle/contracts";
 import { type SubmissionBody } from "@fluncle/contracts/orpc";
+import { publicTrackWhere } from "../../db/public-track-visibility";
 
 export type { Submission };
 
 import { createHash, randomUUID } from "node:crypto";
 import { parseArtistsJson } from "./artists";
+import { getDeezerSubmissionTrack } from "./deezer";
 import { getDb, typedRow, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
 import { logEvent } from "./log";
@@ -13,10 +15,13 @@ import { assertRateLimit } from "./rate-limit";
 import {
   ApiError,
   fetchTrackMetadata,
+  findSpotifyTrackByIsrc,
   parseSpotifyTrackUrl,
   SpotifyDeferredError,
   spotifyDeferredApiError,
+  type TrackMetadata,
 } from "./spotify";
+import { normalizeIsrc, splitTitle } from "./track-match";
 
 const noteMaxLength = 500;
 const contactMaxLength = 120;
@@ -70,15 +75,88 @@ export async function createSubmission(
     windowMs: rateLimitWindowMs,
   });
 
-  let track: Awaited<ReturnType<typeof fetchTrackMetadata>>;
-  try {
-    track = await fetchTrackMetadata(input.spotifyTrackId, "essential");
-  } catch (error) {
-    if (error instanceof SpotifyDeferredError) {
-      throw spotifyDeferredApiError(error);
+  let spotifyTrackId = input.spotifyTrackId;
+  let track: TrackMetadata;
+
+  if (input.deezerTrackId || input.catalogueTrackId) {
+    const candidate = input.deezerTrackId
+      ? await getDeezerSubmissionTrack(input.deezerTrackId).catch((error: unknown) => {
+          throw submissionExternalError(error);
+        })
+      : await getCatalogueSubmissionTrack(input.catalogueTrackId ?? "");
+
+    if (!candidate) {
+      throw new ApiError("invalid_request", "Invalid submission", 400);
     }
-    throw error;
+
+    try {
+      const anchoredId = "spotifyTrackId" in candidate ? candidate.spotifyTrackId : undefined;
+
+      if (anchoredId) {
+        spotifyTrackId = anchoredId;
+        track = await fetchTrackMetadata(anchoredId, "essential");
+      } else {
+        const isrc = normalizeIsrc(candidate.isrc);
+        const durationMs = candidate.durationMs;
+
+        if (!isrc || typeof durationMs !== "number" || durationMs <= 0) {
+          throw new ApiError("invalid_request", "Invalid submission", 400);
+        }
+
+        const lookup = await findSpotifyTrackByIsrc(isrc, "essential");
+
+        if (lookup.rateLimited) {
+          throw new ApiError(
+            "spotify_rate_limited",
+            "I can't check Spotify right now. Try again later.",
+            429,
+          );
+        }
+
+        if (lookup.unauthorized) {
+          throw new ApiError(
+            "submission_unavailable",
+            "I can't check Spotify right now. Try again later.",
+            503,
+          );
+        }
+
+        if (!lookup.match) {
+          throw new ApiError(
+            "submission_unavailable",
+            "I can't find this track on Spotify yet. Try again later.",
+            503,
+          );
+        }
+
+        spotifyTrackId = lookup.match.trackId;
+
+        if (!spotifyTrackId) {
+          throw new ApiError("invalid_request", "Invalid submission", 400);
+        }
+
+        track = await fetchTrackMetadata(spotifyTrackId, "essential");
+
+        if (!matchesSubmissionCandidate({ durationMs, isrc, title: candidate.title }, track)) {
+          throw new ApiError("invalid_request", "Invalid submission", 400);
+        }
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "invalid_request") {
+        throw error;
+      }
+
+      throw submissionExternalError(error);
+    }
   }
+
+  if (!spotifyTrackId) {
+    throw new ApiError("invalid_request", "Invalid submission", 400);
+  }
+
+  track ??= await fetchTrackMetadata(spotifyTrackId, "essential").catch((error: unknown) => {
+    throw submissionExternalError(error);
+  });
   const submission: Submission = {
     album: track.album,
     artists: track.artists,
@@ -138,6 +216,51 @@ export async function createSubmission(
   }
 
   return submission;
+}
+
+function matchesSubmissionCandidate(
+  candidate: { durationMs: number; isrc: string; title: string },
+  track: { durationMs?: number; isrc?: string; title: string },
+): boolean {
+  return (
+    normalizeIsrc(candidate.isrc) === normalizeIsrc(track.isrc ?? null) &&
+    splitTitle(candidate.title).base === splitTitle(track.title).base &&
+    typeof track.durationMs === "number" &&
+    Math.abs(candidate.durationMs - track.durationMs) <= 3_000
+  );
+}
+
+function submissionExternalError(error: unknown): ApiError {
+  if (error instanceof SpotifyDeferredError) {
+    return spotifyDeferredApiError(error);
+  }
+
+  if (error instanceof ApiError && (error.status === 429 || error.status === 503)) {
+    return error;
+  }
+
+  if (error instanceof Error && /^Spotify API request failed: 404(?:\s|$)/.test(error.message)) {
+    return new ApiError("invalid_request", "Invalid selected track id", 400);
+  }
+
+  if (
+    error instanceof Error &&
+    (error.message.includes("429") ||
+      error.message.includes("QUOTA_EXCEEDED") ||
+      "retryAfterMs" in error)
+  ) {
+    return new ApiError(
+      "spotify_rate_limited",
+      "I can't check Spotify right now. Try again later.",
+      429,
+    );
+  }
+
+  return new ApiError(
+    "submission_unavailable",
+    "I can't log your track right now. Try again later.",
+    503,
+  );
 }
 
 export async function listPendingSubmissions(): Promise<Submission[]> {
@@ -296,42 +419,118 @@ export async function triageSubmission(
   return getSubmission(id);
 }
 
-export function validateSubmissionInput(
-  body: SubmissionInput,
-): Omit<Submission, "id" | "status" | "createdAt"> {
+export function validateSubmissionInput(body: SubmissionInput): {
+  catalogueTrackId?: string;
+  contact?: string;
+  deezerTrackId?: string;
+  note?: string;
+  source: SubmissionSource;
+  spotifyTrackId?: string;
+} {
   if (typeof body.honeypot === "string" && body.honeypot.trim()) {
     throw new ApiError("invalid_request", "Invalid submission", 400);
   }
 
-  const spotifyTrackId = requireText(body.spotifyTrackId, "Missing selected track id");
-  const spotifyUrl = requireText(body.spotifyUrl, "Missing selected Spotify URL");
-  requireText(body.title, "Missing selected track title");
-  parseArtists(body.artists);
+  const legacyId = typeof body.spotifyTrackId === "string" ? body.spotifyTrackId.trim() : "";
+  const legacyProvider =
+    !body.spotifyUrl && /^[1-9]\d*$/.test(legacyId)
+      ? "deezer"
+      : !body.spotifyUrl && /^mb_[A-Za-z0-9_-]+$/.test(legacyId)
+        ? "catalogue"
+        : undefined;
+  const deezerTrackId =
+    body.deezerTrackId === undefined && legacyProvider !== "deezer"
+      ? undefined
+      : requireText(body.deezerTrackId ?? legacyId, "Missing selected track id");
+  const catalogueTrackId =
+    body.catalogueTrackId === undefined && legacyProvider !== "catalogue"
+      ? undefined
+      : requireText(body.catalogueTrackId ?? legacyId, "Missing selected track id");
+
+  if (deezerTrackId && catalogueTrackId) {
+    throw new ApiError("invalid_request", "Invalid submission", 400);
+  }
+
+  const spotifyTrackId =
+    deezerTrackId || catalogueTrackId
+      ? undefined
+      : requireText(body.spotifyTrackId, "Missing selected track id");
+  const spotifyUrl =
+    deezerTrackId || catalogueTrackId
+      ? undefined
+      : requireText(body.spotifyUrl, "Missing selected Spotify URL");
   const source = parseSource(body.source);
   optionalText(body.album, 160);
   optionalText(body.artworkUrl, 600);
   const note = optionalText(body.note, noteMaxLength);
   const contact = optionalText(body.contact, contactMaxLength);
 
-  if (!/^[A-Za-z0-9]{22}$/.test(spotifyTrackId)) {
+  if (deezerTrackId && !/^[1-9]\d*$/.test(deezerTrackId)) {
     throw new ApiError("invalid_request", "Invalid selected track id", 400);
   }
 
-  const urlTrackId = parseSpotifyTrackUrl(spotifyUrl);
+  if (spotifyTrackId && !/^[A-Za-z0-9]{22}$/.test(spotifyTrackId)) {
+    throw new ApiError("invalid_request", "Invalid selected track id", 400);
+  }
+
+  const urlTrackId = spotifyUrl ? parseSpotifyTrackUrl(spotifyUrl) : undefined;
 
   if (urlTrackId !== spotifyTrackId) {
     throw new ApiError("invalid_request", "Selected track id does not match Spotify URL", 400);
   }
 
   return {
-    artists: [],
+    catalogueTrackId,
     contact,
+    deezerTrackId,
     note,
-    reviewedAt: undefined,
     source,
     spotifyTrackId,
-    spotifyUrl,
-    title: "",
+  };
+}
+
+async function getCatalogueSubmissionTrack(trackId: string): Promise<
+  | {
+      artists: string[];
+      durationMs: number | null;
+      isrc: string | null;
+      spotifyTrackId?: string;
+      title: string;
+    }
+  | undefined
+> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [trackId],
+    sql: `select tracks.title, tracks.artists_json, tracks.duration_ms, tracks.isrc, tracks.spotify_uri
+          from tracks left join findings on findings.track_id = tracks.track_id
+          where tracks.track_id = ? and ${publicTrackWhere("tracks", "findings")}
+          limit 1`,
+  });
+  const row = typedRow<{
+    artists_json: string;
+    duration_ms: number | null;
+    isrc: string | null;
+    spotify_uri: string | null;
+    title: string;
+  }>(result.rows);
+
+  if (!row) {
+    return undefined;
+  }
+
+  const spotifyTrackId = row.spotify_uri?.match(/^spotify:track:([A-Za-z0-9]{22})$/)?.[1];
+
+  if (!spotifyTrackId && (!row.isrc || !row.duration_ms || row.duration_ms <= 0)) {
+    return undefined;
+  }
+
+  return {
+    artists: parseArtistsJson(row.artists_json),
+    durationMs: row.duration_ms,
+    isrc: row.isrc,
+    spotifyTrackId,
+    title: row.title,
   };
 }
 
@@ -367,29 +566,6 @@ function optionalText(value: unknown, maxLength: number): string | undefined {
   }
 
   return trimmed;
-}
-
-function parseArtists(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    throw new ApiError("invalid_request", "Missing selected track artists", 400);
-  }
-
-  const artists = value
-    .flatMap((artist) => {
-      if (typeof artist !== "string") {
-        return [];
-      }
-
-      const trimmed = artist.trim();
-      return trimmed ? [trimmed] : [];
-    })
-    .slice(0, 12);
-
-  if (artists.length === 0) {
-    throw new ApiError("invalid_request", "Missing selected track artists", 400);
-  }
-
-  return artists;
 }
 
 function parseSource(value: unknown): SubmissionSource {

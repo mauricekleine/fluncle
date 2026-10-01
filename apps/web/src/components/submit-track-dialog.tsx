@@ -114,7 +114,7 @@ export function SubmitTrackDialog({
     const trimmedQuery = query.trim();
 
     if (!trimmedQuery) {
-      dispatch({ fields: { error: "Enter a Spotify URL or track search." }, type: "patch" });
+      dispatch({ fields: { error: "Enter a track or a Spotify link." }, type: "patch" });
       return;
     }
 
@@ -124,7 +124,10 @@ export function SubmitTrackDialog({
       const candidates = await searchTracks(trimmedQuery);
 
       if (candidates.length === 0) {
-        dispatch({ error: "No Spotify tracks found.", type: "searchFailed" });
+        dispatch({
+          error: "Nothing came back for that search. Try the artist and the title.",
+          type: "searchFailed",
+        });
         return;
       }
 
@@ -188,13 +191,14 @@ export function SubmitTrackDialog({
         <DialogHeader>
           <DialogTitle>Submit a track</DialogTitle>
           <DialogDescription>
-            Search Spotify, pick the match, and send it for review.
+            Search for the track, pick the match, and send it my way. I listen to every track you
+            send.
           </DialogDescription>
         </DialogHeader>
 
         <form className="grid gap-3" onSubmit={handleSearch}>
           <Label className="grid gap-2 text-sm font-bold" htmlFor="track-search">
-            Search or Spotify URL
+            Track or Spotify link
             <Input
               id="track-search"
               onChange={(event) =>

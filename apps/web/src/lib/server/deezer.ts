@@ -1,6 +1,7 @@
 import { DEEZER_CANDIDATE_LIMIT } from "@fluncle/contracts/orpc";
 
 import { logEvent } from "./log";
+import { ApiError } from "./spotify";
 import { canonicalizeSearchTitle, matchKey } from "./track-match";
 
 type DeezerTrack = {
@@ -49,6 +50,7 @@ export type DeezerIsrcCandidate = {
 export const DEEZER_USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
 
 const DEEZER_TIMEOUT_MS = 10_000;
+const DEEZER_SUBMISSION_SEARCH_TIMEOUT_MS = 2_500;
 
 const DEEZER_SEARCH_LIMIT = DEEZER_CANDIDATE_LIMIT;
 
@@ -195,9 +197,233 @@ async function attemptDeezerSearch(query: string): Promise<DeezerSearchAttempt> 
 }
 
 type DeezerTrackDetail = {
+  artist?: { name?: string };
+  duration?: number;
   error?: unknown;
+  id?: number;
   isrc?: string;
+  title?: string;
 };
+
+export type DeezerSubmissionCandidate = {
+  album?: string;
+  artists: string[];
+  artworkUrl?: string;
+  durationMs?: number;
+  externalUrl: string;
+  id: string;
+  isrc: string;
+  provider: "deezer";
+  spotifyUrl: string;
+  title: string;
+};
+
+export async function searchDeezerSubmissionTracks(
+  query: string,
+  limit: number,
+): Promise<DeezerSubmissionCandidate[]> {
+  let response: Response;
+
+  try {
+    response = await fetch(
+      `https://api.deezer.com/search/track?q=${encodeURIComponent(query)}&limit=${limit}`,
+      {
+        headers: { "User-Agent": DEEZER_USER_AGENT },
+        signal: AbortSignal.timeout(DEEZER_SUBMISSION_SEARCH_TIMEOUT_MS),
+      },
+    );
+  } catch (error) {
+    logEvent("warn", "deezer.submit-search-threw", { error });
+    return [];
+  }
+
+  if (!response.ok) {
+    logEvent("warn", "deezer.submit-search-http-error", { status: response.status });
+    return [];
+  }
+
+  let body: unknown;
+
+  try {
+    body = await response.json();
+  } catch (error) {
+    logEvent("warn", "deezer.submit-search-malformed-body", { error });
+    return [];
+  }
+
+  const parsed = body as {
+    data?: Array<{
+      album?: { cover_medium?: string; title?: string };
+      artist?: { name?: string };
+      duration?: number;
+      id?: number;
+      isrc?: string;
+      link?: string;
+      title?: string;
+    }>;
+    error?: unknown;
+  };
+
+  if (!parsed || typeof parsed !== "object") {
+    logEvent("warn", "deezer.submit-search-unexpected-shape", {});
+    return [];
+  }
+
+  if (parsed.error) {
+    const code = (parsed.error as { code?: unknown }).code;
+
+    logEvent(
+      "warn",
+      code === DEEZER_QUOTA_ERROR_CODE
+        ? "deezer.search-quota-exhausted"
+        : "deezer.submit-search-api-error",
+      {
+        error: parsed.error,
+      },
+    );
+    return [];
+  }
+
+  if (!Array.isArray(parsed.data)) {
+    logEvent("warn", "deezer.submit-search-unexpected-shape", {});
+    return [];
+  }
+
+  return parsed.data.flatMap((track) => {
+    if (!track || typeof track !== "object") {
+      return [];
+    }
+
+    const artist = track.artist?.name?.trim();
+    const title = track.title?.trim();
+
+    if (
+      !Number.isSafeInteger(track.id) ||
+      (track.id ?? 0) <= 0 ||
+      !artist ||
+      !title ||
+      !track.isrc?.trim() ||
+      typeof track.duration !== "number" ||
+      track.duration <= 0
+    ) {
+      return [];
+    }
+
+    const id = String(track.id);
+
+    return [
+      {
+        album: track.album?.title?.trim() || undefined,
+        artists: [artist],
+        artworkUrl: track.album?.cover_medium?.trim() || undefined,
+        durationMs: Math.round(track.duration * 1000),
+        externalUrl: track.link?.trim() || `https://www.deezer.com/track/${id}`,
+        id,
+        isrc: track.isrc.trim(),
+        provider: "deezer" as const,
+        spotifyUrl: "",
+        title,
+      },
+    ];
+  });
+}
+
+export async function getDeezerSubmissionTrack(id: string): Promise<
+  | {
+      artists: string[];
+      durationMs: number;
+      isrc: string;
+      title: string;
+    }
+  | undefined
+> {
+  if (!/^[1-9]\d*$/.test(id)) {
+    return undefined;
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(`https://api.deezer.com/track/${id}`, {
+      headers: { "User-Agent": DEEZER_USER_AGENT },
+      signal: AbortSignal.timeout(DEEZER_TIMEOUT_MS),
+    });
+  } catch (error) {
+    logEvent("warn", "deezer.submit-track-threw", { error });
+    throw new ApiError(
+      "submission_unavailable",
+      "I can't check Deezer right now. Try again later.",
+      503,
+    );
+  }
+
+  if (!response.ok) {
+    logEvent("warn", "deezer.submit-track-http-error", { status: response.status });
+    throw new ApiError(
+      "submission_unavailable",
+      "I can't check Deezer right now. Try again later.",
+      503,
+    );
+  }
+
+  let track: DeezerTrackDetail;
+
+  try {
+    track = (await response.json()) as DeezerTrackDetail;
+  } catch (error) {
+    logEvent("warn", "deezer.submit-track-malformed-body", { error });
+    throw new ApiError(
+      "submission_unavailable",
+      "I can't check Deezer right now. Try again later.",
+      503,
+    );
+  }
+
+  if (!track || typeof track !== "object") {
+    logEvent("warn", "deezer.submit-track-unexpected-shape", {});
+    throw new ApiError(
+      "submission_unavailable",
+      "I can't check Deezer right now. Try again later.",
+      503,
+    );
+  }
+
+  if ((track.error as { code?: unknown } | undefined)?.code === DEEZER_QUOTA_ERROR_CODE) {
+    logEvent("warn", "deezer.search-quota-exhausted", { trackId: id });
+    throw new ApiError(
+      "submission_unavailable",
+      "I can't check Deezer right now. Try again later.",
+      503,
+    );
+  }
+
+  if (track.error) {
+    logEvent("warn", "deezer.submit-track-api-error", { error: track.error });
+    throw new ApiError(
+      "submission_unavailable",
+      "I can't check Deezer right now. Try again later.",
+      503,
+    );
+  }
+
+  if (
+    track.id !== Number(id) ||
+    !track.isrc?.trim() ||
+    !track.title?.trim() ||
+    !track.artist?.name?.trim() ||
+    typeof track.duration !== "number" ||
+    track.duration <= 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    artists: [track.artist.name.trim()],
+    durationMs: Math.round(track.duration * 1000),
+    isrc: track.isrc.trim(),
+    title: track.title.trim(),
+  };
+}
 
 const DURATION_TOLERANCE_S = 4;
 

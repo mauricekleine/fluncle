@@ -349,7 +349,7 @@ export async function generateOpenApiDocument() {
         url: "https://www.fluncle.com",
       },
       description:
-        "The public API for Fluncle's Findings, a drum & bass archive from another dimension. Fluncle discovers and certifies every track; each date marks when he found it, the day he first heard the tune, not the day it released. Read the archive, search Spotify candidates, and submit tracks for Fluncle to review.",
+        "The public API for Fluncle's Findings, a drum & bass archive from another dimension. Fluncle discovers and certifies every track; each date marks when he found it, the day he first heard the tune, not the day it released. Read the archive, search for tracks to submit, and submit tracks for Fluncle to review.",
       summary: "Drum & bass bangers from another dimension.",
       title: "Fluncle API",
       version: "1.0.0",

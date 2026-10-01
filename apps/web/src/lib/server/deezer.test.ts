@@ -6,6 +6,8 @@ import {
   lookupDeezerTrackByIsrc,
   lookupIsrcFromDeezer,
   searchDeezerCandidates,
+  getDeezerSubmissionTrack,
+  searchDeezerSubmissionTracks,
 } from "./deezer";
 
 const HIT = {
@@ -20,6 +22,122 @@ const body = (data: unknown[]) => Response.json({ data });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("Deezer submission candidates", () => {
+  it("maps keyless search results into selectable candidates", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      body([
+        {
+          ...HIT,
+          album: { cover_medium: "https://img.example/cover.jpg", title: "Shelter" },
+          link: "https://www.deezer.com/track/3263968181",
+        },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const results = await searchDeezerSubmissionTracks("Calibre Mr Right On", 8);
+
+    expect(results).toEqual([
+      {
+        album: "Shelter",
+        artists: ["Calibre"],
+        artworkUrl: "https://img.example/cover.jpg",
+        durationMs: 132_000,
+        externalUrl: "https://www.deezer.com/track/3263968181",
+        id: "3263968181",
+        isrc: "GBEXH1900314",
+        provider: "deezer",
+        spotifyUrl: "",
+        title: "Mr Right On",
+      },
+    ]);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("api.deezer.com/search/track");
+  });
+
+  it("reads the selected track's ISRC from Deezer at submission time", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(HIT));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await getDeezerSubmissionTrack("3263968181")).toEqual({
+      artists: ["Calibre"],
+      durationMs: 132_000,
+      isrc: "GBEXH1900314",
+      title: "Mr Right On",
+    });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://api.deezer.com/track/3263968181");
+  });
+
+  it("maps Deezer quota, timeout, and malformed detail responses to retryable submit errors", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ error: { code: 4 } }))
+      .mockRejectedValueOnce(new Error("timeout"))
+      .mockResolvedValueOnce(new Response("not json"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(getDeezerSubmissionTrack("3263968181")).rejects.toMatchObject({
+        code: "submission_unavailable",
+        status: 503,
+      });
+    }
+  });
+
+  it("does not offer tracks that cannot be resolved and verified at submission", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          body([
+            { ...HIT, id: 1, isrc: "" },
+            { ...HIT, duration: 0, id: 2 },
+            { ...HIT, artist: {}, id: 3 },
+            HIT,
+          ]),
+        ),
+    );
+
+    expect((await searchDeezerSubmissionTracks("Calibre", 8)).map((track) => track.id)).toEqual([
+      String(HIT.id),
+    ]);
+  });
+
+  it("treats an HTTP 200 Deezer quota code as an empty search tier", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ error: { code: 4, message: "quota" } })),
+    );
+
+    expect(await searchDeezerSubmissionTracks("Calibre", 8)).toEqual([]);
+  });
+
+  it("treats failed requests and malformed JSON as an empty search tier", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValueOnce(new Response("not json"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await searchDeezerSubmissionTracks("Calibre", 8)).toEqual([]);
+    expect(await searchDeezerSubmissionTracks("Calibre", 8)).toEqual([]);
+  });
+
+  it("bounds submission search with a 2.5 second abort signal", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(new Error("timed out")));
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await searchDeezerSubmissionTracks("Calibre", 8)).toEqual([]);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init?.signal?.aborted).toBe(true);
+  }, 4_000);
 });
 
 describe("deezerSearchQuery — the one spelling, shared with the box", () => {
