@@ -17,7 +17,7 @@ There is deliberately **no local command gate**: the box's `fluncle` CLI runs un
 One admin surface, two roles — the privilege is the role, not the carrier:
 
 - **`operator`** — the human. Carried by the browser grant cookie (Login with Spotify) **or** the full `FLUNCLE_API_TOKEN` Bearer (the operator's own CLI/laptop). Can do everything.
-- **`agent`** — the Hermes box's sweeps. Carried by `FLUNCLE_AGENT_TOKEN`. Bounded to the **reversible/internal** surface; everything that publishes, can't be undone, or is editorial/identity/auth is refused (403).
+- **`agent`** — the Hermes box's sweeps (`FLUNCLE_AGENT_TOKEN`) and coding agents on Soliton (`FLUNCLE_SOLITON_AGENT_TOKEN`). Bounded to the **reversible/internal** surface; everything that publishes, can't be undone, or is editorial/identity/auth is refused (403). One deliberate exception: an agent may APPLY an operator-ratified label triage round (`update_label`, `replace_label_artist_rules`); the ruling itself stays the operator's ([label-entity.md](../label-entity.md)).
 
 The dividing line: _could a stranger see the result, or could it not be taken back?_ → operator. _Internal and reversible?_ → agent.
 
