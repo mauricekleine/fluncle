@@ -371,7 +371,15 @@ async function executeTool(run: () => Promise<unknown>): Promise<ToolResult> {
     return toolResult(result, false, live);
   } catch (error) {
     if (error instanceof ApiError) {
-      return toolResult({ code: error.code, message: error.message, ok: false }, true);
+      return toolResult(
+        {
+          code: error.code,
+          message: error.message,
+          ok: false,
+          ...(error.until !== undefined ? { until: error.until } : {}),
+        },
+        true,
+      );
     }
     return toolResult(
       { code: "error", message: error instanceof Error ? error.message : String(error), ok: false },

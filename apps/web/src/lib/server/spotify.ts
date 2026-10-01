@@ -8,9 +8,13 @@ import { readEnvs } from "./env";
 import { logEvent } from "./log";
 import { recordSpotifyThrottle } from "./spotify-anchor-breaker";
 import {
+  chargeSpotifyConsumerDailyCall,
   isSpotifyCallBudgetAvailable,
+  readSpotifyQuotaHoldUntil,
   recordSpotifyCall,
   recordSpotifyDailyCall,
+  recordSpotifyQuotaHold,
+  type SpotifyConsumer,
 } from "./spotify-budget";
 
 const spotifyAccountsBaseUrl = "https://accounts.spotify.com";
@@ -200,9 +204,12 @@ export async function exchangeCodeForToken(code: string): Promise<void> {
   await upsertSpotifyAuth(data.access_token, data.refresh_token, data.expires_in, data.scope);
 }
 
-export async function fetchTrackMetadata(trackId: string): Promise<TrackMetadata> {
+export async function fetchTrackMetadata(
+  trackId: string,
+  consumer: SpotifyConsumer = "public_search",
+): Promise<TrackMetadata> {
   const accessToken = await getSpotifyAccessToken();
-  const response = await spotifyFetch(`/tracks/${trackId}`, accessToken);
+  const response = await spotifyFetch(`/tracks/${trackId}`, accessToken, {}, true, true, consumer);
   const data = (await response.json()) as SpotifyTrackResponse;
 
   return {
@@ -242,6 +249,10 @@ export async function fetchSpotifyAlbumTracks(
     const response = await spotifyFetch(
       `/albums/${encodeURIComponent(albumId)}/tracks?limit=50&offset=${offset}`,
       accessToken,
+      {},
+      true,
+      true,
+      "anchor",
     );
     const page = (await response.json()) as {
       items?: Array<{
@@ -324,7 +335,14 @@ export async function fetchArtistImages(
     result.checkedCount += 1;
 
     try {
-      const response = await spotifyFetch(`/artists/${encodeURIComponent(id)}`, accessToken);
+      const response = await spotifyFetch(
+        `/artists/${encodeURIComponent(id)}`,
+        accessToken,
+        {},
+        true,
+        true,
+        "artist_images",
+      );
       const artist = (await response.json()) as SpotifyArtistResponse | null;
 
       if (
@@ -346,6 +364,12 @@ export async function fetchArtistImages(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
 
+      if (error instanceof SpotifyDeferredError) {
+        result.budgetLimited = true;
+        logEvent("info", "spotify.artist-image-deferred", { artistId: id, reason: error.reason });
+        break;
+      }
+
       if (message.includes("429")) {
         result.rateLimited = true;
         logEvent("warn", "spotify.artist-image-rate-limited", { artistId: id, error });
@@ -354,26 +378,20 @@ export async function fetchArtistImages(
 
       result.failures.set(id, message);
       logEvent("warn", "spotify.artist-image-failed", { artistId: id, error });
-    } finally {
-      try {
-        await recordSpotifyCall();
-      } catch (error) {
-        logEvent("warn", "spotify.call-meter-record-failed", {
-          endpoint: "/artists/:id",
-          error,
-        });
-      }
     }
   }
 
   return result;
 }
 
-export async function searchTrackCandidates(query: string): Promise<TrackSearchResult[]> {
+export async function searchTrackCandidates(
+  query: string,
+  consumer: SpotifyConsumer = "public_search",
+): Promise<TrackSearchResult[]> {
   const trackId = tryParseSpotifyTrackUrl(query);
 
   if (trackId) {
-    return [toSearchResult(await fetchTrackMetadata(trackId))];
+    return [toSearchResult(await fetchTrackMetadata(trackId, consumer))];
   }
 
   const accessToken = await getSpotifyAccessToken();
@@ -382,7 +400,14 @@ export async function searchTrackCandidates(query: string): Promise<TrackSearchR
     q: query,
     type: "track",
   });
-  const response = await spotifyFetch(`/search?${params.toString()}`, accessToken);
+  const response = await spotifyFetch(
+    `/search?${params.toString()}`,
+    accessToken,
+    {},
+    true,
+    true,
+    consumer,
+  );
   const data = (await response.json()) as SpotifySearchResponse;
 
   return (data.tracks?.items ?? []).map((track) => ({
@@ -414,7 +439,10 @@ export type SpotifyIsrcLookup = {
   unauthorized?: boolean;
 };
 
-export async function findSpotifyTrackByIsrc(isrc: string): Promise<SpotifyIsrcLookup> {
+export async function findSpotifyTrackByIsrc(
+  isrc: string,
+  consumer: SpotifyConsumer = "anchor",
+): Promise<SpotifyIsrcLookup> {
   const clean = isrc.trim();
 
   if (!clean) {
@@ -424,7 +452,14 @@ export async function findSpotifyTrackByIsrc(isrc: string): Promise<SpotifyIsrcL
   try {
     const accessToken = await getSpotifyAccessToken();
     const params = new URLSearchParams({ limit: "1", q: `isrc:${clean}`, type: "track" });
-    const response = await spotifyFetch(`/search?${params.toString()}`, accessToken);
+    const response = await spotifyFetch(
+      `/search?${params.toString()}`,
+      accessToken,
+      {},
+      true,
+      true,
+      consumer,
+    );
     const data = (await response.json()) as SpotifySearchResponse;
     const track = data.tracks?.items?.[0];
 
@@ -452,7 +487,9 @@ export async function findSpotifyTrackByIsrc(isrc: string): Promise<SpotifyIsrcL
       return { rateLimited: false, unauthorized: true };
     }
 
-    const rateLimited = error instanceof Error && error.message.includes("429");
+    const rateLimited =
+      error instanceof SpotifyDeferredError ||
+      (error instanceof Error && error.message.includes("429"));
 
     return { rateLimited };
   }
@@ -466,6 +503,10 @@ export async function fetchPlaylistFollowerCount(): Promise<number> {
   const response = await spotifyFetch(
     `/playlists/${env.SPOTIFY_PLAYLIST_ID}?fields=followers.total`,
     accessToken,
+    {},
+    true,
+    true,
+    "cosmetic",
   );
   const data = (await response.json()) as { followers?: { total?: number } };
   const total = data.followers?.total;
@@ -497,6 +538,7 @@ export async function addTrackToPlaylist(track: TrackMetadata): Promise<void> {
 export class ApiError extends Error {
   code: string;
   status: number;
+  until?: null | string;
 
   constructor(code: string, message: string, status = 500) {
     super(message);
@@ -717,12 +759,68 @@ function parseRetryAfterMs(header: null | string): number {
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : SPOTIFY_DEFAULT_RETRY_MS;
 }
 
+function spotifyEndpointFamily(path: string): string {
+  const pathname = path.split("?")[0] ?? path;
+  return pathname.replace(/^\/(tracks|artists|albums|playlists|users)\/[^/]+/, "/$1/:id");
+}
+
+async function admitSpotifyConsumer(consumer: SpotifyConsumer): Promise<void> {
+  if (consumer === "essential") {
+    return;
+  }
+  let holdUntil: null | string;
+  try {
+    holdUntil = await readSpotifyQuotaHoldUntil();
+  } catch (error) {
+    logEvent("warn", "spotify.quota-hold-read-failed", { consumer, error });
+    throw new SpotifyDeferredError("quota_hold_unreadable");
+  }
+  if (holdUntil) {
+    throw new SpotifyDeferredError("quota_hold", holdUntil);
+  }
+  if (consumer === "label_tap" || consumer === "cosmetic") {
+    return;
+  }
+  try {
+    if (!(await recordSpotifyCall())) {
+      throw new SpotifyDeferredError("shared_meter");
+    }
+    if (consumer !== "frontier" && !(await chargeSpotifyConsumerDailyCall(consumer))) {
+      throw new SpotifyDeferredError("daily_budget");
+    }
+  } catch (error) {
+    if (error instanceof SpotifyDeferredError) {
+      throw error;
+    }
+    logEvent("warn", "spotify.budget-read-failed", { consumer, error });
+    throw new SpotifyDeferredError("budget_unreadable");
+  }
+}
+
+async function recordSpotifyQuotaResponse(
+  response: Response,
+  path: string,
+  consumer: SpotifyConsumer,
+): Promise<void> {
+  const retryAfterRaw = response.headers.get("Retry-After");
+  const parsed = retryAfterRaw === null ? Number.NaN : Number(retryAfterRaw);
+  const retryAfterSeconds = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  const endpoint = spotifyEndpointFamily(path);
+  logEvent("warn", "spotify.quota-exceeded", { consumer, endpoint, retryAfterSeconds });
+  try {
+    await recordSpotifyQuotaHold(retryAfterSeconds);
+  } catch (error) {
+    logEvent("error", "spotify.quota-hold-record-failed", { consumer, endpoint, error });
+  }
+}
+
 export async function spotifyFetch(
   path: string,
   accessToken: string,
   init: RequestInit = {},
   retryOnThrottle = true,
   recordAnchorThrottle = true,
+  consumer: SpotifyConsumer = "essential",
 ): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${accessToken}`);
@@ -732,13 +830,14 @@ export async function spotifyFetch(
   let spentMs = 0;
 
   for (let attempt = 0; ; attempt += 1) {
-    const dailyCallRecord = recordSpotifyDailyCall().catch((error) => {
-      logEvent("warn", "spotify.daily-call-record-failed", { error });
+    await admitSpotifyConsumer(consumer);
+    const dailyCallRecord = recordSpotifyDailyCall(Date.now(), consumer).catch((error) => {
+      logEvent("warn", "spotify.daily-call-record-failed", { consumer, error });
     });
     void import("cloudflare:workers")
       .then(({ waitUntil }) => waitUntil(dailyCallRecord))
       .catch((error) => {
-        logEvent("warn", "spotify.daily-call-schedule-failed", { error });
+        logEvent("warn", "spotify.daily-call-schedule-failed", { consumer, error });
       });
     const response = await fetch(`${spotifyApiBaseUrl}${path}`, {
       ...init,
@@ -756,6 +855,9 @@ export async function spotifyFetch(
         .then(() => response.clone().text())
         .then((body) => body.includes("QUOTA_EXCEEDED"))
         .catch(() => false);
+      if (quotaExceeded) {
+        await recordSpotifyQuotaResponse(response, path, consumer);
+      }
       if (recordAnchorThrottle) {
         await recordSpotifyThrottle(Date.now(), quotaExceeded);
       }
@@ -795,6 +897,28 @@ export async function spotifyFetch(
 
     throw new Error(message);
   }
+}
+
+export class SpotifyDeferredError extends Error {
+  readonly reason: string;
+  readonly until: null | string;
+
+  constructor(reason: string, until: null | string = null) {
+    super(`Spotify request deferred: ${reason}${until ? ` until ${until}` : ""}`);
+    this.name = "SpotifyDeferredError";
+    this.reason = reason;
+    this.until = until;
+  }
+}
+
+export function spotifyDeferredApiError(error: SpotifyDeferredError): ApiError {
+  const apiError = new ApiError(
+    "spotify_deferred",
+    "I can't check Spotify right now. Try again later.",
+    503,
+  );
+  apiError.until = error.until;
+  return apiError;
 }
 
 async function readApiError(response: Response, fallback: string): Promise<string> {

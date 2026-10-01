@@ -1,7 +1,7 @@
 import { getDb, typedRows } from "./db";
 import { logEvent } from "./log";
 import { mbFetch } from "./musicbrainz";
-import { anchorSpotifySearchAllowed, recordAnchorSpotifyCall } from "./anchor-spotify-search";
+import { anchorSpotifySearchAllowed } from "./anchor-spotify-search";
 import { fetchSpotifyAlbumTracks, type SpotifyAlbumTrack } from "./spotify";
 import { ANCHOR_RULED_OUT_LABEL_CLAUSE, anchorEligibilityClause } from "./track-work";
 
@@ -289,7 +289,6 @@ export async function probeReleaseLinks(
         if (!(await anchorSpotifySearchAllowed(pageNow))) {
           throw new Error("Spotify anchor gate closed");
         }
-        await recordAnchorSpotifyCall(pageNow);
       });
       evidence.tracks = normalizedTracks(fetched) ?? [];
       probe.result.albumsFetched += 1;

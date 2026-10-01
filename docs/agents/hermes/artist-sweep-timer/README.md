@@ -23,3 +23,5 @@ sudo systemctl start fluncle-artist-sweep.service            # one tick now
 journalctl -u fluncle-artist-sweep.service -n 40 --no-pager  # expect a { "ok": true, … } summary line
 systemctl list-timers fluncle-artist-sweep.timer
 ```
+
+Before the image backfill, the sweep reads the agent-allowed Spotify breaker state. An active global quota hold skips image calls while MusicBrainz artist resolution still runs. The Worker also enforces a 150-call UTC-day image budget and the shared atomic meter if this backfill still uses the Spotify Web API.

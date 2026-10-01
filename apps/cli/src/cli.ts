@@ -2975,6 +2975,56 @@ JSON field reference:
       );
     });
 
+  const spotifyBudget = catalogue
+    .command("spotify-consumer-budget")
+    .description("Read or set Spotify daily call budgets by consumer");
+  const showSpotifyConsumerBudget = async (options: JsonOptions) => {
+    const { spotifyConsumerBudgetCommand } = await import("./commands/admin-catalogue");
+    const state = await spotifyConsumerBudgetCommand();
+    if (options.json || spotifyBudget.opts().json) {
+      printJson({
+        consumerBudgets: state.consumerBudgets,
+        ok: true,
+        spotifyDailyCalls: state.spotifyDailyCalls,
+      });
+      return;
+    }
+    for (const [consumer, budget] of Object.entries(state.consumerBudgets)) {
+      console.log(
+        `SPOTIFY BUDGET ${consumer} — ${budget.callsSpent}/${budget.dailyBudget} calls today`,
+      );
+    }
+  };
+  spotifyBudget.option("--json", "Print JSON", false).action(showSpotifyConsumerBudget);
+  spotifyBudget
+    .command("get")
+    .option("--json", "Print JSON", false)
+    .action(showSpotifyConsumerBudget);
+  spotifyBudget
+    .command("set")
+    .requiredOption("--consumer <consumer>", "anchor | artist_images | public_search")
+    .requiredOption("--calls <n>", "Daily Spotify calls allowed for this consumer")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions & { calls: string; consumer: string }) => {
+      if (!["anchor", "artist_images", "public_search"].includes(options.consumer)) {
+        throw new Error("--consumer must be anchor, artist_images, or public_search");
+      }
+      const calls = Number(options.calls);
+      if (!Number.isSafeInteger(calls) || calls < 0 || calls > 1_000_000) {
+        throw new Error("--calls must be an integer from 0 to 1000000");
+      }
+      const { setSpotifyConsumerBudgetCommand } = await import("./commands/admin-catalogue");
+      await setSpotifyConsumerBudgetCommand(
+        options.consumer as "anchor" | "artist_images" | "public_search",
+        calls,
+      );
+      if (options.json || spotifyBudget.opts().json) {
+        printJson({ calls, consumer: options.consumer, ok: true });
+        return;
+      }
+      console.log(`SPOTIFY BUDGET ${options.consumer} — ${calls} calls per day`);
+    });
+
   catalogue
     .command("anchor-breaker")
     .description("Why the anchor rungs are quiet: the throttle breaker, and which rungs are armed")
@@ -8602,6 +8652,7 @@ const stringOptions = new Set([
   "--census-pages",
   "--composition",
   "--consumer-digest",
+  "--consumer",
   "--consumer-item-count",
   "--content-file",
   "--contract",

@@ -1328,6 +1328,7 @@ export const AnchorRungFlagsSchema = z
       "quota_hold",
       "breaker_quota",
       "breaker_throttle",
+      "daily_budget",
       "shared_meter",
       "open",
     ]),
@@ -1350,11 +1351,44 @@ export const getSpotifyAnchorBreaker = oc
   .input(z.object({}))
   .output(
     SpotifyAnchorBreakerStateSchema.extend({
+      consumerBudgets: z.object({
+        anchor: z.object({
+          callsSpent: z.number().int().nullable(),
+          dailyBudget: z.number().int().nullable(),
+        }),
+        artist_images: z.object({
+          callsSpent: z.number().int().nullable(),
+          dailyBudget: z.number().int().nullable(),
+        }),
+        public_search: z.object({
+          callsSpent: z.number().int().nullable(),
+          dailyBudget: z.number().int().nullable(),
+        }),
+      }),
+      essentialDailyCalls: z.number().int().nullable(),
       ok: z.literal(true),
+      quotaHoldState: z.enum(["clear", "held", "unknown"]),
+      quotaHoldUntil: z.string().nullable(),
       rungs: AnchorRungFlagsSchema,
       spotifyDailyCalls: z.number().int().nullable(),
     }),
   );
+
+export const setSpotifyConsumerBudget = oc
+  .route({
+    method: "PUT",
+    operationId: "setSpotifyConsumerBudget",
+    path: "/admin/catalogue/spotify-budget",
+    summary: "Set a Spotify consumer daily budget (operator)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      consumer: z.enum(["anchor", "artist_images", "public_search"]),
+      dailyBudget: z.number().int().min(0).max(1_000_000),
+    }),
+  )
+  .output(z.object({ ok: z.literal(true) }));
 
 export const LabelReleasesBudgetSchema = z.object({
   callsSpent: z.number().int().nonnegative(),
@@ -1462,6 +1496,7 @@ export const adminCatalogueContract = {
   set_anchor_search: setAnchorSearch,
   set_capture_budget: setCaptureBudget,
   set_label_releases_budget: setLabelReleasesBudget,
+  set_spotify_consumer_budget: setSpotifyConsumerBudget,
   set_track_dismissed: setTrackDismissed,
   verify_capture: verifyCapture,
 };

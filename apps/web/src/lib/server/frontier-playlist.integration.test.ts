@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb, rowCount, seedUser } from "./integration-db";
 import { type PublicUser } from "./public-auth";
-import { readSpotifyDailyCallCount } from "./spotify-budget";
+import { recordSpotifyCall, SPOTIFY_CALL_WINDOW_MAX } from "./spotify-budget";
 import { takeWaitUntilPromises } from "../../test/cloudflare-workers-stub";
 
 let db: Client;
@@ -30,9 +30,11 @@ type RecResult = {
 };
 
 const settings = new Map<string, string>();
-const spotifyCalls: { init?: RequestInit; path: string }[] = [];
+const spotifyCalls: { consumer?: string; init?: RequestInit; path: string }[] = [];
 let recs: RecResult | Response = { catalogue: [], findings: [], seedsSkipped: [], seedsUsed: 0 };
 let failFetch = false;
+let quotaReject = false;
+let coverError: Error | null = null;
 
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
@@ -57,19 +59,36 @@ vi.mock("./recommendations", () => ({
 
 vi.mock("./spotify", () => ({
   getSpotifyAccessToken: vi.fn(() => Promise.resolve("token")),
-  spotifyFetch: vi.fn((path: string, _token: string, init?: RequestInit) => {
-    spotifyCalls.push({ init, path });
+  spotifyFetch: vi.fn(
+    (
+      path: string,
+      _token: string,
+      init?: RequestInit,
+      _retry?: boolean,
+      _record?: boolean,
+      consumer?: string,
+    ) => {
+      spotifyCalls.push({ consumer, init, path });
 
-    if (failFetch) {
-      return Promise.reject(new Error("spotify down"));
-    }
+      if (quotaReject) {
+        return Promise.reject(new Error("Spotify API request failed: 429 QUOTA_EXCEEDED"));
+      }
 
-    if (path === "/me/playlists") {
-      return Promise.resolve(new Response(JSON.stringify({ id: "pl-new" })));
-    }
+      if (path.endsWith("/images") && coverError) {
+        return Promise.reject(coverError);
+      }
 
-    return Promise.resolve(new Response("{}"));
-  }),
+      if (failFetch) {
+        return Promise.reject(new Error("spotify down"));
+      }
+
+      if (path === "/me/playlists") {
+        return Promise.resolve(new Response(JSON.stringify({ id: "pl-new" })));
+      }
+
+      return Promise.resolve(new Response("{}"));
+    },
+  ),
 }));
 
 function find(id: string, extra: Partial<RecRow> = {}): RecRow {
@@ -123,29 +142,10 @@ function uri(id: string): string {
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
-function exhaustSpotifyBudget(nowMs: number): void {
-  settings.set("spotify_calls_window_start", new Date(nowMs).toISOString());
-  settings.set("spotify_calls_window_count", "24");
-}
-
-function spotifyBudgetCount(nowMs: number): number {
-  const start = settings.get("spotify_calls_window_start");
-  const startMs = start ? Date.parse(start) : Number.NaN;
-
-  if (!Number.isFinite(startMs) || nowMs - startMs >= 30 * 1000) {
-    return 0;
+async function exhaustSpotifyBudget(nowMs: number): Promise<void> {
+  for (let i = 0; i < SPOTIFY_CALL_WINDOW_MAX; i += 1) {
+    await recordSpotifyCall(nowMs);
   }
-
-  return Number(settings.get("spotify_calls_window_count") ?? "0");
-}
-
-async function hasRefreshCursor(userId: string): Promise<boolean> {
-  const query = await db.execute({
-    args: [userId],
-    sql: `select 1 from user_frontier_refresh where user_id = ? limit 1`,
-  });
-
-  return query.rows.length > 0;
 }
 
 async function editionCount(userId: string): Promise<number> {
@@ -192,6 +192,8 @@ beforeEach(async () => {
   spotifyCalls.length = 0;
   recs = { catalogue: [], findings: [], seedsSkipped: [], seedsUsed: 0 };
   failFetch = false;
+  quotaReject = false;
+  coverError = null;
 });
 
 afterEach(async () => {
@@ -491,97 +493,102 @@ describe("refreshAllFrontierPlaylists (the weekly sweep) — D2", () => {
   });
 });
 
-describe("the shared Spotify budget — the mint defers instead of 429-ing (Slice B)", () => {
+describe("essential Frontier writes", () => {
   beforeEach(() => settings.set("frontier.minting", "true"));
 
-  it("mints SYNCHRONOUSLY when the budget is free, recording each write into the meter", async () => {
+  it("defers an existing playlist refresh during a quota hold", async () => {
     const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
+    const now = Date.parse("2026-07-10T00:00:00.000Z");
+    await seedUser(db, { email: "held@fluncle.com", id: "u-held" });
+    await insertPlaylistRow("u-held", "pl-held", "2026-07-01T00:00:00.000Z");
+    settings.set("spotify_quota_hold_until", new Date(now + 60_000).toISOString());
+    recs = result({ findings: [find("new")] });
 
+    expect(await mintOrRefreshFrontierPlaylist(makeUser({ id: "u-held" }), now)).toMatchObject({
+      status: "building",
+    });
+    expect(spotifyCalls).toEqual([]);
+  });
+
+  it("mints despite an exhausted optional Spotify meter", async () => {
+    const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
     const now = Date.parse("2026-07-01T00:00:00.000Z");
+    await exhaustSpotifyBudget(now);
     recs = result({ findings: [find("f1")] });
-
     const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
-
     expect(synced).toMatchObject({ status: "minted" });
+    expect(spotifyCalls.map((call) => call.path)).toEqual([
+      "/me/playlists",
+      "/playlists/pl-new/items",
+    ]);
     expect(await hasPlaylistRow("u1")).toBe(true);
-
-    expect(spotifyBudgetCount(now)).toBe(2);
-
-    expect(await hasRefreshCursor("u1")).toBe(true);
-  });
-
-  it("DEFERS the create when the budget is spent — status building, NO Spotify call, no cursor", async () => {
-    const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
-
-    const now = Date.parse("2026-07-01T00:00:00.000Z");
-    exhaustSpotifyBudget(now);
-    recs = result({ findings: [find("f1")] });
-
-    const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
-
-    expect(synced).toEqual({ ok: true, status: "building" });
-
-    expect(await editionCount("u1")).toBe(1);
-
-    expect(spotifyCalls.some((call) => call.path === "/me/playlists")).toBe(false);
-    expect(await hasPlaylistRow("u1")).toBe(false);
-
-    expect(await hasRefreshCursor("u1")).toBe(false);
-  });
-
-  it("the paced drain COMPLETES a deferred pending mint once the budget frees", async () => {
-    const { mintOrRefreshFrontierPlaylist, refreshAllFrontierPlaylists } =
-      await import("./frontier-playlist");
-
-    await seedUser(db, { email: "a@fluncle.com", id: "u1" });
-    const now = Date.parse("2026-07-01T00:00:00.000Z");
-    exhaustSpotifyBudget(now);
-    recs = result({ findings: [find("f1")] });
-
-    const deferred = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
-    expect(deferred).toMatchObject({ status: "building" });
-    expect(await hasPlaylistRow("u1")).toBe(false);
-
-    const swept = await refreshAllFrontierPlaylists(5, now + 60_000);
-
-    expect(swept).toMatchObject({ budgetPaused: false, minted: 1, ok: true, total: 1 });
-    expect(await hasPlaylistRow("u1")).toBe(true);
-    expect(spotifyBudgetCount(now + 60_000)).toBe(2);
-  });
-
-  it("the kill switch beats the budget — a dark switch is edition_only even with a spent budget", async () => {
-    const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
-
-    settings.set("frontier.minting", "false");
-    const now = Date.parse("2026-07-01T00:00:00.000Z");
-    exhaustSpotifyBudget(now);
-    recs = result({ findings: [find("f1")] });
-
-    const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
-
-    expect(synced).toEqual({ ok: true, status: "edition_only" });
-    expect(spotifyCalls).toEqual([]);
-  });
-
-  it("the hash-skip beats the budget — an unchanged list is unchanged, not building", async () => {
-    const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
-
-    const now = Date.parse("2026-07-01T00:00:00.000Z");
-    recs = result({ findings: [find("f1")] });
-
-    await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
-    spotifyCalls.length = 0;
-
-    exhaustSpotifyBudget(now);
-    const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
-
-    expect(synced).toMatchObject({ status: "unchanged" });
-    expect(spotifyCalls).toEqual([]);
   });
 });
 
 describe("the paced drain — batches, stamps, resumes, pending-mints first (Slice A)", () => {
   beforeEach(() => settings.set("frontier.minting", "true"));
+
+  it("pauses every Spotify write while the global quota hold is active", async () => {
+    const { refreshAllFrontierPlaylists } = await import("./frontier-playlist");
+    const now = Date.parse("2026-07-10T00:00:00.000Z");
+    await seedUser(db, { email: "held@fluncle.com", id: "u-held" });
+    await insertPlaylistRow("u-held", "pl-held", "2026-07-01T00:00:00.000Z");
+    settings.set("spotify_quota_hold_until", new Date(now + 60_000).toISOString());
+    recs = result({ findings: [find("new")] });
+
+    const swept = await refreshAllFrontierPlaylists(5, now);
+
+    expect(swept).toMatchObject({ budgetPaused: true, refreshed: 0, total: 1 });
+    expect(spotifyCalls).toEqual([]);
+    expect(await editionCount("u-held")).toBe(0);
+  });
+
+  it("fails closed when the quota hold setting is unreadable", async () => {
+    const { refreshAllFrontierPlaylists } = await import("./frontier-playlist");
+    const now = Date.parse("2026-07-10T00:00:00.000Z");
+    await seedUser(db, { email: "unknown@fluncle.com", id: "u-unknown" });
+    await insertPlaylistRow("u-unknown", "pl-unknown", "2026-07-01T00:00:00.000Z");
+    settings.set("spotify_quota_hold_until", "unreadable");
+
+    expect(await refreshAllFrontierPlaylists(5, now)).toMatchObject({
+      budgetPaused: true,
+      refreshed: 0,
+      total: 1,
+    });
+    expect(spotifyCalls).toEqual([]);
+  });
+
+  it("stops before the next row when the shared meter is spent", async () => {
+    const { refreshAllFrontierPlaylists } = await import("./frontier-playlist");
+    const now = Date.parse("2026-07-10T00:00:00.000Z");
+    for (const id of ["u1", "u2"]) {
+      await seedUser(db, { email: `${id}@fluncle.com`, id });
+      await insertPlaylistRow(id, `pl-${id}`, "2026-07-01T00:00:00.000Z");
+    }
+    await exhaustSpotifyBudget(now);
+    recs = result({ findings: [find("new")] });
+
+    const swept = await refreshAllFrontierPlaylists(2, now);
+
+    expect(swept).toMatchObject({ budgetPaused: true, failed: 0, refreshed: 0, total: 2 });
+    expect(spotifyCalls).toEqual([]);
+    expect(await editionCount("u1")).toBe(0);
+    expect(await editionCount("u2")).toBe(0);
+  });
+
+  it("stops the refresh batch after Spotify rejects a write for quota", async () => {
+    const { refreshAllFrontierPlaylists } = await import("./frontier-playlist");
+    for (const id of ["u1", "u2"]) {
+      await seedUser(db, { email: `${id}@fluncle.com`, id });
+      await insertPlaylistRow(id, `pl-${id}`, "2026-07-01T00:00:00.000Z");
+    }
+    recs = result({ findings: [find("new")] });
+    quotaReject = true;
+    const swept = await refreshAllFrontierPlaylists(2, Date.parse("2026-07-10T00:00:00.000Z"));
+    expect(swept).toMatchObject({ budgetPaused: true, failed: 1, total: 2 });
+    expect(spotifyCalls).toHaveLength(1);
+    expect(await editionCount("u2")).toBe(0);
+  });
 
   it("drains in BATCHES, stamping each user so the next tick resumes with the rest", async () => {
     const { mintOrRefreshFrontierPlaylist, refreshAllFrontierPlaylists } =
@@ -609,30 +616,6 @@ describe("the paced drain — batches, stamps, resumes, pending-mints first (Sli
     expect(third).toMatchObject({ refreshed: 0, total: 0 });
   });
 
-  it("STOPS cleanly when the budget is exhausted, then RESUMES next tick", async () => {
-    const { mintOrRefreshFrontierPlaylist, refreshAllFrontierPlaylists } =
-      await import("./frontier-playlist");
-
-    const t0 = Date.parse("2026-07-01T00:00:00.000Z");
-    for (const id of ["u1", "u2"]) {
-      await seedUser(db, { email: `${id}@fluncle.com`, id });
-      recs = result({ findings: [find(`${id}-a`)] });
-      await mintOrRefreshFrontierPlaylist(makeUser({ id }), t0);
-    }
-
-    const later = t0 + WEEK_MS;
-    recs = result({ findings: [find("shared-b")] });
-    spotifyCalls.length = 0;
-
-    exhaustSpotifyBudget(later);
-    const paused = await refreshAllFrontierPlaylists(5, later);
-    expect(paused).toMatchObject({ budgetPaused: true, refreshed: 0, total: 2 });
-    expect(spotifyCalls).toEqual([]);
-
-    const resumed = await refreshAllFrontierPlaylists(5, later + 60_000);
-    expect(resumed).toMatchObject({ budgetPaused: false, refreshed: 2, total: 2 });
-  });
-
   it("orders PENDING MINTS ahead of due refreshers", async () => {
     const { mintOrRefreshFrontierPlaylist, refreshAllFrontierPlaylists } =
       await import("./frontier-playlist");
@@ -644,10 +627,11 @@ describe("the paced drain — batches, stamps, resumes, pending-mints first (Sli
     await mintOrRefreshFrontierPlaylist(makeUser({ id: "u-refresh" }), t0);
 
     await seedUser(db, { email: "b@fluncle.com", id: "u-pending" });
-    exhaustSpotifyBudget(t0);
+    settings.set("frontier.minting", "false");
     recs = result({ findings: [find("b-1")] });
     const deferred = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u-pending" }), t0);
-    expect(deferred).toMatchObject({ status: "building" });
+    expect(deferred).toMatchObject({ status: "edition_only" });
+    settings.set("frontier.minting", "true");
 
     recs = result({ findings: [find("shared-b")] });
     const swept = await refreshAllFrontierPlaylists(1, t0 + WEEK_MS);
@@ -678,56 +662,11 @@ describe("edition_only user opens minting — the mirror catches up without a ne
 });
 
 describe("putFrontierCover (the INERT-until-scope upload leg)", () => {
-  it("counts a raw cover attempt even when the vendor request rejects", async () => {
-    const { putFrontierCover } = await import("./frontier-playlist");
-    const now = Date.now();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.reject(new Error("network down"))),
-    );
-    await putFrontierCover("u1", "pl-1", "BASE64", now);
-    await Promise.all(takeWaitUntilPromises());
-    expect(await readSpotifyDailyCallCount(now)).toBe(1);
-    vi.unstubAllGlobals();
-  });
-
-  it("starts a raw cover request before its daily counter write settles", async () => {
-    const { putFrontierCover } = await import("./frontier-playlist");
-    const originalExecute = db.execute.bind(db);
-    let finishRecord: (() => void) | undefined;
-    vi.spyOn(db, "execute").mockImplementation(async (statement) => {
-      if (
-        String((statement as unknown as { sql?: string }).sql ?? "").includes(
-          "insert into rate_limit_counters",
-        )
-      ) {
-        await new Promise<void>((resolve) => {
-          finishRecord = resolve;
-        });
-      }
-      return originalExecute(statement);
-    });
-    const fetchMock = vi.fn(() => Promise.reject(new Error("network down")));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const upload = putFrontierCover("u1", "pl-1", "BASE64");
-    try {
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    } finally {
-      finishRecord?.();
-    }
-    await upload;
-    await Promise.all(takeWaitUntilPromises());
-  });
-
   it("degrades cleanly on a 403 missing scope — stamps nothing", async () => {
     const { putFrontierCover } = await import("./frontier-playlist");
 
     await insertPlaylistRow("u1", "pl-1", new Date().toISOString());
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(new Response("no scope", { status: 403 }))),
-    );
+    coverError = new Error("Spotify API request failed: 403 Forbidden - no scope");
 
     const uploaded = await putFrontierCover("u1", "pl-1", "BASE64");
 
@@ -741,14 +680,11 @@ describe("putFrontierCover (the INERT-until-scope upload leg)", () => {
     const { putFrontierCover } = await import("./frontier-playlist");
 
     await insertPlaylistRow("u1", "pl-1", new Date().toISOString());
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(new Response("", { status: 200 }))),
-    );
 
     const uploaded = await putFrontierCover("u1", "pl-1", "BASE64");
 
     expect(uploaded).toEqual({ uploaded: true });
+    expect(spotifyCalls[0]?.consumer).toBe("cosmetic");
     expect(await coverStamp("u1")).not.toBeNull();
 
     vi.unstubAllGlobals();

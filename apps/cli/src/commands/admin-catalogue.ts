@@ -133,8 +133,30 @@ export type AnchorBreakerState = {
   throttlesInWindow: number;
   tripped: boolean;
   trippedAt: null | string;
+  quotaHoldState: "clear" | "held" | "unknown";
+  quotaHoldUntil: null | string;
   spotifyDailyCalls: null | number;
+  consumerBudgets: Record<
+    "anchor" | "artist_images" | "public_search",
+    { callsSpent: null | number; dailyBudget: null | number }
+  >;
 };
+
+export type SpotifyBudgetConsumer = "anchor" | "artist_images" | "public_search";
+
+export async function spotifyConsumerBudgetCommand(): Promise<AnchorBreakerState> {
+  return anchorBreakerCommand();
+}
+
+export async function setSpotifyConsumerBudgetCommand(
+  consumer: SpotifyBudgetConsumer,
+  dailyBudget: number,
+): Promise<{ ok: true }> {
+  return adminApiPut<{ ok: true }>("/api/v1/admin/catalogue/spotify-budget", {
+    consumer,
+    dailyBudget,
+  });
+}
 
 export type LabelReleasesBudgetState = {
   callsSpent: number;

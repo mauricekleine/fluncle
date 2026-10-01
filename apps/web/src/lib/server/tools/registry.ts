@@ -36,7 +36,12 @@ import { resolveLogPageTarget } from "../log-resolver";
 import { subscribeToNewsletter } from "../newsletter";
 import { chargeRateLimit } from "../rate-limit";
 import { searchArchive } from "../search";
-import { ApiError, searchTrackCandidates } from "../spotify";
+import {
+  ApiError,
+  searchTrackCandidates,
+  SpotifyDeferredError,
+  spotifyDeferredApiError,
+} from "../spotify";
 import { getServiceStatuses, type ServiceHealthStatus } from "../status";
 import { createSubmission } from "../submissions";
 import {
@@ -1074,7 +1079,15 @@ const submitTrackTool = {
       throw new ApiError("invalid_query", "A Spotify track URL is required", 400);
     }
 
-    const candidate = (await searchTrackCandidates(spotifyUrl))[0];
+    let candidate: Awaited<ReturnType<typeof searchTrackCandidates>>[number] | undefined;
+    try {
+      candidate = (await searchTrackCandidates(spotifyUrl, "essential"))[0];
+    } catch (error) {
+      if (error instanceof SpotifyDeferredError) {
+        throw spotifyDeferredApiError(error);
+      }
+      throw error;
+    }
 
     if (!candidate) {
       throw new ApiError("track_not_found", "No track matched that Spotify URL", 404);

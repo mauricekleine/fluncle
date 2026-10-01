@@ -1,6 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AGENT_TOKEN, readJson, req, setAdminTokenEnv, warmOrpcRouter } from "./orpc-test-kit";
+import {
+  AGENT_TOKEN,
+  OPERATOR_TOKEN,
+  readJson,
+  req,
+  setAdminTokenEnv,
+  warmOrpcRouter,
+} from "./orpc-test-kit";
 
 const breakerStateMock = vi.fn();
 const apifyBudgetMock = vi.fn();
@@ -8,10 +15,23 @@ const apifyEnabledMock = vi.fn();
 const spotifySearchEnabledMock = vi.fn();
 const gateMock = vi.fn();
 const dailyCallsMock = vi.fn();
+const essentialCallsMock = vi.fn();
+const quotaHoldMock = vi.fn();
+const consumerBudgetMock = vi.fn();
+const consumerSpentMock = vi.fn();
+const setConsumerBudgetMock = vi.fn();
 
 vi.mock("./spotify-budget", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./spotify-budget")>();
-  return { ...actual, readSpotifyDailyCallCount: () => dailyCallsMock() };
+  return {
+    ...actual,
+    readSpotifyConsumerDailyBudget: () => consumerBudgetMock(),
+    readSpotifyConsumerDailyCallsSpent: () => consumerSpentMock(),
+    readSpotifyDailyCallCount: () => dailyCallsMock(),
+    readSpotifyEssentialDailyCalls: () => essentialCallsMock(),
+    readSpotifyQuotaHoldUntil: () => quotaHoldMock(),
+    setSpotifyConsumerDailyBudget: (...args: unknown[]) => setConsumerBudgetMock(...args),
+  };
 });
 
 vi.mock("./spotify-anchor-breaker", async (importOriginal) => {
@@ -71,12 +91,21 @@ beforeEach(() => {
   spotifySearchEnabledMock.mockReset();
   gateMock.mockReset();
   dailyCallsMock.mockReset();
+  essentialCallsMock.mockReset();
+  quotaHoldMock.mockReset();
+  consumerBudgetMock.mockReset();
+  consumerSpentMock.mockReset();
+  setConsumerBudgetMock.mockReset();
   breakerStateMock.mockResolvedValue(CLEAR);
   apifyBudgetMock.mockResolvedValue(BUDGET_OPEN);
   apifyEnabledMock.mockResolvedValue(true);
   spotifySearchEnabledMock.mockResolvedValue(false);
   gateMock.mockResolvedValue({ nextEligibleAt: null, reason: "flag_off" });
   dailyCallsMock.mockResolvedValue(7);
+  essentialCallsMock.mockResolvedValue(3);
+  quotaHoldMock.mockResolvedValue(null);
+  consumerBudgetMock.mockResolvedValue(700);
+  consumerSpentMock.mockResolvedValue(0);
 });
 
 describe("oRPC get_spotify_anchor_breaker (GET /admin/catalogue/anchor/breaker)", () => {
@@ -95,7 +124,15 @@ describe("oRPC get_spotify_anchor_breaker (GET /admin/catalogue/anchor/breaker)"
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({
       ...CLEAR,
+      consumerBudgets: {
+        anchor: { callsSpent: 0, dailyBudget: 700 },
+        artist_images: { callsSpent: 0, dailyBudget: 700 },
+        public_search: { callsSpent: 0, dailyBudget: 700 },
+      },
+      essentialDailyCalls: 3,
       ok: true,
+      quotaHoldState: "clear",
+      quotaHoldUntil: null,
       rungs: {
         apifyBudget: BUDGET_OPEN,
         apifyEnabled: true,
@@ -113,6 +150,32 @@ describe("oRPC get_spotify_anchor_breaker (GET /admin/catalogue/anchor/breaker)"
     const response = await handleOrpc(req(PATH, "GET", AGENT_TOKEN));
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toMatchObject({ spotifyDailyCalls: null, tripped: false });
+  });
+
+  it("keeps the breaker readable when its stored quota hold is corrupt", async () => {
+    quotaHoldMock.mockRejectedValue(new Error("Spotify quota hold is unreadable"));
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req(PATH, "GET", AGENT_TOKEN));
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toMatchObject({
+      quotaHoldState: "unknown",
+      quotaHoldUntil: null,
+    });
+  });
+
+  it("keeps the breaker readable when a consumer budget read fails", async () => {
+    consumerBudgetMock.mockRejectedValue(new Error("counter unavailable"));
+    consumerSpentMock.mockRejectedValue(new Error("counter unavailable"));
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req(PATH, "GET", AGENT_TOKEN));
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toMatchObject({
+      consumerBudgets: {
+        anchor: { callsSpent: null, dailyBudget: null },
+        artist_images: { callsSpent: null, dailyBudget: null },
+        public_search: { callsSpent: null, dailyBudget: null },
+      },
+    });
   });
 
   it("reports a quota hold to the box through the breaker contract", async () => {
@@ -181,5 +244,18 @@ describe("oRPC get_spotify_anchor_breaker (GET /admin/catalogue/anchor/breaker)"
       rungs: { apifyEnabled: true, spotifySearchEnabled: true },
       tripped: true,
     });
+  });
+});
+
+describe("oRPC set_spotify_consumer_budget", () => {
+  it("lets the operator set a cap and rejects the agent", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const path = "/admin/catalogue/spotify-budget";
+    const input = { consumer: "anchor", dailyBudget: 700 };
+    expect((await handleOrpc(req(path, "PUT", AGENT_TOKEN, input)))?.status).toBe(403);
+    expect(setConsumerBudgetMock).not.toHaveBeenCalled();
+    const response = await handleOrpc(req(path, "PUT", OPERATOR_TOKEN, input));
+    expect(response?.status).toBe(200);
+    expect(setConsumerBudgetMock).toHaveBeenCalledWith("anchor", 700);
   });
 });

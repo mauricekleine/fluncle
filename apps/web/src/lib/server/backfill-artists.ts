@@ -69,7 +69,7 @@ export async function backfillArtists(
     }
 
     try {
-      const metadata = await fetchTrackMetadata(row.track_id);
+      const metadata = await fetchTrackMetadata(row.track_id, "artist_images");
       await upsertTrackArtists(row.track_id, metadata.artists, metadata.spotifyArtistIds);
       upserted.push(logId);
     } catch (error) {

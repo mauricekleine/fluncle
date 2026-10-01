@@ -295,7 +295,7 @@ export async function publishTrack(
 
   throwForExistingPublishedTrack(existing);
 
-  const track = await fetchTrackMetadata(trackId);
+  const track = await fetchTrackMetadata(trackId, "essential");
   const artistLine = `${track.artists.join(", ")} — ${track.title}`;
   const nowIso = new Date().toISOString();
 
@@ -475,6 +475,18 @@ Posted to Telegram`;
   );
 }
 
+async function findCertifiableSpotifyTrackByIsrc(isrc: string, line: string) {
+  const lookup = await findSpotifyTrackByIsrc(isrc, "essential");
+  if (lookup.rateLimited) {
+    throw new ApiError(
+      "spotify_quota_deferred",
+      `Cannot certify ${line}: Spotify could not answer the ISRC lookup. Try again when its quota clears.`,
+      503,
+    );
+  }
+  return lookup;
+}
+
 async function certifyExistingTrackWithOptions(
   trackId: string,
   options: { note?: string },
@@ -540,7 +552,7 @@ async function certifyExistingTrackWithOptions(
   let spotifyUrl = row.spotify_url;
 
   if (!spotifyUri && isrc) {
-    const lookup = await findSpotifyTrackByIsrc(isrc);
+    const lookup = await findCertifiableSpotifyTrackByIsrc(isrc, line);
 
     if (lookup.match) {
       spotifyUri = lookup.match.spotifyUri;

@@ -1,7 +1,24 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { type Client } from "@libsql/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createIntegrationDb } from "./integration-db";
 
 const store = new Map<string, string>();
 let throwOnGet = false;
+let throwOnDb = false;
+let db: Client;
+
+vi.mock("./db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./db")>();
+  return {
+    ...actual,
+    getDb: async () => {
+      if (throwOnDb) {
+        throw new Error("counter unavailable");
+      }
+      return db;
+    },
+  };
+});
 
 vi.mock("./settings", () => ({
   getSetting: async (key: string) => {
@@ -9,50 +26,37 @@ vi.mock("./settings", () => ({
       throw new Error("settings KV unavailable");
     }
 
+    if (key === "spotify_quota_hold_until") {
+      const result = await db.execute({
+        args: [key],
+        sql: "select value from settings where key = ?",
+      });
+      return result.rows[0]?.value as string | undefined;
+    }
+
     return store.get(key);
   },
   setSetting: async (key: string, value: string) => {
+    if (key === "spotify_quota_hold_until") {
+      await db.execute({
+        args: [key, value, value],
+        sql: "insert into settings (key, value) values (?, ?) on conflict(key) do update set value = ?",
+      });
+      return;
+    }
     store.set(key, value);
   },
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   store.clear();
   throwOnGet = false;
+  throwOnDb = false;
+  db = await createIntegrationDb();
 });
 
-describe("spotifyCallWindow (pure)", () => {
-  it("reports the live count and reset hint inside the window", async () => {
-    const { spotifyCallWindow, SPOTIFY_CALL_WINDOW_MS } = await import("./spotify-budget");
-
-    expect(spotifyCallWindow({ count: 3, now: 1_000, startMs: 0 })).toEqual({
-      count: 3,
-      live: true,
-      msUntilReset: SPOTIFY_CALL_WINDOW_MS - 1_000,
-    });
-  });
-
-  it("rolls over to an empty window once it has elapsed", async () => {
-    const { spotifyCallWindow, SPOTIFY_CALL_WINDOW_MS } = await import("./spotify-budget");
-
-    expect(spotifyCallWindow({ count: 9, now: SPOTIFY_CALL_WINDOW_MS, startMs: 0 })).toEqual({
-      count: 0,
-      live: false,
-      msUntilReset: 0,
-    });
-  });
-
-  it("treats an unparseable/absent start as no live window", async () => {
-    const { spotifyCallWindow } = await import("./spotify-budget");
-
-    expect(spotifyCallWindow({ count: 5, now: 1_000, startMs: Number.NaN })).toEqual({
-      count: 0,
-      live: false,
-      msUntilReset: 0,
-    });
-  });
-});
+afterEach(() => db.close());
 
 describe("the call meter", () => {
   it("counts calls in a window and rolls over when it elapses", async () => {
@@ -100,12 +104,80 @@ describe("the call meter", () => {
   });
 });
 
-describe("fail-open on a KV fault", () => {
-  it("isSpotifyCallBudgetAvailable returns true when the settings read throws", async () => {
+describe("fail-closed on a counter fault", () => {
+  it("isSpotifyCallBudgetAvailable returns false when the counter read throws", async () => {
     const { isSpotifyCallBudgetAvailable } = await import("./spotify-budget");
 
-    throwOnGet = true;
+    throwOnDb = true;
 
-    expect(await isSpotifyCallBudgetAvailable(100_000)).toBe(true);
+    expect(await isSpotifyCallBudgetAvailable(100_000)).toBe(false);
+  });
+});
+
+describe("quota hold", () => {
+  it("uses Retry-After, extends rather than shortens, falls back to a day, and caps at 26 hours", async () => {
+    const { recordSpotifyQuotaHold, readSpotifyQuotaHoldUntil } = await import("./spotify-budget");
+    const now = Date.UTC(2026, 9, 1);
+    expect(await recordSpotifyQuotaHold(37, now)).toBe(new Date(now + 37_000).toISOString());
+    expect(await readSpotifyQuotaHoldUntil(now)).toBe(new Date(now + 37_000).toISOString());
+    expect(await recordSpotifyQuotaHold(null, now)).toBe(new Date(now + 86_400_000).toISOString());
+    expect(await recordSpotifyQuotaHold(10, now)).toBe(new Date(now + 86_400_000).toISOString());
+    expect(await recordSpotifyQuotaHold(200_000, now)).toBe(
+      new Date(now + 26 * 3_600_000).toISOString(),
+    );
+    expect(await readSpotifyQuotaHoldUntil(now + 26 * 3_600_000)).toBeNull();
+  });
+
+  it("rejects unreadable hold state", async () => {
+    const { readSpotifyQuotaHoldUntil, SPOTIFY_QUOTA_HOLD_UNTIL_KEY } =
+      await import("./spotify-budget");
+    await db.execute({
+      args: [SPOTIFY_QUOTA_HOLD_UNTIL_KEY, "invalid"],
+      sql: "insert into settings (key, value) values (?, ?)",
+    });
+    await expect(readSpotifyQuotaHoldUntil()).rejects.toThrow(/unreadable/);
+  });
+
+  it("does not shorten a stored hold when a later response requests less time", async () => {
+    const { recordSpotifyQuotaHold, readSpotifyQuotaHoldUntil } = await import("./spotify-budget");
+    const now = Date.UTC(2026, 9, 1);
+    const later = await recordSpotifyQuotaHold(120, now);
+    const shorter = await recordSpotifyQuotaHold(10, now);
+    expect(later).toBe(new Date(now + 120_000).toISOString());
+    expect(shorter).toBe(new Date(now + 120_000).toISOString());
+    expect(await readSpotifyQuotaHoldUntil(now)).toBe(later);
+  });
+});
+
+describe("consumer daily budgets", () => {
+  it("enforces concurrent charges atomically and resets at UTC midnight", async () => {
+    const {
+      chargeSpotifyConsumerDailyCall,
+      readSpotifyConsumerDailyCallsSpent,
+      setSpotifyConsumerDailyBudget,
+    } = await import("./spotify-budget");
+    const now = Date.UTC(2026, 9, 1, 12);
+    await setSpotifyConsumerDailyBudget("anchor", 2);
+    const charged = await Promise.all(
+      Array.from({ length: 5 }, () => chargeSpotifyConsumerDailyCall("anchor", now)),
+    );
+    expect(charged.filter(Boolean)).toHaveLength(2);
+    expect(await readSpotifyConsumerDailyCallsSpent("anchor", now)).toBe(2);
+    expect(await readSpotifyConsumerDailyCallsSpent("anchor", Date.UTC(2026, 9, 2))).toBe(0);
+  });
+
+  it("records essential calls separately without consuming optional budgets", async () => {
+    const {
+      recordSpotifyDailyCall,
+      readSpotifyDailyCallCount,
+      readSpotifyEssentialDailyCalls,
+      readSpotifyConsumerDailyCallsSpent,
+    } = await import("./spotify-budget");
+    const now = Date.UTC(2026, 9, 1, 12);
+    await recordSpotifyDailyCall(now, "essential");
+    await recordSpotifyDailyCall(now, "anchor");
+    expect(await readSpotifyDailyCallCount(now)).toBe(2);
+    expect(await readSpotifyEssentialDailyCalls(now)).toBe(1);
+    expect(await readSpotifyConsumerDailyCallsSpent("anchor", now)).toBe(0);
   });
 });

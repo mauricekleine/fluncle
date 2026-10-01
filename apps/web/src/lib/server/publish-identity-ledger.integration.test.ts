@@ -83,6 +83,7 @@ afterEach(() => db.close());
 
 async function publishAndRead(): Promise<Record<string, unknown>> {
   await expect(publishTrack(SPOTIFY_URL, { note: "a note" })).rejects.toThrow(/stop here/);
+  expect(vendors.fetchTrackMetadata).toHaveBeenCalledWith(TRACK_ID, "essential");
 
   const result = await db.execute({
     args: [TRACK_ID],

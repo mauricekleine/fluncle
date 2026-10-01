@@ -1291,12 +1291,12 @@ describe("anchor phases", () => {
 
   it("holds a never-asked ISRC row during quota_hold", async () => {
     const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
-    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
+    const { recordSpotifyQuotaHold } = await import("./spotify-budget");
     const now = new Date("2026-07-22T08:30:00.000Z");
     vi.useFakeTimers().setSystemTime(now);
     await setAnchorSpotifySearchEnabled(true);
     for (let index = 0; index < 5; index += 1) {
-      await recordSpotifyThrottle(now.getTime(), true);
+      await recordSpotifyQuotaHold(3600, now.getTime());
     }
     await seedTrack("quota-hold", "ROWISRC0001");
     const verdict = await phasedResolve("quota-hold");

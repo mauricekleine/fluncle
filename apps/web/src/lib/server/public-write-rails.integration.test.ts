@@ -113,6 +113,23 @@ afterEach(() => {
 });
 
 describe("submit_track through handleOrpc (real validation + rate limiter + DB)", () => {
+  it("returns a stable 503 with the hold deadline if Spotify defers metadata", async () => {
+    const { SpotifyDeferredError } = await import("./spotify");
+    const { handleOrpc } = await import("./orpc");
+    fetchTrackMetadata.mockRejectedValueOnce(
+      new SpotifyDeferredError("quota_hold", "2026-10-02T09:00:00.000Z"),
+    );
+    const response = await handleOrpc(
+      writeReq("/submissions", validSubmission(), { ip: "1.1.1.1" }),
+    );
+    expect(response?.status).toBe(503);
+    expect(await readJson(response)).toMatchObject({
+      code: "spotify_deferred",
+      ok: false,
+      until: "2026-10-02T09:00:00.000Z",
+    });
+    expect(await rowCount(db, "submissions")).toBe(0);
+  });
   it("accepts a valid submission AND lands the row (queried back from the DB)", async () => {
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(
@@ -134,7 +151,7 @@ describe("submit_track through handleOrpc (real validation + rate limiter + DB)"
       user_id: null,
     });
 
-    expect(fetchTrackMetadata).toHaveBeenCalledWith(VALID_TRACK_ID);
+    expect(fetchTrackMetadata).toHaveBeenCalledWith(VALID_TRACK_ID, "essential");
   });
 
   it("rejects a malformed submission with the contract fault frame AND lands NO row", async () => {

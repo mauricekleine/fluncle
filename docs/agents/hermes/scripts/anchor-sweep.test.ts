@@ -2370,6 +2370,39 @@ describe("runAnchorSweep — the firing preflight", () => {
     };
   }
 
+  test("a spent anchor call budget reads prior asks before 09:00 and caps quota-mode rows afterward", async () => {
+    const reads: Array<{ limit: number; mode?: "prior" | "quota" }> = [];
+    const base = preflightDeps(
+      {
+        apifyBudgetRemaining: 3,
+        apifyBudgetSpent: false,
+        apifyEnabled: true,
+        gateReason: "daily_budget",
+        spotifySearchEnabled: true,
+      },
+      () => {},
+    );
+    const deps: AnchorDeps = {
+      ...base,
+      fetchQueue: (limit, mode) => {
+        reads.push({ limit, mode });
+        return Promise.resolve({ queueDepth: null, rows: [] });
+      },
+    };
+    await runAnchorSweep(250, {
+      ...deps,
+      now: () => Date.parse("2026-09-20T08:59:00Z"),
+    });
+    await runAnchorSweep(250, {
+      ...deps,
+      now: () => Date.parse("2026-09-20T09:00:00Z"),
+    });
+    expect(reads).toEqual([
+      { limit: 3, mode: "prior" },
+      { limit: 3, mode: "quota" },
+    ]);
+  });
+
   test("a nonempty general queue can have no ISRC asks due after the anchor tick", async () => {
     const base = preflightDeps(
       {

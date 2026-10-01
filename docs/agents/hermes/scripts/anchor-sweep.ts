@@ -55,6 +55,7 @@ const RELEASE_PROBE_LIMIT = Number(process.env.FLUNCLE_ANCHOR_RELEASE_PROBE_LIMI
 const RELEASE_PROBE_WALL_MS = 90_000;
 
 const ISRC_WINDOW_UTC = process.env.FLUNCLE_ANCHOR_ISRC_WINDOW_UTC ?? "0-8";
+const ANCHOR_QUOTA_EXCEPTION_START_HOUR_UTC = 9;
 
 const DAY_FREE_RUNGS = process.env.FLUNCLE_ANCHOR_DAY_FREE_RUNGS === "1";
 
@@ -408,6 +409,7 @@ export type AnchorPreflight = {
   gateReason?:
     | "breaker_quota"
     | "breaker_throttle"
+    | "daily_budget"
     | "flag_off"
     | "friday_window"
     | "open"
@@ -880,6 +882,7 @@ export function anchorFiringDeferral(
     ![
       "breaker_quota",
       "breaker_throttle",
+      "daily_budget",
       "flag_off",
       "friday_window",
       "open",
@@ -892,6 +895,7 @@ export function anchorFiringDeferral(
   if (
     preflight.gateReason === "breaker_quota" ||
     preflight.gateReason === "quota_hold" ||
+    preflight.gateReason === "daily_budget" ||
     longAnchorThrottle(preflight, now)
   ) {
     return !preflight.apifyEnabled
@@ -2845,9 +2849,13 @@ async function classifyAnchorFiring(
   const now = new Date(deps.now());
   const deferral = anchorFiringDeferral(preflight, askState.askWindow, now, DAY_FREE_RUNGS);
   const paidMode =
-    preflight.gateReason === "breaker_quota"
+    preflight.gateReason === "breaker_quota" ||
+    (preflight.gateReason === "daily_budget" &&
+      now.getUTCHours() >= ANCHOR_QUOTA_EXCEPTION_START_HOUR_UTC)
       ? "quota"
-      : preflight.gateReason === "quota_hold" || longAnchorThrottle(preflight, now)
+      : preflight.gateReason === "quota_hold" ||
+          preflight.gateReason === "daily_budget" ||
+          longAnchorThrottle(preflight, now)
         ? "prior"
         : undefined;
   return {
