@@ -1169,9 +1169,14 @@ async function planCrawlNode(
   node: FrontierRow,
   maxHop: number,
   client?: Pick<Client, "execute">,
+  globallyBlocked?: ReadonlySet<string>,
 ): Promise<CrawlProviderPlan> {
+  const isGloballyBlocked = () =>
+    globallyBlocked
+      ? Promise.resolve(globallyBlocked.has(node.id))
+      : globallyBlockedFrontierNode(node, client);
   if (node.kind === "release") {
-    if (node.hop > 0 && (await globallyBlockedFrontierNode(node, client))) {
+    if (node.hop > 0 && (await isGloballyBlocked())) {
       return { kind: "skip-global-block" };
     }
     if (node.hop === 2 && maxHop <= 2 && (await disabledTerminalRelease(node, client))) {
@@ -1193,7 +1198,7 @@ async function planCrawlNode(
     };
   }
 
-  if (node.kind === "artist" && (await globallyBlockedFrontierNode(node, client))) {
+  if (node.kind === "artist" && (await isGloballyBlocked())) {
     return { kind: "skip-global-block" };
   }
 
@@ -1240,6 +1245,25 @@ async function globallyBlockedFrontierNode(
           where node.id = ? and ${GLOBALLY_BLOCKED_FRONTIER_SQL} limit 1`,
   });
   return result.rows.length > 0;
+}
+
+async function globallyBlockedFrontierNodeIds(
+  nodes: readonly FrontierRow[],
+  client: Pick<Client, "execute">,
+): Promise<Set<string>> {
+  const ids = nodes
+    .filter((node) => node.kind === "artist" || (node.kind === "release" && node.hop > 0))
+    .map((node) => node.id);
+  if (ids.length === 0) {
+    return new Set();
+  }
+  const result = await client.execute({
+    args: ids,
+    sql: `select node.id from crawl_frontier as node
+          where node.id in (${ids.map(() => "?").join(", ")})
+            and ${GLOBALLY_BLOCKED_FRONTIER_SQL}`,
+  });
+  return new Set(typedRows<{ id: string }>(result.rows).map((row) => row.id));
 }
 
 export async function settleGloballyBlockedFrontier(
@@ -2738,9 +2762,10 @@ export async function prepareCrawlPhase({
   }
 
   const hopLimit = Math.max(0, Math.min(maxHop, MAX_HOP_CEILING));
+  const globallyBlocked = await globallyBlockedFrontierNodeIds(claimed.rows, db);
   const items: CrawlPhasePrepareResult["items"] = [];
   for (const claimedNode of claimed.rows) {
-    const plan = await planCrawlNode(claimedNode, hopLimit, db);
+    const plan = await planCrawlNode(claimedNode, hopLimit, db, globallyBlocked);
     items.push({
       fetchPlan: crawlFetchPlan(plan, claimedNode),
       nodeId: claimedNode.id,
