@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "bench:context-distil": "bun run scripts/bench-context-distil.ts",
-    "build": "bun run scripts/copy-sprites.ts && NODE_OPTIONS=--max-old-space-size=6144 vite build",
+    "build": "bun run scripts/copy-sprites.ts && NODE_OPTIONS=--max-old-space-size=6144 vite build && bun run scripts/prune-worker-manifest.ts",
     "capture:distil-corpus": "bun run scripts/capture-distil-corpus.ts",
     "db:admission-store": "bun run scripts/database-admission-store.ts",
     "db:backfill-due-work": "bun run scripts/backfill-due-work.ts",
