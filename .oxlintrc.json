@@ -10,7 +10,7 @@
     "apps/raycast/raycast-env.d.ts",
     "**/*.gen.ts",
     "apps/web/src/routeTree.gen.ts",
-    "apps/web/worker-configuration.d.ts",
+    "apps/web/.cloudflare/",
     "tools/oxlint/anti-slop/**"
   ],
   "jsPlugins": [
