@@ -560,6 +560,50 @@ describe("release-link anchor rung", () => {
     }
   });
 
+  it("re-checks sibling eligibility at commit time", async () => {
+    vi.stubEnv("ADMIN_SESSION_SECRET", "release-phase-secret");
+    const { commitAnchorReleaseLink, probeAnchorReleaseLink, signAnchorReleaseProbe } =
+      await import("./anchor");
+    await seed("mb_rec-1", "rec-1", "Weightless", 261_901);
+    await seed("mb_rec-2", "rec-2", "Signals (VIP)", 279_500);
+    const probe = await probeAnchorReleaseLink("mb_rec-1");
+    await db.execute("update tracks set dismissed_at = '2026-01-01' where track_id = 'mb_rec-2'");
+
+    const result = await commitAnchorReleaseLink(probe, await signAnchorReleaseProbe(probe), 0);
+    expect(result.anchoredCount).toBe(1);
+    expect((await uri("mb_rec-1"))?.spotify_uri).toBe("spotify:track:spotify-one");
+    expect((await uri("mb_rec-2"))?.spotify_uri).toBeNull();
+  });
+
+  it("skips a malformed album track and never caches an empty track list", async () => {
+    const { resolveAnchorReleaseLink } = await import("./anchor");
+    await seed("mb_rec-1", "rec-1", "Weightless", 261_901);
+    cache.set(
+      `album:${albumId}`,
+      JSON.stringify([
+        { ...albumTracks[0], artists: [{ id: null, name: "Broken" }] },
+        albumTracks[1],
+      ]),
+    );
+
+    const result = await resolveAnchorReleaseLink("mb_rec-1");
+    expect(result.cacheHits).toBe(1);
+    expect((await uri("mb_rec-1"))?.spotify_uri).toBeNull();
+
+    cache.clear();
+    cachePut.mockClear();
+    fetchSpotifyAlbumTracks.mockImplementation(async (_id: string, onPage: () => Promise<void>) => {
+      await onPage();
+      return [];
+    });
+    await resolveAnchorReleaseLink("mb_rec-1");
+    expect(cachePut).not.toHaveBeenCalledWith(
+      `album:${albumId}`,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("uses ListenBrainz metadata for a row with no recording MBID", async () => {
     const { resolveAnchorFree } = await import("./anchor");
     await seed("mb_no-mbid", "", "Weightless", 261_901);

@@ -95,14 +95,16 @@ function normalizedTracks(value: unknown): SpotifyAlbumTrack[] | null {
       !Number.isFinite(item.trackNumber) ||
       (item.isrc !== null && typeof item.isrc !== "string")
     ) {
-      return null;
+      continue;
     }
     const artists: SpotifyAlbumTrack["artists"] = [];
     for (const artist of item.artists) {
-      if (!artist || typeof artist.id !== "string" || typeof artist.name !== "string") {
-        return null;
+      if (artist && typeof artist.id === "string" && typeof artist.name === "string") {
+        artists.push({ id: artist.id, name: artist.name });
       }
-      artists.push({ id: artist.id, name: artist.name });
+    }
+    if (artists.length === 0) {
+      continue;
     }
     tracks.push({
       artists,
@@ -115,6 +117,19 @@ function normalizedTracks(value: unknown): SpotifyAlbumTrack[] | null {
     });
   }
   return tracks;
+}
+
+export async function isEligibleReleaseSibling(trackId: string): Promise<boolean> {
+  const db = await getDb();
+  const eligibility = anchorEligibilityClause();
+  const result = await db.execute({
+    args: [trackId, ...eligibility.args],
+    sql: `select 1 from tracks t left join findings f on f.track_id = t.track_id
+      where t.track_id = ? and t.spotify_uri is null and t.is_catalogue = 1 and f.track_id is null
+      and ${ANCHOR_RULED_OUT_LABEL_CLAUSE} and ${eligibility.sql}
+      limit 1`,
+  });
+  return result.rows.length > 0;
 }
 
 async function eligibleSiblingIds(recordingIds: string[]): Promise<string[]> {
@@ -299,7 +314,9 @@ export async function probeReleaseLinks(
       continue;
     }
     try {
-      await cache.put(key, JSON.stringify(evidence.tracks), { expirationTtl: CACHE_SECONDS });
+      if (evidence.tracks.length > 0) {
+        await cache.put(key, JSON.stringify(evidence.tracks), { expirationTtl: CACHE_SECONDS });
+      }
     } catch (error) {
       logEvent("warn", "anchor.release-cache-write-failed", { albumId, error });
     }

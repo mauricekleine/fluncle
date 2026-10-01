@@ -33,6 +33,7 @@ import { logEvent } from "./log";
 import {
   commitReleaseLinks,
   emptyReleaseLinkResult,
+  isEligibleReleaseSibling,
   probeReleaseLinks,
   resolveReleaseLinks,
   type ReleaseLinkProbe,
@@ -678,6 +679,9 @@ async function anchorReleaseSibling(
   siblingId: string,
   tracks: SpotifyAlbumTrack[],
 ): Promise<boolean> {
+  if (!(await isEligibleReleaseSibling(siblingId))) {
+    return false;
+  }
   const candidates = tracks.map(
     (track: SpotifyAlbumTrack): AnchorCandidate => ({
       artists: track.artists,
