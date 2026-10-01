@@ -101,6 +101,12 @@
     "unicorn/no-null": "off",
     "vitest/expect-expect": "off",
     "vitest/no-conditional-expect": "off",
+    "vitest/no-standalone-expect": [
+      "error",
+      {
+        "additionalTestBlockFunctions": ["it.effect", "it.live", "it.scoped"]
+      }
+    ],
     "vitest/require-mock-type-parameters": "off",
     "vitest/require-to-throw-message": "off",
     "vitest/valid-expect": [

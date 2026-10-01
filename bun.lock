@@ -191,6 +191,7 @@
       },
       "devDependencies": {
         "@cloudflare/vite-plugin": "~1.61.0",
+        "@effect/vitest": "catalog:",
         "@fluncle/test-support": "workspace:*",
         "@huggingface/transformers": "~4.3.0",
         "@modelcontextprotocol/client": "~2.1.0",
@@ -361,6 +362,7 @@
     "@ai-sdk/react": "4.0.20",
     "@base-ui/react": "~1.7.0",
     "@effect/tsgo": "~0.47.2",
+    "@effect/vitest": "~4.0.0",
     "@libsql/client": "~0.17.4",
     "@openrouter/ai-sdk-provider": "~3.0.0",
     "@orpc/client": "1.14.7",
@@ -668,6 +670,8 @@
     "@effect/tsgo-linux-arm64": ["@effect/tsgo-linux-arm64@0.47.2", "", { "os": "linux", "cpu": "arm64" }, "sha512-hA3SoKGuLd0HNqJ34QcYEWwpE6tvit3xpKupwj1TaPtHpLLGdtSF7czBIknp6kR8fOvnuYLjB6aEkxXmJsTVWg=="],
 
     "@effect/tsgo-linux-x64": ["@effect/tsgo-linux-x64@0.47.2", "", { "os": "linux", "cpu": "x64" }, "sha512-vELwVsUQ5VlM2jbvv7zaIPOkFsxmaS0nLqq+p0RodtkQiuScg27febnLClzKAv/Tl6GrXTBz4IBh78aBF2CvbQ=="],
+
+    "@effect/vitest": ["@effect/vitest@4.0.0", "", { "peerDependencies": { "effect": "^4.0.0", "vitest": ">=5.0.0 <6.0.0" } }, "sha512-kGElCPFGtP+CgMCwV/HjJWqtE3zYo6I1+8MSA54l+EI24lPU9p2Efa+TBp1jfkg9j711KKzEqgSAy3VzTsb76Q=="],
 
     "@egjs/hammerjs": ["@egjs/hammerjs@2.0.17", "", { "dependencies": { "@types/hammerjs": "^2.0.36" } }, "sha512-XQsZgjm2EcVUiZQf11UBJQfmZeEmOW8DpI1gsFeln6w0ae0ii4dMQEQ0kjl6DspdWX1aGY1/loyXnP0JS06e/A=="],
 

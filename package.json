@@ -10,6 +10,7 @@
     ],
     "catalog": {
       "@effect/tsgo": "~0.47.2",
+      "@effect/vitest": "~4.0.0",
       "@ai-sdk/react": "4.0.20",
       "@base-ui/react": "~1.7.0",
       "@libsql/client": "~0.17.4",
