@@ -40,6 +40,8 @@ Formatting exclusions stay in `.oxfmtrc.json`: `.prettierignore` also feeds oxli
 
 Agent edit hooks only format the touched file. Before a commit or handoff, run the checks for the packages you changed; `bun run quality:classify` names the affected leaves, and `run-lane.mjs --plan <file> --lane <lane>` runs one lane of that plan. Husky's pre-commit runs lint-staged. Quality Checks and `deploy:gate` own the full matrix, including coverage thresholds.
 
+The web suite uses Vitest 5 with the matching V8 coverage provider. `bun run --cwd apps/web test` enables coverage by default and enforces the thresholds in `apps/web/vitest.config.ts`. `FLUNCLE_VITEST_COVERAGE=false bun run --cwd apps/web test` runs the same suite without coverage for iteration and wall-time comparisons. The Node environment installs the shared no-network rail through `src/test/block-network.ts` and resolves `cloudflare:workers` to the test stub. Vitest clears mock call history before each test; mock implementations remain intact.
+
 ## CI topology and measurement
 
 Quality Checks has two parallel evidence jobs and one small aggregator. `core` owns static policy, migrations, affected TypeScript packages, scripts, Go, Rust, and workflow topology. `e2e` either reports a cheap intentional skip or runs the complete isolated Turso-compatible public-flow contract. Draft pull-request events skip every runner; readiness starts a fresh run. On ready pull requests and every non-pull-request event, `Lint, Format, and Typecheck` uses `always()` and passes only when both owners succeeded, so branch protection keeps a stable context even for non-web changes.
