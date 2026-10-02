@@ -1,6 +1,6 @@
 import { Data, Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { ApiError } from "../spotify";
+import { ApiError } from "../api-error";
 import { runServerEffect } from "./runtime";
 
 class UpstreamDown extends Data.TaggedError("UpstreamDown")<{ status: number }> {}
