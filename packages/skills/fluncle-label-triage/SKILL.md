@@ -24,7 +24,7 @@ The ruling itself is an OPERATOR decision — crawl scope is editorial control. 
 
 A round has two shapes beyond the plain buckets, and both change what the NEXT crawl takes while touching nothing already stored:
 
-- **enable + blocks** — a mainly-DnB label with a recurring off-lane act. Only when the off-lane FIRST-credit share is **≤ 15 %**, measured RAW over every off-lane credit; above that the label is not mainly DnB and stays `unclear` for the operator. Raw is the rail because enabling a label is a standing commitment to what it releases NEXT, which no existing rule covers. The census ALSO reports a **residual** share — the same fraction dropping credits whose artist already carries a global rule — and when the two straddle the threshold the label is shown to the operator by name instead of being buried in `unclear`. The residual never changes a verdict. Measured type specimen: 0.205 raw against 0.147 residual, the gap being two already-globally-blocked acts.
+- **enable + blocks** — a mainly-DnB label with a recurring off-lane act. Only when the off-lane FIRST-credit share is **≤ 15 %**, measured RAW over every off-lane credit; above that the label is not mainly DnB and is never enabled: it becomes `dnb_partial` when in-lane acts carry first credits, `not_dnb` when its in-lane credits are incidental. Raw is the rail because enabling a label is a standing commitment to what it releases NEXT, which no existing rule covers. The census ALSO reports a **residual** share — the same fraction dropping credits whose artist already carries a global rule — and when the two straddle the threshold the label goes to the operator as `unclear` (`mixed`) with the gap named. The residual never changes a verdict. Measured type specimen: 0.205 raw against 0.147 residual, the gap being two already-globally-blocked acts.
 - **The share is over RECORDINGS, never releases.** That is what the crawl stores: one various-artists compilation of 19 off-lane tracks imports 19 off-lane tracks, however in-lane the other releases look. A release-level reading of the same label can look twice as clean and is the wrong measure (measured: a label reading 10-of-12 releases in lane on Discogs was 43–58 % off-lane by credit).
 - **`dnb_partial`: stay out of the seed set + allows** — a minority-DnB label whose DnB acts deserve the archive (the YUKU / Crucast shape). The label is left exactly as it is (undecided stays undecided); only the allow rules are written.
 
@@ -33,7 +33,7 @@ Four rails hold in every round:
 - **Globals are never machine-applied.** A round may SUGGEST one in prose (`globalSuggestion`); the operator authors globals by hand with `fluncle admin artists rule`.
 - **No inert rules.** A proposal with zero FIRST credits on the census can never fire — the block-ANY intuition proposes exactly these (measured: Maddslinky on Gutterfunk, 0 first credits). The census refuses them and `apply-rulings.py` drops any that slip through.
 - **Imprint child first.** `GET /ws/2/label/<mbid>?inc=label-rels` runs BEFORE any rule proposal: when MusicBrainz already models the boundary as a child imprint (Med School under Hospital), rule that entity instead and propose no rules.
-- **Conflation is still `unclear`.** One MBID holding two real labels is fixed upstream in MusicBrainz, never carved with rules.
+- **Conflation is never carved with rules.** One MBID holding two real labels is `unclear` when one strand is drum & bass, because the fix is an upstream MusicBrainz split that unblocks a crawl seed. When no strand is in lane it is `not_dnb`: everything the MBID would crawl is off-lane, so disabling it loses nothing.
 
 ## The pass, end to end
 
@@ -99,8 +99,9 @@ The method the briefs enforce, and why:
 - **Calibrate to the operator's live rulings, not a genre notion.** Agents read the calibration lists first. The boundary has a specific learned shape: majors, subsidiaries, distributors and aggregators are OUT even when they carry DnB; **DnB-specific media brands are IN** (Drum&BassArena, UKF enabled; DJ Magazine disabled); genre-adjacent scenes (dubstep, grime, UKG, jungle-adjacent electronica) are OUT.
 - **MusicBrainz artists are the genre signal; MB `tags`/`genres` are usually EMPTY** — don't rely on them. Release credits decide most labels; the Discogs and Beatport facts settle the rest; firecrawl/web search only for what's still open.
 - **One act is often several MBIDs.** The census expands every act it rules on into all its collaboration entities (measured: DJ Die alone was 44/130 first credits, DJ Die + DieMantle 57/130) and gives each its own rule row and count. A missed entity under-imports; it never mis-imports.
-- Return `unclear` for mixed-genre labels the census cannot carve, minority-DnB catalogues not worth allow rules, or evidence too sparse to support a ruling; the operator reviews these manually.
-- Return `unclear` and name the conflation when one MBID contains releases from distinct labels; enabling crawls by MBID, so split the upstream entity before enabling.
+- **`unclear` is narrow, and every other label gets a ruling.** It has exactly three reasons: `thin` (no rung of the ladder answers), `mixed` (the raw and residual shares straddle 15 %, or the census caveat leaves the share unreliable) and `conflation` (one MBID holds two real labels and one of them is drum & bass). An `unclear` has no default ruling, so it sits in the operator's queue and is re-researched every 30 days; a round that parks a decidable label there spends the operator's attention and the round's tokens on a question it could have answered. Measured: one week's box rounds returned 19 of 30 `unclear`, and 11 of the conflations among them held no drum & bass at all.
+- A mixed label above 15 % is `dnb_partial` (allow every in-lane act with first credits) or `not_dnb` (its in-lane credits are incidental); a minority-DnB catalogue not worth allow rules is `not_dnb`. Both are cheap to be wrong about: an allow stores only that act's own records, and a disable reverses with one flag.
+- Name the conflation in the evidence whenever one MBID contains releases from distinct labels; enabling crawls by MBID, so an in-lane strand is split upstream before enabling.
 - On a partial failure (an agent dies mid-run), **resume with `resumeFromRunId`** — completed batches replay from cache, only the dead slice re-runs.
 
 ### 2b · Verify the judgment calls
@@ -139,13 +140,13 @@ A local file, never a hosted artifact. The page **leads with the rule proposals*
 
 **Do not apply anything the operator has not ratified.**
 
-A round's conflations get their own artefact, because they are never ruled here — they are fixed upstream and picked up clean by a later round:
+A round's `unclear` conflations — the ones with a drum & bass strand — get their own artefact, because they are never ruled here: they are fixed upstream and picked up clean by a later round:
 
 ```bash
 python3 <skill>/scripts/render-conflation-brief.py   # writes mb-split-brief.md
 ```
 
-The brief is self-contained for an editing agent driving musicbrainz.org, and it bakes in the two rules that decided real outcomes. **Group A before Group B**: a conflation with a drum & bass catalogue trapped inside unblocks a crawl seed, while one where no strand is in lane is correct MusicBrainz hygiene that earns Fluncle nothing — so the brief orders A first and says to stop rather than spend the account's standing on B. And **the notes are a hypothesis**, confirmed against the live catalogue rather than taken as fact, with an ambiguous release left in place and reported. Both earned their place: a measured round was 10-of-23 pure hygiene, and three premises in a hand-written brief were wrong and were caught only because the editor was told to doubt them.
+The brief is self-contained for an editing agent driving musicbrainz.org, and it bakes in the two rules that decided real outcomes. **Group A before Group B**: a conflation with a drum & bass catalogue trapped inside unblocks a crawl seed, while one where no strand is in lane is correct MusicBrainz hygiene that earns Fluncle nothing — so the brief orders A first and says to stop rather than spend the account's standing on B. A current round rules a no-DnB conflation `not_dnb`, so Group B only fills from an older round's staged verdicts. And **the notes are a hypothesis**, confirmed against the live catalogue rather than taken as fact, with an ambiguous release left in place and reported. Both earned their place: a measured round was 10-of-23 pure hygiene, and three premises in a hand-written brief were wrong and were caught only because the editor was told to doubt them.
 
 ### 4 · Apply
 

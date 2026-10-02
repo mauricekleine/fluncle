@@ -2,9 +2,9 @@
 
 The rave-02 host trigger for the **label-triage round**. Once a day it reads the undecided crawl-seed pile and decides whether enough NEVER-LOOKED labels have accumulated to be worth a round. When they have, it researches a bounded slice of the pile with `claude -p` and records each label's proposal for the operator to rule on at `/admin/labels`. A host systemd timer `docker exec`s the baked sweep inside the `hermes` container.
 
-The work is BAKED at `/opt/hermes-scripts/` — [`../scripts/label-triage-sweep.sh`](../scripts/label-triage-sweep.sh) over [`../scripts/label-triage-sweep.ts`](../scripts/label-triage-sweep.ts) — riding the image and auto-updating from `main` via pin-watch (Unit A). The research method is the [fluncle-label-triage](../../../../packages/skills/fluncle-label-triage) skill, baked at `/opt/claude/skills/fluncle-label-triage/`; the design is [docs/rfcs/label-triage-sweep-rfc.md](../../../rfcs/label-triage-sweep-rfc.md).
+The work is BAKED at `/opt/hermes-scripts/` — [`../scripts/label-triage-sweep.sh`](../scripts/label-triage-sweep.sh) over [`../scripts/label-triage-sweep.ts`](../scripts/label-triage-sweep.ts) — riding the image and auto-updating from `main` via pin-watch (Unit A). The research method is the [fluncle-label-triage](../../../../packages/skills/fluncle-label-triage) skill, baked at `/opt/claude/skills/fluncle-label-triage/`.
 
-The wrapper sets absolute `bun` and `fluncle` paths because a host timer can start with a minimal `PATH`, and sources the shared sweep secrets file for `CLAUDE_CODE_OAUTH_TOKEN` and `DISCOGS_USER_TOKEN` (both op-injected by `fluncle-secrets-sync`; nothing is placed on the box by hand). Because a round writes proposals, the unit runs the payload under `database-admission-runner.sh` as one whole-lifetime lease, the same shape as the newsletter draft. It sources `cron-output.sh` and wraps the payload instead of replacing the shell process, so the `/status` freshness marker is written even when the payload fails.
+The wrapper sets absolute `bun` and `fluncle` paths because a host timer can start with a minimal `PATH`, and sources the shared sweep secrets file for `CLAUDE_CODE_OAUTH_TOKEN`, `DISCOGS_USER_TOKEN` and `FIRECRAWL_API_KEY` (all op-injected by `fluncle-secrets-sync`; nothing is placed on the box by hand). Because a round writes proposals, the unit runs the payload under `database-admission-runner.sh` as one whole-lifetime lease, the same shape as the newsletter draft. It sources `cron-output.sh` and wraps the payload instead of replacing the shell process, so the `/status` freshness marker is written even when the payload fails.
 
 ## The two halves
 
@@ -16,7 +16,7 @@ The split is the whole design. **Every agent-bearing cron in this repo has had a
 
 ## What it cannot do
 
-- **The model holds no Fluncle credential and cannot reach the sweep secrets file.** Its process gets an allowlisted environment (the Claude token, the Discogs token, `PATH`, locale) and its own `HOME`, the batch's temporary directory. It runs `--restricted --strict-mcp-config --permission-mode dontAsk`: user, project and local Claude settings are ignored, bypass mode is refused, the file tools (`Read`, `Glob`, `Grep`) are confined to the batch directory and the skill, and Bash is denied except `fluncle admin labels evidence …`, the one fetcher. Chained commands and command substitution around it are denied too. With an MBID argument that command reads MusicBrainz, Discogs, Beatport and Apple and never calls the Fluncle API. A live probe against a planted secrets file confirmed all of this; without `--restricted`, a bypass-mode user setting overrode `--allowedTools` and the file was read.
+- **The model holds no Fluncle credential and cannot reach the sweep secrets file.** Its process gets an allowlisted environment (the Claude token, the Discogs token, the Firecrawl key, `PATH`, locale) and its own `HOME`, the batch's temporary directory. It runs `--restricted --strict-mcp-config --permission-mode dontAsk`: user, project and local Claude settings are ignored, bypass mode is refused, the file tools (`Read`, `Glob`, `Grep`) are confined to the batch directory and the skill, and Bash is denied except `fluncle admin labels evidence …`, the one fetcher. Chained commands and command substitution around it are denied too. With an MBID argument that command reads MusicBrainz, Discogs, Beatport and Apple and never calls the Fluncle API. A live probe against a planted secrets file confirmed all of this; without `--restricted`, a bypass-mode user setting overrode `--allowedTools` and the file was read.
 - **The script can only record.** Recording is `record_label_triage` → `fluncle admin labels triage` — **agent tier**. It stamps the cursor and stores a proposal. RULING on a label (`update_label`) and writing artist rules (`replace_label_artist_rules`, `rule_artist`) are **operator tier** and 403 the box's agent token at `operatorGuard`, pinned by `orpc-auth-coverage`.
 
 So nothing this sweep does can enable a label, disable one, or write an artist rule, however wrong a batch goes.
@@ -54,14 +54,11 @@ Every knob is an `Environment=` line on the unit, passed into the container by t
 
 ## What a round costs
 
-Two attended measurements bracket the cost:
+The first three scheduled rounds of 30 labels each cost **985k tokens and $1.67**, **996k and $2.15**, and **1.1M and $2.01** list-price equivalent: about 33–37k tokens and $0.06–0.07 per label. A large DnB catalogue that needs a full census costs more (an attended batch of three such labels measured about 200k tokens and $0.30 per label), so a heavy round can reach about 6M tokens and $9. Tokens are input + output + cache, almost all cache reads. The shared Claude Max subscription pays for it; the dollar figure is a list-price equivalent, not a bill.
 
-- **On the box, a typical batch:** four never-looked labels from the real pile (three `not_dnb`, one `unclear`) cost **145k tokens and $0.37** list-price equivalent — about 36k tokens and $0.09 per label.
-- **Off the box, a heavy batch:** three well-known labels, one a large DnB catalogue that needed a full census, cost **621k tokens and $0.94** — about 200k tokens and $0.30 per label. A large catalogue's census dominates.
+Beatport costs one Firecrawl scrape per label whose MusicBrainz entity links a Beatport page, cached a week; in the first round with the key, 4 of 30 labels had one.
 
-Tokens are input + output + cache, almost all cache reads. So a default round of 30 labels costs about **1–2M tokens and $3** typically, and at most about 6M tokens and $9. The shared Claude Max subscription pays for it; the dollar figure is a list-price equivalent, not a bill.
-
-**The pile is a backlog, not a trickle.** The first box reading found 1,153 never-looked labels. Once the gate fires, the carry-over keeps the round firing daily at `MAX_LABELS` a day until the backlog drains — about 38 days at the default 30. Raise or lower `LABEL_TRIAGE_MAX_LABELS` and `LABEL_TRIAGE_MAX_BATCHES` to change that pace.
+**The pile drains faster than the cap alone suggests**, because the operator rules labels outside the box too, but it also refills: the crawler minted 200–385 never-looked labels a day in the first week of rounds. The carry-over keeps the round firing daily at `MAX_LABELS` while any are waiting. Raise `LABEL_TRIAGE_MAX_LABELS` and `LABEL_TRIAGE_MAX_BATCHES` when the carry stops shrinking.
 
 Every run's summary carries the measured `tokens` and `usd`, so the run ledger holds the real figure for each round.
 
@@ -75,10 +72,6 @@ LABEL TRIAGE GATE: HOLD undecided=247 excluded=31 never-looked=9 stale=0 candida
 ```
 
 `HOLD` is a healthy answer. When it fires, a `LABEL TRIAGE WORKLIST:` line names the slugs this round researches, and the summary carries `roundId`, `batches`, `batchesFailed`, `produced` (proposals recorded), `missed`, `verdicts` per bucket, `tokens` and `usd`. The proposals show on `/admin/labels` under each waiting label; the ruling stays the operator's.
-
-## Provisional
-
-Per the RFC, the box round counts as provisional until the operator has used two of its rounds. Keep the RFC until then.
 
 ## Box activation is OPERATOR-GATED
 

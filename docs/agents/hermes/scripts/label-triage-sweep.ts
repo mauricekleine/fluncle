@@ -560,9 +560,9 @@ Your ONLY fetcher is \`fluncle admin labels evidence <mb_label_id> --json\`. It 
 
 ## Buckets
 - **dnb** — predominantly drum & bass or jungle (any subgenre), or a mixed label whose census RAW off-lane first-credit share is ≤ 0.15, with \`block\` rules for the off-lane acts.
-- **not_dnb** — clearly another genre, or a major/subsidiary/distributor/aggregator/reissue house/compilation mill.
-- **dnb_partial** — mostly off-lane, with DnB acts whose own records deserve the archive: \`allow\` rules only.
-- **unclear** — the operator's call. Set \`reason\`: \`conflation\` when one MBID holds two real labels (name the strands in \`conflation\`; never rule through it), \`mixed\` when the census cannot carve it (raw share above 0.15 and no partial case), \`thin\` when no rung of the ladder answers.
+- **not_dnb** — clearly another genre, or a major/subsidiary/distributor/aggregator/reissue house/compilation mill. Also a mixed label whose census RAW share is above 0.15 and whose in-lane first credits are incidental, and a conflated MBID none of whose strands is drum & bass (disabling it loses nothing).
+- **dnb_partial** — census RAW share above 0.15, with in-lane acts that carry first credits: \`allow\` rules for each of them, nothing else.
+- **unclear** — the operator's call, and only for three cases. Set \`reason\`: \`conflation\` when one MBID holds two real labels AND one of them is drum & bass (name the strands in \`conflation\`; never rule through it), \`mixed\` when the raw and residual shares straddle 0.15 or the census caveat leaves the share unreliable, \`thin\` when no rung of the ladder answers.
 
 ## Census rails (only for two-sided labels)
 1. Imprint child first: when \`labelRelations\` shows a child imprint covering the boundary, name it in \`imprintChild\` and propose no rules.
