@@ -134,3 +134,116 @@ describe("mbFetch outcome", () => {
     expect(unavailable.status).toBeUndefined();
   });
 });
+
+function unavailable(retryAfterSeconds: number): Response {
+  return new Response(null, {
+    headers: { "Retry-After": String(retryAfterSeconds) },
+    status: 503,
+  });
+}
+
+function loggedEvents(): { event: string; outcome?: string; attempt?: number }[] {
+  return [vi.mocked(console.info), vi.mocked(console.warn)].flatMap((spy) =>
+    spy.mock.calls.map(([line]) => JSON.parse(String(line))),
+  );
+}
+
+describe("mbFetch 503 handling", () => {
+  const context = { nodeKind: "label", requestKind: "label_browse" } as const;
+
+  beforeEach(() => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  it("waits out Retry-After, then returns the body", async () => {
+    setMusicbrainzRateLimitForTests(10);
+    const fetchTimes: number[] = [];
+    const responses = [unavailable(3), jsonResponse({ ok: true })];
+    globalThis.fetch = vi.fn(() => {
+      fetchTimes.push(Date.now());
+
+      return Promise.resolve(responses.shift() as Response);
+    }) as unknown as typeof fetch;
+
+    const pending = mbFetch<{ ok: boolean }>("/label/busy", context);
+    await settle();
+    await vi.advanceTimersByTimeAsync(3000);
+
+    await expect(pending).resolves.toEqual({ data: { ok: true }, rateLimited: false, status: 200 });
+    expect((fetchTimes[1] ?? 0) - (fetchTimes[0] ?? 0)).toBeGreaterThanOrEqual(3000);
+    expect(loggedEvents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event: "crawl.musicbrainz-request", outcome: "retry_503" }),
+        expect.objectContaining({ attempt: 1, event: "musicbrainz.retry", retryAfterSeconds: 3 }),
+        expect.objectContaining({ event: "crawl.musicbrainz-request", outcome: "body" }),
+      ]),
+    );
+  });
+
+  it("reports rateLimited after the third 503, recording two retries and one throttle", async () => {
+    setMusicbrainzRateLimitForTests(0);
+    globalThis.fetch = vi.fn(() => Promise.resolve(unavailable(1))) as unknown as typeof fetch;
+
+    const pending = mbFetch("/label/down", context);
+    await vi.advanceTimersByTimeAsync(10);
+    const result = await pending;
+    const outcomes = loggedEvents()
+      .filter((line) => line.event === "crawl.musicbrainz-request")
+      .map((line) => line.outcome);
+
+    expect(result).toEqual({ data: null, rateLimited: true, status: 503 });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+    expect(outcomes).toEqual(["retry_503", "retry_503", "throttled"]);
+  });
+
+  it("treats a request that outlives the 15s timeout as a network error", async () => {
+    setMusicbrainzRateLimitForTests(0);
+    globalThis.fetch = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+    ) as unknown as typeof fetch;
+
+    const pending = mbFetch("/label/hung", context);
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await expect(pending).resolves.toEqual({ data: null, rateLimited: false });
+    expect(loggedEvents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event: "crawl.musicbrainz-request", outcome: "network_error" }),
+      ]),
+    );
+  });
+});
+
+describe("mbFetch stalled body", () => {
+  it("aborts and rejects when the body stalls after the headers arrive", async () => {
+    setMusicbrainzRateLimitForTests(0);
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    let aborted = false;
+    globalThis.fetch = vi.fn((_url: string, init?: RequestInit) => {
+      const body = new ReadableStream({
+        start(controller) {
+          init?.signal?.addEventListener("abort", () => {
+            aborted = true;
+            controller.error(new DOMException("aborted", "AbortError"));
+          });
+        },
+      });
+
+      return Promise.resolve(new Response(body, { status: 200 }));
+    }) as unknown as typeof fetch;
+
+    const pending = mbFetch("/label/stalled", { nodeKind: "label", requestKind: "label_browse" });
+    const settled = pending.then(
+      () => "resolved",
+      () => "rejected",
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await expect(settled).resolves.toBe("rejected");
+    expect(aborted).toBe(true);
+  });
+});
