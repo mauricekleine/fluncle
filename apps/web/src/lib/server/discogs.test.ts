@@ -627,6 +627,24 @@ describe("fetchDiscogsReleaseFacts", () => {
       rateLimited: true,
     });
   });
+
+  it("keeps the quota signal when an exhausted-quota response has a truncated body", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mockFetch([
+      {
+        match: `${DISCOGS_RELEASE}46`,
+        response: new Response('{"id": 46, "title"', {
+          headers: { "X-Discogs-Ratelimit-Remaining": "0" },
+          status: 200,
+        }),
+      },
+    ]);
+
+    expect(await fetchDiscogsReleaseFacts(46, "test-token")).toEqual({
+      found: false,
+      rateLimited: true,
+    });
+  });
 });
 
 describe("parseDiscogsLabelUrl", () => {

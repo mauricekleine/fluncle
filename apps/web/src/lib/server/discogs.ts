@@ -396,15 +396,21 @@ function discogsFetch<T>(
         const { body, response } = yield* discogsGet(
           `${DISCOGS_API_ROOT}${path}`,
           token,
-          (candidate) => (candidate.ok ? (candidate.json() as Promise<T>) : undefined),
-        );
-        const remainingHeader = response.headers.get("X-Discogs-Ratelimit-Remaining");
-        const remaining = remainingHeader === null ? Number.NaN : Number(remainingHeader);
+          (candidate) => {
+            const remainingHeader = candidate.headers.get("X-Discogs-Ratelimit-Remaining");
+            const remaining = remainingHeader === null ? Number.NaN : Number(remainingHeader);
 
-        if (signal && ((Number.isFinite(remaining) && remaining <= 1) || response.status === 429)) {
-          signal.hit = true;
-          signal.vendor = "discogs";
-        }
+            if (
+              signal &&
+              ((Number.isFinite(remaining) && remaining <= 1) || candidate.status === 429)
+            ) {
+              signal.hit = true;
+              signal.vendor = "discogs";
+            }
+
+            return candidate.ok ? (candidate.json() as Promise<T>) : undefined;
+          },
+        );
 
         if (!response.ok) {
           yield* Effect.logWarning("discogs.request-failed").pipe(
