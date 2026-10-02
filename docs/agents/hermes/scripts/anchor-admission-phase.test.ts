@@ -43,7 +43,7 @@ async function until(predicate: () => boolean, timeoutMs = 5000): Promise<void> 
   }
 }
 
-async function rig(options: { paid?: boolean } = {}) {
+async function rig(options: { paid?: boolean; pausePortWrite?: boolean } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "anchor-admission-phase-"));
   temporaryDirectories.push(directory);
   writeFileSync(join(directory, "actor-list-clock"), String(Date.now()));
@@ -54,7 +54,7 @@ async function rig(options: { paid?: boolean } = {}) {
   writeFileSync(
     serverPath,
     `import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const directory = process.argv[2] ?? "";
 const at = (name: string) => join(directory, name);
@@ -258,15 +258,46 @@ const server = Bun.serve({ port: 0, async fetch(request) {
   if (path.endsWith("/telemetry/runs")) return json({ ok: true });
   return new Response("unknown fixture path", { status: 404 });
 }});
-writeFileSync(at("port"), String(server.port));
+writeFileSync(at("port.tmp"), String(server.port));
+renameSync(at("port.tmp"), at("port"));
 `,
   );
-  const server = Bun.spawn([process.execPath, serverPath, directory], {
-    stderr: "pipe",
-    stdout: "pipe",
-  });
+  const preload = join(directory, "pause-port-write.cjs");
+  if (options.pausePortWrite) {
+    writeFileSync(
+      preload,
+      `const fs = require("node:fs");
+const original = fs.writeFileSync;
+fs.writeFileSync = function (path, data, ...args) {
+  if (typeof path === "string" && /\\/port(?:\\.tmp)?$/.test(path)) {
+    const fd = fs.openSync(path, "w");
+    original(${JSON.stringify(join(directory, "port-write-started"))}, "1");
+    while (!fs.existsSync(${JSON.stringify(join(directory, "release-port-write"))})) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+    try { return original(fd, data, ...args); }
+    finally { fs.closeSync(fd); }
+  }
+  return original(path, data, ...args);
+};
+`,
+    );
+  }
+  const server = Bun.spawn(
+    [
+      process.execPath,
+      ...(options.pausePortWrite ? ["--preload", preload] : []),
+      serverPath,
+      directory,
+    ],
+    {
+      stderr: "pipe",
+      stdout: "pipe",
+    },
+  );
   servers.push(server);
   await until(() => existsSync(join(directory, "port")));
+  const baseUrl = `http://127.0.0.1:${readFileSync(join(directory, "port"), "utf8")}`;
   writeFileSync(join(directory, "lease"), "free");
   const runner = join(directory, "runner");
   executable(
@@ -305,10 +336,10 @@ exit "$status"`,
       APIFY_API_TOKEN: "fixture-apify-token",
       BUN_BIN: process.execPath,
       DATABASE_ADMISSION_RUNNER: runner,
-      FLUNCLE_ANCHOR_APIFY_BASE_URL: `http://127.0.0.1:${readFileSync(join(directory, "port"), "utf8")}`,
+      FLUNCLE_ANCHOR_APIFY_BASE_URL: baseUrl,
       FLUNCLE_ANCHOR_ISRC_WINDOW_UTC: "0-24",
       FLUNCLE_ANCHOR_PROGRESS_DIR: join(directory, "paid-progress"),
-      FLUNCLE_API_BASE_URL: `http://127.0.0.1:${readFileSync(join(directory, "port"), "utf8")}`,
+      FLUNCLE_API_BASE_URL: baseUrl,
       FLUNCLE_API_TOKEN: "fixture-agent-token",
       HEALTHCHECK_CRON_OUTPUT_DIR: join(directory, "markers"),
       HOME: join(directory, "home"),
@@ -316,6 +347,29 @@ exit "$status"`,
     runner,
   };
 }
+
+test("fixture readiness publishes a complete port before the sweep starts", async () => {
+  const pending = rig({ pausePortWrite: true });
+  const directory = temporaryDirectories.at(-1);
+  if (!directory) {
+    throw new Error("missing anchor fixture directory");
+  }
+  try {
+    await until(() => existsSync(join(directory, "port-write-started")));
+    expect(existsSync(join(directory, "port"))).toBe(false);
+  } finally {
+    writeFileSync(join(directory, "release-port-write"), "1");
+    await pending;
+  }
+  const fixture = await pending;
+  const result = Bun.spawnSync(["bash", SCRIPT, "--limit", "1"], {
+    env: fixture.environment,
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  expect(result.exitCode, result.stderr.toString()).toBe(0);
+  expect(JSON.parse(result.stdout.toString())).toMatchObject({ ok: true, produced: 1 });
+}, 15_000);
 
 test(
   "a slow anchor probe leaves the lease free for a sibling phase",

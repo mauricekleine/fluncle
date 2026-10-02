@@ -135,3 +135,7 @@ The repo carries the scripts, the timer units, this doc, and the `/status` regis
 **It is already on /status.** `cron.anchor` is registered in `@fluncle/registry` and in the `fluncle-healthcheck` prober's `AUTOMATION_CRONS`, so the moment the timer runs its first tick the `/status` row goes live. Nothing further to wire.
 
 The committed timer runs up to **100** exact-ISRC asks per tick at **all hours** (`FLUNCLE_ANCHOR_ISRC_ASK_LIMIT=100`, empty `FLUNCLE_ANCHOR_ISRC_WINDOW_UTC`). The script fallbacks of 25 and `0-8` apply only to direct invocations without the unit environment. The Worker enforces an atomic 700-call UTC-day anchor budget across searches, ListenBrainz by-id reads, and album pages; the shared 24-call/30-second meter also fails closed for this optional work. When the global quota hold or anchor daily budget is active, the preflight selects prior-ask or quota-paid work without Spotify probes; rows that need a new Spotify ask keep their turn.
+
+## Local tests
+
+Run `bun test docs/agents/hermes/scripts/anchor-admission-phase.test.ts` for the phase fixtures, then `bun run test:scripts:box` for the box-script suite. Run them serially. The fixture server publishes its bound port by writing a temporary file and renaming it into place; the ready filename therefore exposes only the complete port. The startup regression pauses the writer after file creation, checks that readiness is still absent, then releases the write and runs the sweep against the published endpoint.
