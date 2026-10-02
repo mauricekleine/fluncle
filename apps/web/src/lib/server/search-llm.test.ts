@@ -226,3 +226,12 @@ describe("filter translation deadlines and diagnostics", () => {
     );
   });
 });
+
+it("returns null without a warning for a valid reply with no filters", async () => {
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+  fetchMock.mockResolvedValue(reply("{}"));
+
+  await expect(translateQuery("anything")).resolves.toBeNull();
+  expect(captureCostEvents).toHaveBeenCalledTimes(1);
+  expect(warning).not.toHaveBeenCalled();
+});

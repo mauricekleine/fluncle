@@ -19,29 +19,30 @@ type OpenRouterChatResponse = {
   usage?: { completion_tokens?: number; cost?: number; prompt_tokens?: number };
 };
 
-export function parseFilterReply(content: string): SearchFilters | null {
+function decodeFilterReply(content: string): SearchFilters | null {
   const start = content.indexOf("{");
   const end = content.lastIndexOf("}");
 
   if (start === -1 || end <= start) {
-    return null;
+    throw new Error("Missing filter object");
   }
 
-  let raw: unknown;
-
-  try {
-    raw = JSON.parse(content.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-
+  const raw: unknown = JSON.parse(content.slice(start, end + 1));
   const parsed = SearchFiltersSchema.safeParse(raw);
 
   if (!parsed.success) {
-    return null;
+    throw parsed.error;
   }
 
   return Object.values(parsed.data).some((value) => value !== undefined) ? parsed.data : null;
+}
+
+export function parseFilterReply(content: string): SearchFilters | null {
+  try {
+    return decodeFilterReply(content);
+  } catch {
+    return null;
+  }
 }
 
 class SearchLlmTimeout extends Data.TaggedError("SearchLlmTimeout") {}
@@ -152,15 +153,7 @@ export async function translateQuery(query: string): Promise<SearchFilters | nul
   return runServerEffect(
     Effect.try({
       catch: (cause) => new SearchLlmParseFailed({ cause }),
-      try: () => {
-        const filters = parseFilterReply(exchange.content);
-
-        if (!filters) {
-          throw new Error("Invalid or empty filter reply");
-        }
-
-        return filters;
-      },
+      try: () => decodeFilterReply(exchange.content),
     }).pipe(Effect.catch((error) => logSearchFailure(error).pipe(Effect.as(null)))),
   );
 }
