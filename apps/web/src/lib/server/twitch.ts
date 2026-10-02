@@ -1,6 +1,13 @@
+import { Effect } from "effect";
 import { getDb, typedRow } from "./db";
 import { type FetchImpl, readOptionalEnv } from "./env";
 import { ApiError } from "./api-error";
+import {
+  oauthPromise,
+  oauthTokenRequest,
+  refreshOAuthToken,
+  runOAuthEffect,
+} from "./oauth-token-refresh";
 
 const twitchAuthorizeUrl = "https://id.twitch.tv/oauth2/authorize";
 const twitchTokenUrl = "https://id.twitch.tv/oauth2/token";
@@ -63,32 +70,36 @@ export async function buildTwitchAuthUrl(state: string, redirectUri: string): Pr
   return `${twitchAuthorizeUrl}?${params.toString()}`;
 }
 
+const requestTwitchTokenEffect = Effect.fnUntraced(function* (
+  params: Record<string, string>,
+  fetchImpl: FetchImpl = fetch,
+) {
+  const { clientId, clientSecret } = yield* oauthPromise(readTwitchCreds);
+  return yield* oauthTokenRequest<TwitchTokenResponse>(
+    twitchTokenUrl,
+    {
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        ...params,
+      }),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    },
+    "twitch_token_failed",
+    "Twitch token request",
+    fetchImpl,
+    (response, data) =>
+      (response.status === 400 || response.status === 401) &&
+      data?.message === "Invalid refresh token",
+  );
+});
+
 export async function requestTwitchToken(
   params: Record<string, string>,
   fetchImpl: FetchImpl = fetch,
 ): Promise<TwitchTokenResponse> {
-  const { clientId, clientSecret } = await readTwitchCreds();
-  const response = await fetchImpl(twitchTokenUrl, {
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      ...params,
-    }),
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    method: "POST",
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-
-    throw new ApiError(
-      "twitch_token_failed",
-      `Twitch token request failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`,
-      400,
-    );
-  }
-
-  return (await response.json()) as TwitchTokenResponse;
+  return runOAuthEffect(requestTwitchTokenEffect(params, fetchImpl));
 }
 
 export async function exchangeCodeForTwitchToken(code: string, redirectUri: string): Promise<void> {
@@ -105,34 +116,41 @@ export async function exchangeCodeForTwitchToken(code: string, redirectUri: stri
   await upsertTwitchAuth(data.access_token, data.refresh_token, data.expires_in, data.scope ?? []);
 }
 
-export async function getTwitchAccessToken(): Promise<string> {
+async function readTwitchAuthRow(): Promise<TwitchAuthRow | undefined> {
   const db = await getDb();
   const result = await db.execute({
     args: ["twitch"],
     sql: `select access_token, refresh_token, expires_at from twitch_auth where service = ? limit 1`,
   });
-  const auth = typedRow<TwitchAuthRow>(result.rows);
+  return typedRow<TwitchAuthRow>(result.rows);
+}
 
-  if (!auth) {
-    throw new ApiError("twitch_not_authenticated", "Twitch is not authenticated", 400);
-  }
-
-  const expiresAt = new Date(auth.expires_at).getTime();
-  const refreshWindowMs = 60_000;
-
-  if (expiresAt - refreshWindowMs > Date.now()) {
-    return auth.access_token;
-  }
-
-  const data = await requestTwitchToken({
-    grant_type: "refresh_token",
-    refresh_token: auth.refresh_token,
+export async function getTwitchAccessToken(): Promise<string> {
+  return refreshOAuthToken({
+    clear: async () => {
+      const db = await getDb();
+      await db.execute({ args: ["twitch"], sql: "delete from twitch_auth where service = ?" });
+    },
+    notAuthenticated: new ApiError("twitch_not_authenticated", "Twitch is not authenticated", 400),
+    read: readTwitchAuthRow,
+    reauthRequired: new ApiError(
+      "twitch_reauth_required",
+      "Twitch needs reconnecting. Reconnect from the board.",
+      401,
+    ),
+    refresh: (auth) =>
+      requestTwitchTokenEffect({ grant_type: "refresh_token", refresh_token: auth.refresh_token }),
+    refreshWindowMs: 60_000,
+    write: async (data, auth) => {
+      await upsertTwitchAuth(
+        data.access_token,
+        data.refresh_token ?? auth.refresh_token,
+        data.expires_in,
+        data.scope ?? [],
+      );
+      return data.access_token;
+    },
   });
-
-  const refreshToken = data.refresh_token ?? auth.refresh_token;
-  await upsertTwitchAuth(data.access_token, refreshToken, data.expires_in, data.scope ?? []);
-
-  return data.access_token;
 }
 
 async function upsertTwitchAuth(

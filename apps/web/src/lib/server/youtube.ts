@@ -1,7 +1,14 @@
+import { Effect } from "effect";
 import { getDb, typedRow } from "./db";
 import { type FetchImpl, readEnvs, readOptionalEnv } from "./env";
-import { logEvent } from "./log";
 import { ApiError } from "./api-error";
+import {
+  oauthPromise,
+  oauthRequest,
+  oauthTokenRequest,
+  refreshOAuthToken,
+  runOAuthEffect,
+} from "./oauth-token-refresh";
 
 const googleAuthBaseUrl = "https://accounts.google.com/o/oauth2/v2/auth";
 const googleTokenUrl = "https://oauth2.googleapis.com/token";
@@ -60,7 +67,7 @@ export async function exchangeCodeForYouTubeToken(code: string): Promise<void> {
   await upsertYouTubeAuth(data.access_token, data.refresh_token, data.expires_in, data.scope);
 }
 
-export async function getYouTubeAccessToken(): Promise<string> {
+async function readYouTubeAuthRow(): Promise<YouTubeAuthRow | undefined> {
   const db = await getDb();
   const result = await db.execute({
     args: ["youtube"],
@@ -69,30 +76,39 @@ export async function getYouTubeAccessToken(): Promise<string> {
       where service = ?
       limit 1`,
   });
-  const auth = typedRow<YouTubeAuthRow>(result.rows);
+  return typedRow<YouTubeAuthRow>(result.rows);
+}
 
-  if (!auth) {
-    throw new ApiError("youtube_not_authenticated", "YouTube is not authenticated", 400);
-  }
-
-  const expiresAt = new Date(auth.expires_at).getTime();
-  const refreshWindowMs = 60_000;
-
-  if (expiresAt - refreshWindowMs > Date.now()) {
-    return auth.access_token;
-  }
-
-  const data = await requestToken({
-    client_id: (await readEnvs(["YOUTUBE_CLIENT_ID"])).YOUTUBE_CLIENT_ID,
-    client_secret: (await readEnvs(["YOUTUBE_CLIENT_SECRET"])).YOUTUBE_CLIENT_SECRET,
-    grant_type: "refresh_token",
-    refresh_token: auth.refresh_token,
+export async function getYouTubeAccessToken(): Promise<string> {
+  return refreshOAuthToken({
+    clear: async () => {
+      const db = await getDb();
+      await db.execute({ args: ["youtube"], sql: "delete from youtube_auth where service = ?" });
+    },
+    notAuthenticated: new ApiError(
+      "youtube_not_authenticated",
+      "YouTube is not authenticated",
+      400,
+    ),
+    read: readYouTubeAuthRow,
+    reauthRequired: new ApiError(
+      "youtube_reauth_required",
+      "YouTube needs reconnecting. Reconnect from the board.",
+      401,
+    ),
+    refresh: (auth) =>
+      requestTokenEffect({ grant_type: "refresh_token", refresh_token: auth.refresh_token }),
+    refreshWindowMs: 60_000,
+    write: async (data, auth) => {
+      await upsertYouTubeAuth(
+        data.access_token,
+        data.refresh_token ?? auth.refresh_token,
+        data.expires_in,
+        data.scope,
+      );
+      return data.access_token;
+    },
   });
-
-  const refreshToken = data.refresh_token ?? auth.refresh_token;
-  await upsertYouTubeAuth(data.access_token, refreshToken, data.expires_in, data.scope);
-
-  return data.access_token;
 }
 
 export function extractYoutubeChannelId(url: string): string | null {
@@ -179,39 +195,46 @@ async function fetchYouTubeStatisticsBatch(
   fetchImpl: FetchImpl,
 ): Promise<Map<string, YouTubeStatistics>> {
   const url = `${youtubeDataVideosUrl}?part=statistics&id=${ids.join(",")}&maxResults=${YOUTUBE_DATA_BATCH}`;
-  const response = await fetchImpl(url, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-    method: "GET",
-  });
+  return runOAuthEffect(
+    oauthRequest(
+      url,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        method: "GET",
+      },
+      async (response) => {
+        if (!response.ok) {
+          const body = await response.text();
 
-  if (!response.ok) {
-    const body = await response.text();
+          throw new ApiError(
+            "youtube_videos_list_failed",
+            `YouTube videos.list failed: ${response.status} ${response.statusText}${body ? ` - ${body.slice(0, 200)}` : ""}`,
+            400,
+          );
+        }
 
-    throw new ApiError(
-      "youtube_videos_list_failed",
-      `YouTube videos.list failed: ${response.status} ${response.statusText}${body ? ` - ${body.slice(0, 200)}` : ""}`,
-      400,
-    );
-  }
+        const json = (await response.json()) as {
+          items?: Array<{ id?: unknown; statistics?: Record<string, unknown> }>;
+        };
+        const stats = new Map<string, YouTubeStatistics>();
 
-  const json = (await response.json()) as {
-    items?: Array<{ id?: unknown; statistics?: Record<string, unknown> }>;
-  };
-  const stats = new Map<string, YouTubeStatistics>();
+        for (const item of json.items ?? []) {
+          if (typeof item.id !== "string") {
+            continue;
+          }
 
-  for (const item of json.items ?? []) {
-    if (typeof item.id !== "string") {
-      continue;
-    }
+          stats.set(item.id, {
+            comments: numberOrNull(item.statistics?.commentCount),
+            likes: numberOrNull(item.statistics?.likeCount),
+            views: numberOrNull(item.statistics?.viewCount),
+          });
+        }
 
-    stats.set(item.id, {
-      comments: numberOrNull(item.statistics?.commentCount),
-      likes: numberOrNull(item.statistics?.likeCount),
-      views: numberOrNull(item.statistics?.viewCount),
-    });
-  }
-
-  return stats;
+        return stats;
+      },
+      fetchImpl,
+    ),
+  );
 }
 
 type YouTubeRetention = {
@@ -236,55 +259,62 @@ async function fetchYouTubeRetention(
     metrics: "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage",
     startDate: YOUTUBE_ANALYTICS_START,
   });
-  const response = await fetchImpl(`${youtubeAnalyticsReportsUrl}?${params.toString()}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-    method: "GET",
-  });
+  return runOAuthEffect(
+    oauthRequest(
+      `${youtubeAnalyticsReportsUrl}?${params.toString()}`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        method: "GET",
+      },
+      async (response) => {
+        if (!response.ok) {
+          const body = await response.text();
 
-  if (!response.ok) {
-    const body = await response.text();
+          throw new ApiError(
+            "youtube_analytics_failed",
+            `YouTube analytics reports failed: ${response.status} ${response.statusText}${body ? ` - ${body.slice(0, 200)}` : ""}`,
+            400,
+          );
+        }
 
-    throw new ApiError(
-      "youtube_analytics_failed",
-      `YouTube analytics reports failed: ${response.status} ${response.statusText}${body ? ` - ${body.slice(0, 200)}` : ""}`,
-      400,
-    );
-  }
+        const json = (await response.json()) as {
+          columnHeaders?: Array<{ name?: string }>;
+          rows?: unknown[][];
+        };
+        const headers = (json.columnHeaders ?? []).map((header) => header.name ?? "");
+        const col = (name: string): number => headers.indexOf(name);
+        const videoCol = col("video");
+        const retention = new Map<string, YouTubeRetention>();
 
-  const json = (await response.json()) as {
-    columnHeaders?: Array<{ name?: string }>;
-    rows?: unknown[][];
-  };
-  const headers = (json.columnHeaders ?? []).map((header) => header.name ?? "");
-  const col = (name: string): number => headers.indexOf(name);
-  const videoCol = col("video");
-  const retention = new Map<string, YouTubeRetention>();
+        if (videoCol < 0) {
+          return retention;
+        }
 
-  if (videoCol < 0) {
-    return retention;
-  }
+        const minutesCol = col("estimatedMinutesWatched");
+        const durationCol = col("averageViewDuration");
+        const percentCol = col("averageViewPercentage");
 
-  const minutesCol = col("estimatedMinutesWatched");
-  const durationCol = col("averageViewDuration");
-  const percentCol = col("averageViewPercentage");
+        for (const row of json.rows ?? []) {
+          const videoId = row[videoCol];
 
-  for (const row of json.rows ?? []) {
-    const videoId = row[videoCol];
+          if (typeof videoId !== "string") {
+            continue;
+          }
 
-    if (typeof videoId !== "string") {
-      continue;
-    }
+          const minutes = minutesCol >= 0 ? numberOrNull(row[minutesCol]) : null;
 
-    const minutes = minutesCol >= 0 ? numberOrNull(row[minutesCol]) : null;
+          retention.set(videoId, {
+            averageViewDurationSeconds: durationCol >= 0 ? numberOrNull(row[durationCol]) : null,
+            averageViewPercentage: percentCol >= 0 ? numberOrNull(row[percentCol]) : null,
+            watchTimeSeconds: minutes === null ? null : Math.round(minutes * 60),
+          });
+        }
 
-    retention.set(videoId, {
-      averageViewDurationSeconds: durationCol >= 0 ? numberOrNull(row[durationCol]) : null,
-      averageViewPercentage: percentCol >= 0 ? numberOrNull(row[percentCol]) : null,
-      watchTimeSeconds: minutes === null ? null : Math.round(minutes * 60),
-    });
-  }
-
-  return retention;
+        return retention;
+      },
+      fetchImpl,
+    ),
+  );
 }
 
 export async function collectYouTubeVideoMetrics(
@@ -323,7 +353,9 @@ export async function collectYouTubeVideoMetrics(
     const endDate = (options.now ?? new Date()).toISOString().slice(0, 10);
     retention = await fetchYouTubeRetention(videoIds, accessToken, fetchImpl, endDate);
   } catch (error) {
-    logEvent("warn", "youtube-metrics.analytics-failed", { error });
+    await runOAuthEffect(
+      Effect.logWarning("youtube-metrics.analytics-failed").pipe(Effect.annotateLogs({ error })),
+    );
   }
 
   return videoIds
@@ -344,30 +376,28 @@ export async function collectYouTubeVideoMetrics(
     });
 }
 
-async function requestToken(params: Record<string, string>): Promise<YouTubeTokenResponse> {
-  const env = await readEnvs(["YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET"]);
-  const response = await fetch(googleTokenUrl, {
-    body: new URLSearchParams({
-      client_id: env.YOUTUBE_CLIENT_ID,
-      client_secret: env.YOUTUBE_CLIENT_SECRET,
-      ...params,
-    }),
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
+const requestTokenEffect = Effect.fnUntraced(function* (params: Record<string, string>) {
+  const env = yield* oauthPromise(() => readEnvs(["YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET"]));
+  return yield* oauthTokenRequest<YouTubeTokenResponse>(
+    googleTokenUrl,
+    {
+      body: new URLSearchParams({
+        client_id: env.YOUTUBE_CLIENT_ID,
+        client_secret: env.YOUTUBE_CLIENT_SECRET,
+        ...params,
+      }),
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      method: "POST",
     },
-    method: "POST",
-  });
+    "youtube_token_failed",
+    "YouTube token request",
+  );
+});
 
-  if (!response.ok) {
-    const body = await response.text();
-    const detail = body
-      ? `${response.status} ${response.statusText} - ${body}`
-      : `${response.status} ${response.statusText}`;
-
-    throw new ApiError("youtube_token_failed", `YouTube token request failed: ${detail}`, 400);
-  }
-
-  return (await response.json()) as YouTubeTokenResponse;
+async function requestToken(params: Record<string, string>): Promise<YouTubeTokenResponse> {
+  return runOAuthEffect(requestTokenEffect(params));
 }
 
 async function upsertYouTubeAuth(
