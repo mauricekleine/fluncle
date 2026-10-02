@@ -1,8 +1,14 @@
-import { waitUntil } from "cloudflare:workers";
+import { Data, Effect } from "effect";
+import { runServerEffect } from "./effect/runtime";
+import { keepAlive } from "./effect/wait-until";
 import { type PushCategory } from "@fluncle/contracts";
 import { logPageUrl } from "../fluncle-links";
 import { getDb, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
+
+class PushDeliveryFailed extends Data.TaggedError("PushDeliveryFailed")<{
+  cause: unknown;
+}> {}
 
 const EXPO_SEND_URL = "https://exp.host/--/api/v2/push/send";
 const EXPO_RECEIPTS_URL = "https://exp.host/--/api/v2/push/getReceipts";
@@ -115,13 +121,15 @@ function scheduleNotify(notification: {
   title: string;
   url: string;
 }): void {
-  const task = fanOut(notification);
-
-  try {
-    waitUntil(task);
-  } catch {
-    void task;
-  }
+  void runServerEffect(
+    keepAlive(
+      "push.notify-failed",
+      Effect.tryPromise({
+        catch: (cause) => new PushDeliveryFailed({ cause }),
+        try: () => fanOut(notification),
+      }),
+    ),
+  );
 }
 
 async function fanOut(notification: {
@@ -131,59 +139,80 @@ async function fanOut(notification: {
   title: string;
   url: string;
 }): Promise<void> {
-  try {
-    const accessToken = await readOptionalEnv("EXPO_ACCESS_TOKEN");
+  const accessToken = await readOptionalEnv("EXPO_ACCESS_TOKEN");
 
-    if (!accessToken) {
-      return;
-    }
+  if (!accessToken) {
+    return;
+  }
 
-    const db = await getDb();
-    const result = await db.execute("select token, muted_json from push_tokens");
-    const tokens = tokensForCategory(typedRows<PushTokenRow>(result.rows), notification.category);
+  const db = await getDb();
+  const result = await db.execute("select token, muted_json from push_tokens");
+  const tokens = tokensForCategory(typedRows<PushTokenRow>(result.rows), notification.category);
 
-    if (tokens.length === 0) {
-      return;
-    }
+  if (tokens.length === 0) {
+    return;
+  }
 
-    const messages: ExpoMessage[] = tokens.map((to) => ({
-      body: notification.body,
-      channelId: notification.channelId,
-      data: { url: notification.url },
-      title: notification.title,
-      to,
-    }));
+  const messages: ExpoMessage[] = tokens.map((to) => ({
+    body: notification.body,
+    channelId: notification.channelId,
+    data: { url: notification.url },
+    title: notification.title,
+    to,
+  }));
 
-    const settled = await Promise.allSettled(
-      chunkMessages(messages).map((chunk) => sendChunk(accessToken, chunk)),
-    );
+  const settled = await Promise.allSettled(
+    chunkMessages(messages).map((chunk) => sendChunk(accessToken, chunk)),
+  );
 
-    const tickets = settled.flatMap((outcome) =>
-      outcome.status === "fulfilled" ? outcome.value : [],
-    );
+  const tickets = settled.flatMap((outcome) =>
+    outcome.status === "fulfilled" ? outcome.value : [],
+  );
 
-    await reapImmediateDeadTokens(db, messages, tickets);
-    await parkReceipts(db, messages, tickets);
-  } catch {}
+  await reapImmediateDeadTokens(db, messages, tickets);
+  await parkReceipts(db, messages, tickets);
+}
+
+function expoRequest<T>(
+  url: string,
+  accessToken: string,
+  body: unknown,
+): Effect.Effect<T | undefined, PushDeliveryFailed> {
+  return Effect.tryPromise({
+    catch: (cause) => new PushDeliveryFailed({ cause }),
+    try: async (signal) => {
+      const response = await fetch(url, {
+        body: JSON.stringify(body),
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+        signal,
+      });
+      return response.ok ? ((await response.json()) as T) : undefined;
+    },
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: "15 seconds",
+      orElse: () =>
+        Effect.fail(new PushDeliveryFailed({ cause: new Error("Expo request timed out") })),
+    }),
+  );
 }
 
 async function sendChunk(accessToken: string, chunk: ExpoMessage[]): Promise<ExpoTicket[]> {
-  const response = await fetch(EXPO_SEND_URL, {
-    body: JSON.stringify(chunk),
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    method: "POST",
-  });
-
-  if (!response.ok) {
-    return [];
-  }
-
-  const body = (await response.json()) as ExpoTicketResponse;
-
-  return body.data ?? [];
+  return runServerEffect(
+    expoRequest<ExpoTicketResponse>(EXPO_SEND_URL, accessToken, chunk).pipe(
+      Effect.map((body) => body?.data ?? []),
+      Effect.catchTag("PushDeliveryFailed", (error) =>
+        Effect.logError("push.send-failed").pipe(
+          Effect.annotateLogs({ error: error.cause }),
+          Effect.as<ExpoTicket[]>([]),
+        ),
+      ),
+    ),
+  );
 }
 
 function ticketToken(messages: ExpoMessage[], index: number): string | undefined {
@@ -262,24 +291,17 @@ export async function sweepPushReceipts(options: {
     return { checked: 0, pending, pruned: 0 };
   }
 
-  let receipts: Record<string, ExpoReceipt> = {};
-
-  try {
-    const response = await fetch(EXPO_RECEIPTS_URL, {
-      body: JSON.stringify({ ids: receiptIds }),
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      method: "POST",
-    });
-
-    if (response.ok) {
-      receipts = ((await response.json()) as ExpoReceiptResponse).data ?? {};
-    }
-  } catch {
-    return { checked: 0, pending, pruned: 0 };
-  }
+  const body = await runServerEffect(
+    expoRequest<ExpoReceiptResponse>(EXPO_RECEIPTS_URL, accessToken, { ids: receiptIds }).pipe(
+      Effect.catchTag("PushDeliveryFailed", (error) =>
+        Effect.logError("push.receipts-failed").pipe(
+          Effect.annotateLogs({ error: error.cause }),
+          Effect.as(undefined),
+        ),
+      ),
+    ),
+  );
+  const receipts = body?.data ?? {};
 
   const deadTokens = new Set<string>();
   const resolvedIds: string[] = [];

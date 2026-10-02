@@ -19,18 +19,24 @@ vi.mock("./db", () => ({
 import { chunkMessages, notifyNewFinding, sweepPushReceipts, tokensForCategory } from "./push";
 
 const FETCH = vi.fn();
+const waitUntil = vi.hoisted(() => vi.fn());
+
+vi.mock("cloudflare:workers", () => ({ waitUntil }));
 
 beforeEach(() => {
   readOptionalEnv.mockReset();
   execute.mockReset();
   batch.mockReset();
   FETCH.mockReset();
+  waitUntil.mockReset();
   batch.mockResolvedValue([]);
   vi.stubGlobal("fetch", FETCH);
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 async function flush(): Promise<void> {
@@ -143,6 +149,20 @@ describe("notifyNewFinding — configured fan-out", () => {
     expect(batch).toHaveBeenCalled();
   });
 
+  it("logs background database failures and registers the task with waitUntil", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    readOptionalEnv.mockResolvedValue("expo_token");
+    execute.mockRejectedValue(new Error("database unavailable"));
+
+    notifyNewFinding({ artists: ["X"], title: "Y" }, "2026.A.01");
+    await flush();
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    await waitUntil.mock.calls[0]?.[0];
+    expect(errorLog.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual([
+      expect.objectContaining({ event: "push.notify-failed" }),
+    ]);
+  });
+
   it("never sends when every device muted the category", async () => {
     readOptionalEnv.mockResolvedValue("expo_token");
     execute.mockResolvedValue({
@@ -230,6 +250,21 @@ describe("sweepPushReceipts — receipts-driven dead-token reaping", () => {
     );
     const tokenDeleteArgs = (tokenDelete?.[0] as { args?: string[] } | undefined)?.args ?? [];
     expect(tokenDeleteArgs).toEqual(["ExponentPushToken[dead]"]);
+  });
+
+  it("leaves receipt and token ledgers intact when the receipt body times out", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    readOptionalEnv.mockResolvedValue("expo_token");
+    execute.mockResolvedValueOnce({ rows: [{ c: 1 }] }).mockResolvedValueOnce({
+      rows: [{ id: "r-pending", token: "ExponentPushToken[a]" }],
+    });
+    FETCH.mockResolvedValue({ json: () => new Promise(() => {}), ok: true });
+    const pending = sweepPushReceipts({ dryRun: false, limit: 100 });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await pending).toEqual({ checked: 0, pending: 1, pruned: 0 });
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(FETCH.mock.calls[0]?.[1].signal.aborted).toBe(true);
   });
 
   it("dry-run reports the would-prune count without deleting", async () => {

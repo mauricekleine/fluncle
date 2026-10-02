@@ -6,6 +6,7 @@ import {
   sendPasswordResetEmail,
   sendFollowDigestEmail,
   sendVerificationEmail,
+  ResendDeliveryError,
 } from "./resend";
 
 vi.mock("./env", () => ({
@@ -31,6 +32,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 function ok(body: unknown = {}): Response {
@@ -145,6 +147,35 @@ describe("sendFollowDigestEmail", () => {
       }),
     ).rejects.toMatchObject({ upstreamStatus: 429 });
   });
+  it.each(["fetch", "body"])(
+    "aborts a stalled %s and preserves the delivery error shape",
+    async (phase) => {
+      vi.useFakeTimers();
+      fetchMock.mockImplementation(async () => {
+        if (phase === "fetch") {
+          return new Promise<Response>(() => {});
+        }
+        return { json: () => new Promise(() => {}), ok: true };
+      });
+      const pending = sendFollowDigestEmail({
+        from: "Fluncle <test@example.com>",
+        headers: {},
+        html: "<p>New releases</p>",
+        idempotencyKey: "follow-digest/test/claim",
+        subject: "Your follows",
+        text: "New releases",
+        to: "one@example.com",
+      });
+      const rejected = pending.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(fetchMock.mock.calls[0]?.[1].signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await rejected;
+      await expect(pending).rejects.toBeInstanceOf(ResendDeliveryError);
+      expect(fetchMock.mock.calls[0]?.[1].signal.aborted).toBe(true);
+    },
+  );
+
   it("sends idempotently with one-click unsubscribe headers", async () => {
     fetchMock.mockResolvedValueOnce(ok({ id: "email_1" }));
     const result = await sendFollowDigestEmail({

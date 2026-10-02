@@ -5,7 +5,14 @@ vi.mock("./env", () => ({
   readOptionalEnv: async () => undefined,
 }));
 
-import { parsePostAnalytics, pushInstagramReel, resolveSocialUrl } from "./postiz";
+import {
+  getDatedPosts,
+  getPostizPostAnalytics,
+  parsePostAnalytics,
+  postizSetReleaseId,
+  pushInstagramReel,
+  resolveSocialUrl,
+} from "./postiz";
 
 const BASE = "https://api.postiz.com/public/v1";
 
@@ -52,6 +59,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("pushInstagramReel", () => {
@@ -242,4 +251,130 @@ describe("parsePostAnalytics", () => {
     expect(result.metrics.views).toBeNull();
     expect(result.metrics.likes).toBeNull();
   });
+});
+
+describe("Postiz decoding", () => {
+  it("repairs literal control characters in JSON strings", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () => new Response('{"posts":[{"id":"post-9","content":"line one\nline two\tend"}]}'),
+      ),
+    );
+    await expect(getDatedPosts()).resolves.toEqual([
+      { content: "line one\nline two\tend", id: "post-9" },
+    ]);
+  });
+
+  it("logs an unrecoverable decode failure and preserves the empty fallback", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("not JSON")),
+    );
+    await expect(getDatedPosts()).resolves.toEqual([]);
+    const events = warn.mock.calls.map(([line]) => JSON.parse(String(line)) as { event: string });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          error: expect.objectContaining({ message: expect.any(String) }),
+          event: "postiz.decode-failed",
+        }),
+      ]),
+    );
+  });
+});
+
+describe("Postiz timeout", () => {
+  it.each(["request", "body"])("aborts a stalled metadata %s after 30 seconds", async (stage) => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | null | undefined;
+    const fetchMock = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal;
+      if (stage === "request") {
+        return new Promise<Response>(() => undefined);
+      }
+      return Promise.resolve(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              signal?.addEventListener("abort", () => controller.error(new Error("aborted")));
+            },
+          }),
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const result = getPostizPostAnalytics("post-9").catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await result).toMatchObject({
+      code: "postiz_timeout",
+      message: "Postiz request timed out",
+      status: 502,
+    });
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("lets a media import exceed the metadata timeout", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/integrations")) {
+          return new Response(JSON.stringify([{ id: "ig-123", identifier: "instagram" }]));
+        }
+        if (url.endsWith("/upload-from-url")) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 60_000));
+          return new Response(JSON.stringify({ id: "media-1", path: "https://cdn/media-1.mp4" }));
+        }
+        return new Response(JSON.stringify([{ postId: "post-9" }]));
+      }),
+    );
+    const result = pushInstagramReel({ caption: "c", videoUrl: "https://cdn/large.mp4" });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(result).resolves.toEqual({ postId: "post-9" });
+  });
+
+  it("aborts a media import that exceeds its 15-minute transfer budget", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | null | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/integrations")) {
+          return new Response(JSON.stringify([{ id: "ig-123", identifier: "instagram" }]));
+        }
+        signal = init?.signal;
+        return new Promise<Response>(() => undefined);
+      }),
+    );
+    const result = pushInstagramReel({ caption: "c", videoUrl: "https://cdn/large.mp4" }).catch(
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    expect(await result).toMatchObject({
+      code: "postiz_timeout",
+      message: "Postiz request timed out",
+      status: 502,
+    });
+    expect(signal?.aborted).toBe(true);
+  });
+});
+
+it("links a release without consuming an unused confirmation body", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new Error("unused confirmation body"));
+            },
+          }),
+        ),
+    ),
+  );
+  await expect(postizSetReleaseId("post-9", "release-9")).resolves.toBeUndefined();
 });
