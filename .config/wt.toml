@@ -1,5 +1,5 @@
 [[pre-start]]
-copy = "wt step copy-ignored"
+copy = "wt step copy-ignored --require-include"
 
 [[pre-start]]
 install = "bun install --frozen-lockfile"
