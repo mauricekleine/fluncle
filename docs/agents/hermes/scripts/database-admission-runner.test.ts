@@ -1373,7 +1373,7 @@ exec /usr/bin/date "$@"`,
           "--",
           "bash",
           "-c",
-          `printf '%s' "$$" > "${payloadMarker}"; while :; do sleep 1; done`,
+          `printf '%s' "$$" > "${payloadMarker}.tmp"; mv "${payloadMarker}.tmp" "${payloadMarker}"; while :; do sleep 1; done`,
         ],
         { env: runnerEnvironment(), stdio: ["ignore", "ignore", "pipe"] },
       );
@@ -1421,7 +1421,7 @@ exec /usr/bin/date "$@"`,
           "--",
           "bash",
           "-c",
-          'trap "" TERM; printf "%s:%s" "$PPID" "$$" > "$1"; while :; do sleep 1; done',
+          'trap "" TERM; printf "%s:%s" "$PPID" "$$" > "${1}.tmp"; mv "${1}.tmp" "$1"; while :; do sleep 1; done',
           "payload",
           payloadMarker,
         ],
@@ -1468,7 +1468,8 @@ exec /usr/bin/date "$@"`,
         `if [ "$#" -eq 3 ] && [ "$1" = "--pdeathsig" ] && [ "$2" = "TERM" ] && [ "$3" = "true" ]; then
   exit 0
 fi
-printf '%s' "$$" > "${setprivStarted}"
+printf '%s' "$$" > "${setprivStarted}.tmp"
+mv "${setprivStarted}.tmp" "${setprivStarted}"
 while [ ! -e "${finishSetpriv}" ]; do sleep 0.01; done
 shift 2
 printf exec > "${setprivExecStarted}"
