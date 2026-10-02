@@ -1,3 +1,5 @@
+import { makeBreaker, makeCallWindow, type BreakerPatch } from "./breaker";
+import { runServerEffect } from "./effect/runtime";
 import { getSetting, setSetting } from "./settings";
 
 export const APPLE_BREAKER_TRIPPED_AT_KEY = "apple_auth_breaker_tripped_at";
@@ -18,35 +20,28 @@ export const APPLE_CALL_WINDOW_MAX = 18;
 
 export type AppleAuthOutcome = "auth_failure" | "ok" | "other";
 
-function parseCount(raw: string | undefined, fallback = 0): number {
-  if (raw === undefined || !/^\d+$/.test(raw.trim())) {
-    return fallback;
-  }
-
-  const parsed = Number(raw.trim());
-
-  return Number.isSafeInteger(parsed) ? parsed : fallback;
-}
+const breaker = makeBreaker({
+  cooldownMs: APPLE_BREAKER_COOLDOWN_MS,
+  maxFailures: APPLE_BREAKER_MAX_AUTH_FAILURES,
+});
+const callWindow = makeCallWindow(APPLE_CALL_WINDOW_MS);
 
 export function appleBreakerVerdict(input: { now: number; trippedAt: string | null }): {
   cooldownRemainingMs: number;
   tripped: boolean;
 } {
-  if (!input.trippedAt) {
-    return { cooldownRemainingMs: 0, tripped: false };
-  }
+  const { cooldownRemainingMs, tripped } = breaker.verdict(input.now, input.trippedAt);
 
-  const trippedMs = Date.parse(input.trippedAt);
+  return { cooldownRemainingMs, tripped };
+}
 
-  if (!Number.isFinite(trippedMs)) {
-    return { cooldownRemainingMs: 0, tripped: false };
-  }
-
-  const remaining = APPLE_BREAKER_COOLDOWN_MS - (input.now - trippedMs);
-
-  return remaining > 0
-    ? { cooldownRemainingMs: remaining, tripped: true }
-    : { cooldownRemainingMs: 0, tripped: false };
+async function persistBreakerPatch(patch: BreakerPatch): Promise<void> {
+  await Promise.all([
+    setSetting(APPLE_BREAKER_FAILURES_KEY, patch.failures),
+    ...(patch.trippedAt === undefined
+      ? []
+      : [setSetting(APPLE_BREAKER_TRIPPED_AT_KEY, patch.trippedAt)]),
+  ]);
 }
 
 export type AppleBreakerState = {
@@ -65,7 +60,7 @@ export async function getAppleBreakerState(now: number = Date.now()): Promise<Ap
   const verdict = appleBreakerVerdict({ now, trippedAt: trippedAt ?? null });
 
   return {
-    consecutiveAuthFailures: parseCount(failures),
+    consecutiveAuthFailures: breaker.failureCount({ failures }, now),
     cooldownRemainingMs: verdict.cooldownRemainingMs,
     tripped: verdict.tripped,
     trippedAt: verdict.tripped ? (trippedAt ?? null) : null,
@@ -84,34 +79,18 @@ export async function recordAppleAuthOutcome(
     return;
   }
 
-  if (outcome === "ok") {
-    await Promise.all([
-      setSetting(APPLE_BREAKER_FAILURES_KEY, "0"),
-      setSetting(APPLE_BREAKER_TRIPPED_AT_KEY, ""),
-    ]);
+  const patch =
+    outcome === "ok"
+      ? breaker.reset
+      : await runServerEffect(
+          breaker.recordFailure({ failures: await getSetting(APPLE_BREAKER_FAILURES_KEY) }, now),
+        );
 
-    return;
-  }
-
-  const failures = parseCount(await getSetting(APPLE_BREAKER_FAILURES_KEY)) + 1;
-
-  if (failures >= APPLE_BREAKER_MAX_AUTH_FAILURES) {
-    await Promise.all([
-      setSetting(APPLE_BREAKER_TRIPPED_AT_KEY, new Date(now).toISOString()),
-      setSetting(APPLE_BREAKER_FAILURES_KEY, "0"),
-    ]);
-
-    return;
-  }
-
-  await setSetting(APPLE_BREAKER_FAILURES_KEY, String(failures));
+  await persistBreakerPatch(patch);
 }
 
 export async function resetAppleBreaker(): Promise<AppleBreakerState> {
-  await Promise.all([
-    setSetting(APPLE_BREAKER_TRIPPED_AT_KEY, ""),
-    setSetting(APPLE_BREAKER_FAILURES_KEY, "0"),
-  ]);
+  await persistBreakerPatch(breaker.reset);
 
   return getAppleBreakerState();
 }
@@ -122,13 +101,7 @@ export async function readAppleCallCount(now: number = Date.now()): Promise<numb
     getSetting(APPLE_CALLS_WINDOW_COUNT_KEY),
   ]);
 
-  const startMs = start ? Date.parse(start) : Number.NaN;
-
-  if (!Number.isFinite(startMs) || now - startMs >= APPLE_CALL_WINDOW_MS) {
-    return 0;
-  }
-
-  return parseCount(count);
+  return callWindow.count(start, count, now);
 }
 
 export async function isAppleCallBudgetAvailable(now: number = Date.now()): Promise<boolean> {
@@ -141,16 +114,10 @@ export async function recordAppleCall(now: number = Date.now()): Promise<void> {
     getSetting(APPLE_CALLS_WINDOW_COUNT_KEY),
   ]);
 
-  const startMs = start ? Date.parse(start) : Number.NaN;
+  const patch = await runServerEffect(callWindow.record(start, count, now));
 
-  if (!Number.isFinite(startMs) || now - startMs >= APPLE_CALL_WINDOW_MS) {
-    await Promise.all([
-      setSetting(APPLE_CALLS_WINDOW_START_KEY, new Date(now).toISOString()),
-      setSetting(APPLE_CALLS_WINDOW_COUNT_KEY, "1"),
-    ]);
-
-    return;
-  }
-
-  await setSetting(APPLE_CALLS_WINDOW_COUNT_KEY, String(parseCount(count) + 1));
+  await Promise.all([
+    setSetting(APPLE_CALLS_WINDOW_COUNT_KEY, patch.count),
+    ...(patch.start === undefined ? [] : [setSetting(APPLE_CALLS_WINDOW_START_KEY, patch.start)]),
+  ]);
 }

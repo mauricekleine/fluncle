@@ -1,3 +1,5 @@
+import { Data, Effect } from "effect";
+import { runServerEffect } from "./effect/runtime";
 import { appleCatalogLookupByIsrcs } from "./apple-music";
 import {
   areAppleCallsAllowed,
@@ -15,6 +17,13 @@ export type LivePreviewTrack = {
 };
 
 const APPLE_EXACT_PREVIEW_TIMEOUT_MS = 2500;
+const PREVIEW_REQUEST_TIMEOUT_MS = 15_000;
+
+class ApplePreviewTimedOut extends Data.TaggedError("ApplePreviewTimedOut") {}
+
+class PreviewRequestFailed extends Data.TaggedError("PreviewRequestFailed")<{
+  cause: unknown;
+}> {}
 
 export async function fetchLivePreview(
   track: LivePreviewTrack,
@@ -69,30 +78,57 @@ export async function resolveAppleExactPreviewUrl(
     return undefined;
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const outcome = await runServerEffect(
+    Effect.tryPromise({
+      catch: (cause) => new PreviewRequestFailed({ cause }),
+      try: (signal) => appleCatalogLookupByIsrcs([isrc], signal),
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: timeoutMs,
+        orElse: () => Effect.fail(new ApplePreviewTimedOut()),
+      }),
+      Effect.catchTags({
+        ApplePreviewTimedOut: () =>
+          Effect.succeed({ authFailed: false, configured: true, ok: false } as const),
+        PreviewRequestFailed: (error) => Effect.die(error.cause),
+      }),
+    ),
+  );
 
-  try {
-    const outcome = await appleCatalogLookupByIsrcs([isrc], controller.signal);
-
-    if (!outcome.configured) {
-      return undefined;
-    }
-
-    await recordAppleCall(now);
-
-    if (!outcome.ok) {
-      await recordAppleAuthOutcome(outcome.authFailed ? "auth_failure" : "other", now);
-
-      return undefined;
-    }
-
-    await recordAppleAuthOutcome("ok", now);
-
-    return outcome.bundles.get(isrc)?.preview?.url;
-  } finally {
-    clearTimeout(timer);
+  if (!outcome.configured) {
+    return undefined;
   }
+
+  await recordAppleCall(now);
+
+  if (!outcome.ok) {
+    await recordAppleAuthOutcome(outcome.authFailed ? "auth_failure" : "other", now);
+
+    return undefined;
+  }
+
+  await recordAppleAuthOutcome("ok", now);
+
+  return outcome.bundles.get(isrc)?.preview?.url;
+}
+
+function previewRequest<B>(
+  url: string,
+  init: RequestInit,
+  read: (response: Response) => B | Promise<B>,
+): Effect.Effect<B, PreviewRequestFailed> {
+  return Effect.tryPromise({
+    catch: (cause) => new PreviewRequestFailed({ cause }),
+    try: async (signal) => read(await fetch(url, { ...init, signal })),
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: PREVIEW_REQUEST_TIMEOUT_MS,
+      orElse: () =>
+        Effect.fail(
+          new PreviewRequestFailed({ cause: new Error("Live preview request timed out") }),
+        ),
+    }),
+  );
 }
 
 async function fetchUsablePreview(
@@ -103,9 +139,11 @@ async function fetchUsablePreview(
     return undefined;
   }
 
-  const response = await fetch(url, init);
-
-  return response.ok || response.status === 206 ? response : undefined;
+  return runServerEffect(
+    previewRequest(url, init, (response) =>
+      response.ok || response.status === 206 ? response : undefined,
+    ).pipe(Effect.mapError((error) => error.cause)),
+  );
 }
 
 type ItunesHit = {
@@ -126,16 +164,18 @@ async function resolveItunesPreviewUrl(track: LivePreviewTrack): Promise<string 
   }
 
   const term = `${artist} ${track.title.trim()}`;
-  const response = await fetch(
-    `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&limit=10`,
-    { headers: { accept: "application/json" } },
+  const body = await runServerEffect(
+    previewRequest<ItunesResponse | undefined>(
+      `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&limit=10`,
+      { headers: { accept: "application/json" } },
+      (response) => (response.ok ? response.json() : undefined),
+    ).pipe(Effect.mapError((error) => error.cause)),
   );
 
-  if (!response.ok) {
+  if (!body) {
     return undefined;
   }
 
-  const body = (await response.json()) as ItunesResponse;
   let best: { score: number; url: string } | undefined;
 
   for (const hit of body.results ?? []) {
