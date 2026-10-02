@@ -56,7 +56,7 @@ function NewsletterArchivePage() {
           <p className="log-nameplate">The mothership</p>
           <h1 className="log-coordinate log-index-title">Back issues</h1>
           <p className="log-index-intro">
-            Fresh bangers, every Friday, from Fluncle. Every letter I send the crew, kept here for
+            Fresh bangers, every Friday, from Fluncle. I keep every letter I send the crew here, for
             any raver who missed a departure.
           </p>
         </header>

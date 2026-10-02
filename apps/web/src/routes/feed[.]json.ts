@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { logPageUrl, siteUrl } from "../lib/fluncle-links";
 import { bestAlbumCoverUrl } from "../lib/media";
-import { mixtapeCoverUrl } from "../lib/mixtapes";
+import { mixtapeCoverUrl, mixtapeDisplayTitle } from "../lib/mixtapes";
 import { parseArtistsJson } from "../lib/server/artists";
 import { getDb, typedRows } from "../lib/server/db";
 
@@ -72,7 +72,9 @@ export const Route = createFileRoute("/feed.json")({
         const items = rows.map((row) => {
           const artists = parseArtistsJson(row.artists_json);
           const title =
-            row.item_type === "mixtape" ? row.title : `${artists.join(", ")} — ${row.title}`;
+            row.item_type === "mixtape"
+              ? mixtapeDisplayTitle(row.title)
+              : `${artists.join(", ")} — ${row.title}`;
 
           const contentText = [title, row.note?.trim() || undefined, row.spotify_url ?? undefined]
             .filter(Boolean)

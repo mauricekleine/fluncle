@@ -13,11 +13,11 @@ export function entityFreshChannel(
 ): { description: string; title: string } {
   return kind === "artist"
     ? {
-        description: `The freshest from ${name}, hot off the press. Every release from the last 30 days, tracked as Fluncle spins his way through them.`,
+        description: `New drum & bass releases from ${name} in the last 30 days.`,
         title: `New ${name} releases · Fluncle`,
       }
     : {
-        description: `The freshest on ${name}, hot off the press. Every release from the last 30 days, tracked as Fluncle spins his way through them.`,
+        description: `New drum & bass releases on ${name} in the last 30 days.`,
         title: `New releases on ${name} · Fluncle`,
       };
 }

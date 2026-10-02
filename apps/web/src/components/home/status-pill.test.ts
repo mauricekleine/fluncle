@@ -35,11 +35,11 @@ describe("derivePillState", () => {
 
 describe("pillLabel", () => {
   it("rests quiet while loading", () => {
-    expect(pillLabel({ tone: "loading" })).toBe("checking systems");
+    expect(pillLabel({ tone: "loading" })).toBe("Checking systems");
   });
 
   it("reads all-clear when ok", () => {
-    expect(pillLabel({ tone: "ok" })).toBe("all systems operational");
+    expect(pillLabel({ tone: "ok" })).toBe("All systems operational");
   });
 
   it("singularizes a single off service", () => {

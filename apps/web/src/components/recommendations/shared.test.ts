@@ -164,24 +164,24 @@ describe("seedMutationMessage", () => {
       seedMutationMessage({
         body: {
           code: "seed_limit",
-          message: "You can pick up to 12 seeds. Remove one to add another.",
+          message: "You can have up to 12 picks. Remove one to add another.",
           ok: false,
         },
         ok: false,
         status: 409,
       }),
-    ).toBe("You can pick up to 12 seeds. Remove one to add another.");
+    ).toBe("You can have up to 12 picks. Remove one to add another.");
   });
 
   it("falls back to a cap line if a 409 arrives without a message", () => {
     expect(seedMutationMessage({ body: {}, ok: false, status: 409 })).toBe(
-      "You can pick up to 12 seeds. Remove one to add another.",
+      "You can have up to 12 picks. Remove one to add another.",
     );
   });
 
   it("a non-cap failure is a quiet, non-blaming line", () => {
     expect(seedMutationMessage({ body: undefined, ok: false, status: 500 })).toBe(
-      "Could not update your seeds. Try again in a moment.",
+      "Couldn't update your picks. Try again in a moment.",
     );
   });
 });
@@ -221,7 +221,7 @@ describe("mintToastMessage", () => {
   });
 
   it("reuses the mirror's lines verbatim for minted/refreshed/unchanged", () => {
-    expect(mintToastMessage("minted")).toBe("Done. It's on your Spotify.");
+    expect(mintToastMessage("minted")).toBe("Done. The playlist is on your Spotify.");
     expect(mintToastMessage("refreshed")).toBe("Refreshed with your latest picks.");
     expect(mintToastMessage("unchanged")).toBe("Already up to date.");
   });

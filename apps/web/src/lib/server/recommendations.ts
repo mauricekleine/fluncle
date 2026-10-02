@@ -221,7 +221,7 @@ export async function saveRecSeed(
     return jsonError(
       409,
       "seed_limit",
-      `You can pick up to ${MAX_REC_SEEDS} seeds. Remove one to add another.`,
+      `You can have up to ${MAX_REC_SEEDS} picks. Remove one to add another.`,
     );
   }
 

@@ -30,7 +30,7 @@ export const Route = createFileRoute("/device")({
     meta: [
       { title: "Link a device" },
       {
-        content: "Approve a Fluncle CLI sign-in and sync your Galaxy progress from the terminal.",
+        content: "Approve a Fluncle CLI sign-in and take your Galaxy progress to the terminal.",
         name: "description",
       },
 
@@ -104,7 +104,7 @@ function DevicePage() {
             className="text-sm font-semibold text-muted-foreground hover:text-accent-foreground"
             to="/findings"
           >
-            Back to findings
+            Back to the archive
           </Link>
         </header>
 

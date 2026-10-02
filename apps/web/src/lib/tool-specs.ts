@@ -51,7 +51,7 @@ export const FRESH_LIMIT_MAX = 100;
 export const listFindingsSpec = defineSpec({
   access: "public",
   description:
-    "List the most recent findings and mixtapes in Fluncle's drum & bass archive, newest first. Dates mark when each was found or published into the spine.",
+    "List the most recent findings and mixtapes in Fluncle's drum & bass archive, newest first. Dates mark the day Fluncle found each finding or published each mixtape.",
   effect: "read",
   input: z.object({
     limit: z

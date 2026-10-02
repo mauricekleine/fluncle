@@ -50,8 +50,8 @@ export function TrackNotFoundState() {
       action={{ Icon: CaretRightIcon, label: "All tracks", to: "/tracks" }}
       heading="No track at this address"
     >
-      That track didn&apos;t make it back, or it was never out there. Fluncle still holds every
-      track that did.
+      That track didn&apos;t make it back, or it was never out there. The full list has every track
+      that did.
     </StoriesState>
   );
 }

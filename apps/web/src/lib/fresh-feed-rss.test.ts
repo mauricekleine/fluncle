@@ -39,13 +39,11 @@ function itemFor(xml: string, title: string): string {
 describe("entityFreshChannel", () => {
   it("frames an artist feed around the act and a label feed around the roster", () => {
     expect(entityFreshChannel("artist", "Calibre")).toEqual({
-      description:
-        "The freshest from Calibre, hot off the press. Every release from the last 30 days, tracked as Fluncle spins his way through them.",
+      description: "New drum & bass releases from Calibre in the last 30 days.",
       title: "New Calibre releases · Fluncle",
     });
     expect(entityFreshChannel("label", "Signature")).toEqual({
-      description:
-        "The freshest on Signature, hot off the press. Every release from the last 30 days, tracked as Fluncle spins his way through them.",
+      description: "New drum & bass releases on Signature in the last 30 days.",
       title: "New releases on Signature · Fluncle",
     });
   });

@@ -12,7 +12,7 @@ const CLOSE_DELAY_MS = 200;
 
 const COUNT_NOUN: Record<GraphEntityKind, string> = {
   album: "on this record",
-  artist: "from this one",
+  artist: "from this artist",
   galaxy: "out here",
   label: "on this label",
 };
