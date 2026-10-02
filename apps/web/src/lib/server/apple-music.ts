@@ -1,5 +1,6 @@
 import { readOptionalEnv } from "./env";
-import { logEvent } from "./log";
+import { Data, Effect } from "effect";
+import { runServerEffect } from "./effect/runtime";
 
 const CATALOG_SONGS_URL = "https://api.music.apple.com/v1/catalog/us/songs";
 const USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
@@ -138,56 +139,15 @@ export async function appleMusicLookupByIsrc(isrc: string): Promise<AppleMusicLo
   }
 
   const credentials = await readAppleMusicCredentials();
+  const outcome = await runServerEffect(
+    catalogRequest(credentials, `filter%5Bisrc%5D=${encodeURIComponent(clean)}`).pipe(
+      catalogOutcome("apple-music.lookup-failed", { isrc: clean }),
+    ),
+  );
 
-  if (!credentials) {
-    return { configured: false };
-  }
-
-  try {
-    const token = await developerToken(credentials);
-    const url = `${CATALOG_SONGS_URL}?filter%5Bisrc%5D=${encodeURIComponent(clean)}`;
-
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "User-Agent": USER_AGENT,
-      },
-    });
-
-    if (response.status === 429) {
-      return {
-        configured: true,
-        error: `Apple Music request failed: 429 ${response.statusText}`,
-        ok: false,
-        rateLimited: true,
-      };
-    }
-
-    if (!response.ok) {
-      const authFailed = response.status === 401 || response.status === 403;
-
-      if (authFailed) {
-        cachedToken = undefined;
-      }
-
-      return {
-        authFailed,
-        configured: true,
-        error: `Apple Music request failed: ${response.status} ${response.statusText}`,
-        ok: false,
-        rateLimited: false,
-      };
-    }
-
-    const body = await response.json().catch(() => ({}));
-
-    return { configured: true, ok: true, url: extractAppleMusicUrl(body) };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logEvent("error", "apple-music.lookup-failed", { error, isrc: clean });
-
-    return { configured: true, error: message, ok: false, rateLimited: false };
-  }
+  return outcome.configured && outcome.ok
+    ? { configured: true, ok: true, url: extractAppleMusicUrl(outcome.body) }
+    : outcome;
 }
 
 export type AppleArtwork = {
@@ -540,61 +500,136 @@ export type AppleCatalogRequestOutcome =
   | { configured: true; ok: true; body: unknown }
   | { authFailed?: boolean; configured: true; error: string; ok: false; rateLimited: boolean };
 
+const APPLE_REQUEST_TIMEOUT_MS = 15_000;
+
+class AppleNotConfigured extends Data.TaggedError("AppleNotConfigured") {}
+
+class AppleRequestFailed extends Data.TaggedError("AppleRequestFailed")<{
+  cause: unknown;
+}> {}
+
+class AppleAuthFailed extends Data.TaggedError("AppleAuthFailed")<{
+  message: string;
+}> {}
+
+class AppleRateLimited extends Data.TaggedError("AppleRateLimited")<{
+  message: string;
+}> {}
+
+class AppleRejected extends Data.TaggedError("AppleRejected")<{
+  message: string;
+}> {}
+
+function catalogRequest(
+  credentials: AppleMusicCredentials | undefined,
+  query: string,
+  signal?: AbortSignal,
+) {
+  return Effect.gen(function* () {
+    if (!credentials) {
+      return yield* new AppleNotConfigured();
+    }
+
+    const token = yield* Effect.tryPromise({
+      catch: (cause) => new AppleRequestFailed({ cause }),
+      try: () => developerToken(credentials),
+    });
+    const { body, response } = yield* Effect.tryPromise({
+      catch: (cause) => new AppleRequestFailed({ cause }),
+      try: async (requestSignal) => {
+        const response = await fetch(`${CATALOG_SONGS_URL}?${query}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "User-Agent": USER_AGENT,
+          },
+          signal: signal ? AbortSignal.any([signal, requestSignal]) : requestSignal,
+        });
+
+        return {
+          body: response.ok ? await response.json().catch(() => ({})) : undefined,
+          response,
+        };
+      },
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: APPLE_REQUEST_TIMEOUT_MS,
+        orElse: () =>
+          Effect.fail(
+            new AppleRequestFailed({ cause: new Error("Apple Music request timed out") }),
+          ),
+      }),
+    );
+
+    const message = `Apple Music request failed: ${response.status} ${response.statusText}`;
+
+    if (response.status === 429) {
+      return yield* new AppleRateLimited({ message });
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      cachedToken = undefined;
+
+      return yield* new AppleAuthFailed({ message });
+    }
+
+    if (!response.ok) {
+      return yield* new AppleRejected({ message });
+    }
+
+    return { body, configured: true as const, ok: true as const };
+  });
+}
+
+function catalogOutcome(event: string, fields: Record<string, unknown>) {
+  return Effect.catchTags({
+    AppleAuthFailed: (error: AppleAuthFailed) =>
+      Effect.succeed({
+        authFailed: true,
+        configured: true,
+        error: error.message,
+        ok: false,
+        rateLimited: false,
+      } as const),
+    AppleNotConfigured: () => Effect.succeed({ configured: false } as const),
+    AppleRateLimited: (error: AppleRateLimited) =>
+      Effect.succeed({
+        configured: true,
+        error: error.message,
+        ok: false,
+        rateLimited: true,
+      } as const),
+    AppleRejected: (error: AppleRejected) =>
+      Effect.succeed({
+        authFailed: false,
+        configured: true,
+        error: error.message,
+        ok: false,
+        rateLimited: false,
+      } as const),
+    AppleRequestFailed: (error: AppleRequestFailed) =>
+      Effect.logError(event).pipe(
+        Effect.annotateLogs({ ...fields, error: error.cause }),
+        Effect.as({
+          configured: true,
+          error: error.cause instanceof Error ? error.cause.message : String(error.cause),
+          ok: false,
+          rateLimited: false,
+        } as const),
+      ),
+  });
+}
+
 export async function requestAppleCatalog(
   query: string,
   signal?: AbortSignal,
 ): Promise<AppleCatalogRequestOutcome> {
   const credentials = await readAppleMusicCredentials();
 
-  if (!credentials) {
-    return { configured: false };
-  }
-
-  try {
-    const token = await developerToken(credentials);
-
-    const response = await fetch(`${CATALOG_SONGS_URL}?${query}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "User-Agent": USER_AGENT,
-      },
-      signal,
-    });
-
-    if (response.status === 429) {
-      return {
-        configured: true,
-        error: `Apple Music request failed: 429 ${response.statusText}`,
-        ok: false,
-        rateLimited: true,
-      };
-    }
-
-    if (!response.ok) {
-      const authFailed = response.status === 401 || response.status === 403;
-
-      if (authFailed) {
-        cachedToken = undefined;
-      }
-
-      return {
-        authFailed,
-        configured: true,
-        error: `Apple Music request failed: ${response.status} ${response.statusText}`,
-        ok: false,
-        rateLimited: false,
-      };
-    }
-
-    const body = await response.json().catch(() => ({}));
-
-    return { body, configured: true, ok: true };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logEvent("error", "apple-music.catalog-failed", { error, query });
-
-    return { configured: true, error: message, ok: false, rateLimited: false };
-  }
+  return runServerEffect(
+    catalogRequest(credentials, query, signal).pipe(
+      catalogOutcome("apple-music.catalog-failed", { query }),
+    ),
+  );
 }
 
 export type AppleCatalogLookupOutcome =

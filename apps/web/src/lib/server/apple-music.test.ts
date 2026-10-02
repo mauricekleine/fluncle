@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const readOptionalEnv = vi.fn(async (_key: string): Promise<string | undefined> => undefined);
 
@@ -477,6 +477,104 @@ describe("appleCatalogLookupByIsrc / appleCatalogLookupByIsrcs — wired", () =>
       statusText: "",
     })) as unknown as typeof fetch;
   }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    [401, true, false],
+    [403, true, false],
+    [429, undefined, true],
+    [500, false, false],
+  ])(
+    "preserves the lookup and catalog failure shapes for HTTP %s",
+    async (status, authFailed, rateLimited) => {
+      configureCredentials();
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(undefined, { status, statusText: "rejected" }),
+      );
+      const { appleMusicLookupByIsrc, requestAppleCatalog } = await import("./apple-music");
+      const expected = {
+        ...(authFailed === undefined ? {} : { authFailed }),
+        configured: true,
+        error: `Apple Music request failed: ${status} rejected`,
+        ok: false,
+        rateLimited,
+      };
+
+      expect(await appleMusicLookupByIsrc("GB1111111111")).toEqual(expected);
+      expect(await requestAppleCatalog("filter=example")).toEqual(expected);
+    },
+  );
+
+  it("invalidates the cached developer token on auth failure", async () => {
+    configureCredentials();
+    const sign = vi.spyOn(crypto.subtle, "sign");
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock.mockResolvedValueOnce(new Response(undefined, { status: 401 }));
+    fetchMock.mockResolvedValue(Response.json({}));
+    const { requestAppleCatalog } = await import("./apple-music");
+
+    await requestAppleCatalog("first");
+    const before = sign.mock.calls.length;
+    await requestAppleCatalog("second");
+    await requestAppleCatalog("third");
+
+    expect(sign.mock.calls.length - before).toBe(1);
+  });
+
+  it("keeps malformed JSON as a clean miss and network rejection as a failure", async () => {
+    configureCredentials();
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock.mockResolvedValueOnce(new Response("not-json"));
+    fetchMock.mockRejectedValueOnce(new Error("offline"));
+    const { appleMusicLookupByIsrc } = await import("./apple-music");
+
+    expect(await appleMusicLookupByIsrc("GB1111111111")).toEqual({
+      configured: true,
+      ok: true,
+      url: null,
+    });
+    expect(await appleMusicLookupByIsrc("GB1111111111")).toEqual({
+      configured: true,
+      error: "offline",
+      ok: false,
+      rateLimited: false,
+    });
+  });
+
+  it.each(["headers", "body"])(
+    "bounds stalled %s by the catalog deadline and aborts the transport",
+    async (phase) => {
+      await pemForTests();
+      configureCredentials();
+      const { requestAppleCatalog } = await import("./apple-music");
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({}));
+      await requestAppleCatalog("warm-token");
+      vi.useFakeTimers();
+      let signal: AbortSignal | null | undefined;
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+        signal = init?.signal;
+        if (phase === "headers") {
+          return new Promise<Response>(() => {});
+        }
+        return new Response(new ReadableStream());
+      });
+      const pending = requestAppleCatalog("deadline");
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(await pending).toEqual({
+        configured: true,
+        error: "Apple Music request timed out",
+        ok: false,
+        rateLimited: false,
+      });
+      expect(signal?.aborted).toBe(true);
+    },
+  );
 
   it("configured single-ISRC lookup returns the built bundle and hits include=albums", async () => {
     configureCredentials();
