@@ -3,6 +3,7 @@ import { type TrackSearchResult } from "@fluncle/contracts";
 export type { TrackSearchResult };
 
 import { parseSpotifyTrackId } from "../spotify-track-id";
+import { ApiError } from "./api-error";
 import { getDb, typedRow } from "./db";
 import { readEnvs } from "./env";
 import { logEvent } from "./log";
@@ -533,19 +534,6 @@ export async function addTrackToPlaylist(track: TrackMetadata): Promise<void> {
     },
     method: "POST",
   });
-}
-
-export class ApiError extends Error {
-  code: string;
-  status: number;
-  until?: null | string;
-
-  constructor(code: string, message: string, status = 500) {
-    super(message);
-    this.name = "ApiError";
-    this.code = code;
-    this.status = status;
-  }
 }
 
 function selectAlbumImageUrl(images: SpotifyImage[] | undefined): string | undefined {

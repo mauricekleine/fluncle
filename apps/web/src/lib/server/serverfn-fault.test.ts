@@ -3,7 +3,7 @@ import { signGrant } from "./admin-auth";
 import { ADMIN_COOKIE_NAME } from "./env";
 import { GENERIC_SERVERFN_FAULT_MESSAGE, redactServerFnFault } from "./serverfn-fault";
 import { DueWorkMaintenancePendingError } from "./due-work";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const logEvent = vi.fn();
 

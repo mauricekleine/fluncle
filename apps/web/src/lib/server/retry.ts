@@ -1,5 +1,5 @@
 import { formatError } from "@fluncle/contracts/util";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 export { formatError };
 

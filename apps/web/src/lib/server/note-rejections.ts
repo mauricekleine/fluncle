@@ -2,7 +2,7 @@ import { parseArtistsJson } from "./artists";
 import { getSetting, setSetting } from "./settings";
 import { getDb, typedRow, typedRows } from "./db";
 import { NOTE_ECHO_DEFAULTS, type NoteEcho, type NoteEchoThresholds } from "./note";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 import { FINDINGS_FROM } from "./tracks";
 import { fillEmptyNote } from "./track-update";
 

@@ -12,7 +12,7 @@ import { onionUrl, siteUrl, twitchUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
 import { type FeedItem, mixtapeDisplayTitle } from "../mixtapes";
 import { getLiveState, type LiveState } from "./live";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 import { readCoordinate, resourceUri, SHARED_TOOLS, toMcpTool } from "./tools/registry";
 import { searchTracks } from "./track-search";
 import { listTracks } from "./tracks";

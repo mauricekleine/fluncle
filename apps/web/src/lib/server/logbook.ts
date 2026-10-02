@@ -10,7 +10,7 @@ import {
   scoreLogbookEcho,
 } from "./logbook-echo";
 import { maskSubjectNames, scanObservationScript } from "./observation";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const BODY_MIN_PROSE_CHARS = 80;
 const BODY_MAX_CHARS = 12_000;

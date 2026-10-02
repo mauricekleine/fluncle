@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { withRetries } from "./retry";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 describe("withRetries", () => {
   it("retries a transient failure, then returns the eventual success", async () => {

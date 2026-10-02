@@ -1,6 +1,6 @@
 import { type Echo, type NoteEchoThresholds, scoreEcho } from "./note";
 import { getSetting } from "./settings";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const LOGBOOK_ECHO_DEFAULTS: NoteEchoThresholds = {
   maxOverlap: 0.3,

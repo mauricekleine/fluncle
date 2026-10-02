@@ -28,9 +28,9 @@ import { logEvent } from "./log";
 import { resolveLogId } from "./log-id";
 import { notifyNewFinding } from "./push";
 import { formatError, withRetries } from "./retry";
+import { ApiError } from "./api-error";
 import {
   addTrackToPlaylist,
-  ApiError,
   fetchTrackMetadata,
   findSpotifyTrackByIsrc,
   parseSpotifyTrackUrl,

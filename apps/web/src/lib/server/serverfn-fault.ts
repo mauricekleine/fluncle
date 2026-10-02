@@ -2,7 +2,7 @@ import * as Sentry from "@sentry/cloudflare";
 import { adminRole } from "./env";
 import { logEvent } from "./log";
 import { isDueWorkMaintenancePending } from "./due-work";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 export const GENERIC_SERVERFN_FAULT_MESSAGE = "Internal error";
 

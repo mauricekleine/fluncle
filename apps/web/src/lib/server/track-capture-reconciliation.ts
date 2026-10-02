@@ -16,7 +16,7 @@ import {
   executeReceiptBackedOperation,
   type JsonValue,
 } from "./operation-receipts";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 import { checkYoutubeOfficial, type YoutubeOfficialVerdict } from "./youtube-official";
 
 export const CAPTURE_RECONCILIATION_OPERATION_ID = "track.capture" as const;

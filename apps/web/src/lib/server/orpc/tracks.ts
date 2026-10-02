@@ -21,7 +21,7 @@ import {
   readIdentity,
 } from "../identity-envelope";
 import { assertIdentityReadAllowed } from "../identity-dials";
-import { ApiError } from "../spotify";
+import { ApiError } from "../api-error";
 import { apiFault, type Implementer, parseLimit } from "./_shared";
 
 const LIST_DEFAULT_LIMIT = 16;

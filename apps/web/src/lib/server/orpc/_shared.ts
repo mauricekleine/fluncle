@@ -5,7 +5,7 @@ import { isDueWorkMaintenancePending } from "../due-work";
 import { logEvent } from "../log";
 import { type OrpcContext } from "../orpc-context";
 import { type TrackListItem, getTrackByIdOrLogId } from "../tracks";
-import { ApiError } from "../spotify";
+import { ApiError } from "../api-error";
 
 export type Implementer = ReturnType<typeof implement<typeof contract, OrpcContext>>;
 

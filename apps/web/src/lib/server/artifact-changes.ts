@@ -8,7 +8,7 @@ import {
 } from "../../../scripts/lib/device-db-derivation";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRow, typedRows } from "./db";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 export const ARTIFACT_CHANGE_READ_LIMIT = 100;
 export const ARTIFACT_CHANGE_MAX_READ_LIMIT = 500;

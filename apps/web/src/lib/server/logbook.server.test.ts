@@ -131,7 +131,7 @@ describe("createLogbookEntry — the fill-empty-only guarantee", () => {
       { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
     ]);
     const { createLogbookEntry } = await import("./logbook");
-    const { ApiError } = await import("./spotify");
+    const { ApiError } = await import("./api-error");
 
     await expect(
       createLogbookEntry(36, {
@@ -149,7 +149,7 @@ describe("createLogbookEntry — the fill-empty-only guarantee", () => {
       { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
     ]);
     const { createLogbookEntry } = await import("./logbook");
-    const { ApiError } = await import("./spotify");
+    const { ApiError } = await import("./api-error");
 
     await expect(
       createLogbookEntry(36, { body: "[[036.7.2I]]\n\n[[037.1.9A]]", title: "Sector 036" }),
@@ -272,7 +272,7 @@ describe("updateLogbookEntry — the operator overwrite", () => {
       { match: /where sector = \?/, rows: () => [{ ...EXISTING_ROW, title: "A slow drift" }] },
     ]);
     const { updateLogbookEntry } = await import("./logbook");
-    const { ApiError } = await import("./spotify");
+    const { ApiError } = await import("./api-error");
 
     await expect(
       updateLogbookEntry(36, { body: CLEAN_BODY, title: "A Slow Drift" }),

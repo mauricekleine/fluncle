@@ -36,7 +36,8 @@ import { resolveLogPageTarget } from "../log-resolver";
 import { subscribeToNewsletter } from "../newsletter";
 import { chargeRateLimit } from "../rate-limit";
 import { searchArchive } from "../search";
-import { ApiError, parseSpotifyTrackUrl } from "../spotify";
+import { ApiError } from "../api-error";
+import { parseSpotifyTrackUrl } from "../spotify";
 import { getServiceStatuses, type ServiceHealthStatus } from "../status";
 import { createSubmission } from "../submissions";
 import {

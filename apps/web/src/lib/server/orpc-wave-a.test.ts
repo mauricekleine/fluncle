@@ -267,7 +267,7 @@ describe("oRPC public write — POST /submissions (submit_track)", () => {
   });
 
   it("carries the validation ApiError code/status (invalid_request/400) byte-for-byte", async () => {
-    const { ApiError } = await import("./spotify");
+    const { ApiError } = await import("./api-error");
     createSubmission.mockRejectedValueOnce(
       new ApiError("invalid_request", "Text fields must be 500 characters or less", 400),
     );
@@ -286,7 +286,7 @@ describe("oRPC public write — POST /submissions (submit_track)", () => {
   });
 
   it("carries the rate_limited ApiError (429) byte-for-byte", async () => {
-    const { ApiError } = await import("./spotify");
+    const { ApiError } = await import("./api-error");
     createSubmission.mockRejectedValueOnce(
       new ApiError(
         "rate_limited",
@@ -322,7 +322,7 @@ describe("oRPC public write — POST /newsletter (subscribe_newsletter)", () => 
   });
 
   it("carries the invalid_email ApiError code/status (400) byte-for-byte", async () => {
-    const { ApiError } = await import("./spotify");
+    const { ApiError } = await import("./api-error");
     subscribeToNewsletter.mockRejectedValueOnce(
       new ApiError("invalid_email", "Enter a valid email address.", 400),
     );

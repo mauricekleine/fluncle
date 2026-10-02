@@ -8,7 +8,7 @@ import {
   type OperationReceiptInspection,
 } from "../operation-receipts";
 import { adminAuth, operatorGuard } from "../orpc-auth";
-import { ApiError } from "../spotify";
+import { ApiError } from "../api-error";
 import { type Implementer, toFault } from "./_shared";
 
 function inspectionSummary(inspection: OperationReceiptInspection) {

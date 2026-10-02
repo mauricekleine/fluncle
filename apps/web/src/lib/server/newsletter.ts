@@ -2,7 +2,7 @@ import { type NewsletterBody } from "@fluncle/contracts/orpc";
 import { getPublicSession } from "./public-auth";
 import { assertRateLimit } from "./rate-limit";
 import { addContactToSegment } from "./resend";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const rateLimitWindowMs = 60 * 60 * 1000;
 const rateLimitMaxAttempts = 5;

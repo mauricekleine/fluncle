@@ -48,7 +48,7 @@ import {
   markDueWorkSourceMaintenanceStatements,
   markDueWorkSourceRepairsFromSelectStatement,
 } from "./due-work";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 import { extractYoutubeVideoId } from "./youtube";
 import { checkYoutubeOfficial } from "./youtube-official";
 import { upsertTrackDuplicateKeyStatement } from "./track-duplicate-keys";

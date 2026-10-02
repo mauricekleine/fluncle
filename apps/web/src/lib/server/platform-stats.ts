@@ -4,7 +4,8 @@ import { logEvent } from "./log";
 import { getPostizPlatformAnalytics, type PostizMetric } from "./postiz";
 import { countSegmentRecipients } from "./resend";
 import { clampSnapshotWindow } from "./snapshot-window";
-import { ApiError, fetchPlaylistFollowerCount } from "./spotify";
+import { ApiError } from "./api-error";
+import { fetchPlaylistFollowerCount } from "./spotify";
 import { getTwitchAccessToken, readTwitchClientId } from "./twitch";
 
 export type { FetchImpl };

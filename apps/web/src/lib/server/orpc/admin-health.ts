@@ -4,7 +4,7 @@ import { type contract } from "@fluncle/contracts/orpc";
 import { getDb } from "../db";
 import { getHealthSnapshotReceiptCutoverDispositionFor } from "../health-receipt-cutover";
 import { adminAuth } from "../orpc-auth";
-import { ApiError } from "../spotify";
+import { ApiError } from "../api-error";
 import {
   healthSnapshotOperationKey,
   healthSnapshotRequestDigest,

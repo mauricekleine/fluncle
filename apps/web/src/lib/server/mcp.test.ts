@@ -116,7 +116,7 @@ vi.mock("./fresh", async (importOriginal) => ({
 
 const { handleMcp } = await import("./mcp");
 
-const { ApiError } = await import("./spotify");
+const { ApiError } = await import("./api-error");
 const { __resetSearchCache } = await import("./track-search");
 
 beforeEach(() => {

@@ -45,7 +45,7 @@ vi.mock("./discogs", async (importOriginal) => {
 
 import { createIntegrationDb } from "./integration-db";
 import { publishTrack } from "./publish";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 let db: Client;
 

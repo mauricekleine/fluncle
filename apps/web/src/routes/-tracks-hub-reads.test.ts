@@ -16,7 +16,7 @@ vi.mock("@/lib/server/env", async (importOriginal) => ({
 }));
 
 import { SEARCH_STYLES } from "@/lib/search-styles";
-import { ApiError } from "@/lib/server/spotify";
+import { ApiError } from "@/lib/server/api-error";
 import { readTracksHubAtOneTime, readTracksHubSoundAtOneTime } from "./-tracks-hub-reads";
 
 const liquid = SEARCH_STYLES[0];

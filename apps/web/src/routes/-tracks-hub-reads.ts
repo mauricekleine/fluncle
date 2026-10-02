@@ -1,7 +1,7 @@
 import { type SearchStyle } from "@/lib/search-styles";
 import { searchArchiveRateLimit, SEARCH_WINDOW_MS } from "@/lib/server/orpc/search";
 import { chargeRateLimit } from "@/lib/server/rate-limit";
-import { ApiError } from "@/lib/server/spotify";
+import { ApiError } from "@/lib/server/api-error";
 import {
   type TracksHubFilters,
   type TracksHubSoundPage,

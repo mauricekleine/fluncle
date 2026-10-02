@@ -3,7 +3,7 @@ import { mixtapeLogId } from "../mixtape-log-id";
 import { type MixtapeDTO, type MixtapeStatus, rowToMixtape } from "../mixtapes";
 import { getDb, typedRow, typedRows } from "./db";
 import { purgeLogCache } from "./edge-cache";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 import { postMixtapeToTelegram } from "./telegram";
 import { getTrackByIdOrLogId, getTracksForMixtape } from "./tracks";
 

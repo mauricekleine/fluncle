@@ -1,7 +1,7 @@
 import { getDb, typedRow } from "./db";
 import { type FetchImpl, readEnvs, readOptionalEnv } from "./env";
 import { logEvent } from "./log";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const googleAuthBaseUrl = "https://accounts.google.com/o/oauth2/v2/auth";
 const googleTokenUrl = "https://oauth2.googleapis.com/token";
