@@ -10,7 +10,6 @@ import { logEvent } from "./log";
 import { recordSpotifyThrottle } from "./spotify-anchor-breaker";
 import {
   chargeSpotifyConsumerDailyCall,
-  isSpotifyCallBudgetAvailable,
   readSpotifyQuotaHoldUntil,
   recordSpotifyCall,
   recordSpotifyDailyCall,
@@ -291,100 +290,6 @@ export async function fetchSpotifyAlbumTracks(
   }
 }
 
-type SpotifyArtistResponse = {
-  id: string;
-  images?: SpotifyImage[];
-};
-
-export type ArtistImagesFetchResult = {
-  budgetLimited: boolean;
-  checkedCount: number;
-  checkedIds: string[];
-  failures: Map<string, string>;
-  images: Map<string, string>;
-  missingIds: Set<string>;
-  rateLimited: boolean;
-};
-
-export async function fetchArtistImages(
-  spotifyArtistIds: string[],
-): Promise<ArtistImagesFetchResult> {
-  const ids = [...new Set(spotifyArtistIds.filter((id): id is string => Boolean(id)))];
-  const result: ArtistImagesFetchResult = {
-    budgetLimited: false,
-    checkedCount: 0,
-    checkedIds: [],
-    failures: new Map(),
-    images: new Map(),
-    missingIds: new Set(),
-    rateLimited: false,
-  };
-
-  if (ids.length === 0) {
-    return result;
-  }
-
-  const accessToken = await getSpotifyAccessToken();
-
-  for (const id of ids) {
-    if (!(await isSpotifyCallBudgetAvailable())) {
-      result.budgetLimited = true;
-      break;
-    }
-
-    result.checkedIds.push(id);
-    result.checkedCount += 1;
-
-    try {
-      const response = await spotifyFetch(
-        `/artists/${encodeURIComponent(id)}`,
-        accessToken,
-        {},
-        true,
-        true,
-        "artist_images",
-      );
-      const artist = (await response.json()) as SpotifyArtistResponse | null;
-
-      if (
-        !artist ||
-        artist.id !== id ||
-        (artist.images !== undefined && !Array.isArray(artist.images))
-      ) {
-        result.failures.set(id, "Spotify artist response did not match the requested artist");
-        continue;
-      }
-
-      const url = selectLargestImageUrl(artist.images);
-
-      if (url) {
-        result.images.set(id, url);
-      } else {
-        result.missingIds.add(id);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-
-      if (error instanceof SpotifyDeferredError) {
-        result.budgetLimited = true;
-        logEvent("info", "spotify.artist-image-deferred", { artistId: id, reason: error.reason });
-        break;
-      }
-
-      if (message.includes("429")) {
-        result.rateLimited = true;
-        logEvent("warn", "spotify.artist-image-rate-limited", { artistId: id, error });
-        break;
-      }
-
-      result.failures.set(id, message);
-      logEvent("warn", "spotify.artist-image-failed", { artistId: id, error });
-    }
-  }
-
-  return result;
-}
-
 export async function searchTrackCandidates(
   query: string,
   consumer: SpotifyConsumer = "public_search",
@@ -546,22 +451,6 @@ function selectAlbumImageUrl(images: SpotifyImage[] | undefined): string | undef
       .sort((left, right) => (left.width ?? 0) - (right.width ?? 0))
       .find((image) => (image.width ?? 0) >= 300)?.url ?? images[0]?.url
   );
-}
-
-function selectLargestImageUrl(images: SpotifyImage[] | undefined): string | undefined {
-  if (!images?.length) {
-    return undefined;
-  }
-
-  return [...images]
-    .filter(
-      (image): image is SpotifyImage =>
-        typeof image === "object" &&
-        image !== null &&
-        typeof image.url === "string" &&
-        image.url.trim().length > 0,
-    )
-    .sort((left, right) => (right.width ?? 0) - (left.width ?? 0))[0]?.url;
 }
 
 function toSearchResult(track: TrackMetadata): TrackSearchResult {
