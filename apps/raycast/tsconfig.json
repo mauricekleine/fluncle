@@ -9,7 +9,19 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
-    "types": ["node", "react"]
+    "types": ["bun", "node", "react"],
+    "allowImportingTsExtensions": true,
+    "noEmit": true
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "*.ts",
+    "*.mts",
+    "*.cts",
+    "scripts/**/*.ts",
+    "scripts/**/*.mts",
+    "scripts/**/*.cts"
+  ],
+  "exclude": ["raycast-env.d.ts", "node_modules", "dist"]
 }

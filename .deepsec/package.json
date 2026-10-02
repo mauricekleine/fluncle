@@ -5,8 +5,14 @@
   "description": "deepsec scanning workspace",
   "workspaces": [],
   "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "deepsec": "^2.2.9"
+  },
+  "devDependencies": {
+    "typescript": "catalog:"
   },
   "packageManager": "pnpm@9.15.9",
   "pnpm": {

@@ -44,6 +44,18 @@ const WORKTREE_SETUP_FILES = new Set([".config/wt.toml", ".worktreeinclude"]);
 const WORKFLOW_DIRECTORIES = [".github/"];
 const SCRIPT_DIRECTORIES = ["scripts/", ".husky/", ".claude/hooks/", ".codex/hooks/"];
 const QUALITY_HARNESS_DIRECTORIES = ["scripts/quality/"];
+const WEB_HERMES_MODULES = new Set(
+  [
+    "cron-freshness.ts",
+    "cron-marker.ts",
+    "daily-retry-state.ts",
+    "database-admission-phase.ts",
+    "device-db-derivation.ts",
+    "device-mirror.ts",
+    "fluncle-healthcheck.ts",
+    "pipeline-watch-evaluate.ts",
+  ].map((name) => `docs/agents/hermes/scripts/${name}`),
+);
 
 function normalizePath(path) {
   return path.replaceAll("\\", "/").replace(/^\.\//, "");
@@ -58,49 +70,48 @@ function isWithin(path, directory) {
   return path === normalizedDirectory || path.startsWith(`${normalizedDirectory}/`);
 }
 
-function readPackageGraph(root) {
+export function readPackageGraph(root = DEFAULT_ROOT) {
   const packages = new Map();
+  const rootManifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  const workspaces = rootManifest.workspaces.packages ?? rootManifest.workspaces;
+  const packagePaths = workspaces.flatMap((workspace) => {
+    if (!workspace.endsWith("/*")) {
+      return [workspace];
+    }
+    const directory = workspace.slice(0, -2);
+    return readdirSync(join(root, directory), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => `${directory}/${entry.name}`);
+  });
 
-  for (const workspaceRoot of ["apps", "packages"]) {
-    const absoluteWorkspaceRoot = join(root, workspaceRoot);
-    if (!existsSync(absoluteWorkspaceRoot)) {
+  for (const packagePath of packagePaths) {
+    const manifestPath = join(root, packagePath, "package.json");
+    if (!existsSync(manifestPath)) {
       continue;
     }
 
-    for (const entry of readdirSync(absoluteWorkspaceRoot, { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-
-      const packagePath = `${workspaceRoot}/${entry.name}`;
-      const manifestPath = join(root, packagePath, "package.json");
-      if (!existsSync(manifestPath)) {
-        continue;
-      }
-
-      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-      if (typeof manifest.name !== "string") {
-        continue;
-      }
-
-      const dependencyNames = new Set();
-      for (const field of [
-        "dependencies",
-        "devDependencies",
-        "optionalDependencies",
-        "peerDependencies",
-      ]) {
-        for (const dependencyName of Object.keys(manifest[field] ?? {})) {
-          dependencyNames.add(dependencyName);
-        }
-      }
-
-      packages.set(manifest.name, {
-        dependencies: dependencyNames,
-        name: manifest.name,
-        path: packagePath,
-      });
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    if (typeof manifest.name !== "string") {
+      continue;
     }
+
+    const dependencyNames = new Set();
+    for (const field of [
+      "dependencies",
+      "devDependencies",
+      "optionalDependencies",
+      "peerDependencies",
+    ]) {
+      for (const dependencyName of Object.keys(manifest[field] ?? {})) {
+        dependencyNames.add(dependencyName);
+      }
+    }
+
+    packages.set(manifest.name, {
+      dependencies: dependencyNames,
+      name: manifest.name,
+      path: packagePath,
+    });
   }
 
   return packages;
@@ -163,6 +174,16 @@ function isDocument(path) {
   return DOCUMENT_FILES.has(path) || path.startsWith("docs/") || path.startsWith(".impeccable/");
 }
 
+function isStandaloneScript(path) {
+  return (
+    SCRIPT_DIRECTORIES.some((directory) => path.startsWith(directory)) ||
+    path.startsWith("docs/agents/hermes/scripts/") ||
+    (path.startsWith("packages/skills/") &&
+      (path.includes("/scripts/") || path.endsWith("/tsconfig.json"))) ||
+    (path.startsWith(".agents/skills/") && path.includes("/scripts/"))
+  );
+}
+
 function classifyPath(
   path,
   { changedPackageNames, lanes, packages, reasons, release, unknownFiles },
@@ -203,15 +224,15 @@ function classifyPath(
     matched = true;
   }
 
-  if (
-    SCRIPT_DIRECTORIES.some((directory) => path.startsWith(directory)) ||
-    path.startsWith("docs/agents/hermes/scripts/")
-  ) {
+  if (isStandaloneScript(path)) {
     lanes.scripts = true;
+    if (/\.(?:[cm]?tsx?|json)$/.test(path)) {
+      changedPackageNames.add("@fluncle/tooling");
+    }
     matched = true;
   }
 
-  if (path === "docs/agents/hermes/scripts/pipeline-watch-evaluate.ts") {
+  if (WEB_HERMES_MODULES.has(path)) {
     changedPackageNames.add("@fluncle/web");
   }
 
@@ -298,6 +319,9 @@ export function classifyPaths(paths, options = {}) {
   }
 
   for (const path of changedFiles) {
+    if (/\.(?:ts|tsx|mts|cts)$/.test(path)) {
+      changedPackageNames.add("@fluncle/tooling");
+    }
     const forceFull = classifyPath(path, {
       changedPackageNames,
       lanes,

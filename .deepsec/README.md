@@ -9,7 +9,7 @@ Currently configured project: `fluncle` (target: `..`).
 
 ## Setup
 
-1. `pnpm install` — installs deepsec.
+1. Run `bun install` from the repository root. The scanner is a workspace, and `bun run typecheck` checks its configuration.
 2. Add an AI Gateway / Anthropic / OpenAI token to `.env.local`. If
    you already have `claude` or `codex` CLI logged in on this
    machine, you can skip the token for non-sandbox runs (`process` /
@@ -23,10 +23,10 @@ Currently configured project: `fluncle` (target: `..`).
 ## Daily commands
 
 ```bash
-pnpm deepsec scan
-pnpm deepsec process     --concurrency 5
-pnpm deepsec revalidate  --concurrency 5                  # cuts FP rate
-pnpm deepsec export      --format md-dir --out ./findings
+bunx deepsec scan
+bunx deepsec process     --concurrency 5
+bunx deepsec revalidate  --concurrency 5                  # cuts FP rate
+bunx deepsec export      --format md-dir --out ./findings
 ```
 
 `--project-id` is auto-resolved while there's only one project in
@@ -59,7 +59,7 @@ AGENTS.md                Pointer for coding agents
 
 ## Docs
 
-After `pnpm install`:
+After the root `bun install`:
 
 - Skill: `node_modules/deepsec/SKILL.md`
 - Full docs: `node_modules/deepsec/dist/docs/{getting-started,configuration,models,writing-matchers,plugins,architecture,data-layout,vercel-setup,faq}.md`

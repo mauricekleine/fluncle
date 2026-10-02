@@ -87,7 +87,33 @@ describe("dependency-closure classifier", () => {
   });
 
   test("standalone scripts select their dedicated checks", () => {
-    expect(classifyPaths(["docs/agents/hermes/scripts/crawl-sweep.ts"]).lanes.scripts).toBe(true);
+    for (const path of [
+      "docs/agents/hermes/scripts/crawl-sweep.ts",
+      "docs/agents/hermes/scripts/audit/rotation.test.ts",
+      "docs/agents/hermes/scripts/tsconfig.json",
+      "scripts/ux-capture.ts",
+      ".claude/hooks/guard-protected-files.test.ts",
+      "packages/skills/fluncle-track-enrichment/scripts/analyze-track.ts",
+      ".agents/skills/fluncle-track-enrichment/scripts/analyze-track.ts",
+      "packages/skills/tsconfig.json",
+    ]) {
+      const plan = classifyPaths([path]);
+      expect(plan.lanes.scripts, path).toBe(true);
+      expect(plan.packages, path).toContain("@fluncle/tooling");
+      expect(plan.lanes.e2e, path).toBe(false);
+      expect(plan.full, path).toBe(false);
+    }
+    expect(classifyPaths(["docs/agents/hermes-agent.md"]).packages).not.toContain(
+      "@fluncle/tooling",
+    );
+  });
+
+  test("tooling follows its web imports and the scanner participates in the full backstop", () => {
+    expect(classifyPaths(["apps/web/scripts/derive-device-db.ts"]).packages).toContain(
+      "@fluncle/tooling",
+    );
+    expect(classifyPaths(["docs/search.md"]).packages).not.toContain("deepsec-workspace");
+    expect(classifyPaths([], { forceFull: true }).packages).toContain("deepsec-workspace");
   });
 
   test("label-triage scripts select Python without forcing the full matrix", () => {
@@ -126,12 +152,41 @@ describe("dependency-closure classifier", () => {
     expect(classifyPaths([]).lanes.labelTriagePython).toBe(true);
   });
 
-  test("the pipeline evaluator selects web checks for its web integration consumer", () => {
-    const plan = classifyPaths(["docs/agents/hermes/scripts/pipeline-watch-evaluate.ts"]);
-    expect(plan.full).toBe(false);
-    expect(plan.lanes.scripts).toBe(true);
-    expect(plan.lanes.e2e).toBe(true);
-    expect(plan.packages).toContain("@fluncle/web");
+  test("every TypeScript addition selects the inventory audit even in documentation", () => {
+    for (const path of [
+      "docs/example.ts",
+      ".agents/skills/fluncle-example/helper.ts",
+      "apps/cli/src/example.mts",
+      "apps/mobile/example.cts",
+      "docs/example.tsx",
+    ]) {
+      expect(classifyPaths([path]).packages, path).toContain("@fluncle/tooling");
+    }
+    for (const path of ["docs/example.md", ".agents/skills/fluncle-example/SKILL.md"]) {
+      expect(classifyPaths([path]).packages, path).not.toContain("@fluncle/tooling");
+    }
+  });
+
+  test("Hermes modules consumed by web select their consumer checks", () => {
+    for (const name of [
+      "cron-freshness",
+      "cron-marker",
+      "daily-retry-state",
+      "database-admission-phase",
+      "device-db-derivation",
+      "device-mirror",
+      "fluncle-healthcheck",
+      "pipeline-watch-evaluate",
+    ]) {
+      const plan = classifyPaths([`docs/agents/hermes/scripts/${name}.ts`]);
+      expect(plan.full, name).toBe(false);
+      expect(plan.lanes.scripts, name).toBe(true);
+      expect(plan.lanes.e2e, name).toBe(true);
+      expect(plan.packages, name).toContain("@fluncle/web");
+    }
+    expect(classifyPaths(["docs/agents/hermes/scripts/crawl-sweep.ts"]).packages).not.toContain(
+      "@fluncle/web",
+    );
   });
 
   test("discovery capture selects scripts without public-web E2E", () => {

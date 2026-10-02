@@ -21,7 +21,7 @@ describe("release selection contracts", () => {
     );
     const producerNameMatch = producerWorkflow.match(/^name:\s*(.+)$/m);
     expect(producerNameMatch).not.toBeNull();
-    if (!producerNameMatch) {
+    if (!producerNameMatch?.[1]) {
       throw new Error("CLI release workflow must declare a top-level name");
     }
 

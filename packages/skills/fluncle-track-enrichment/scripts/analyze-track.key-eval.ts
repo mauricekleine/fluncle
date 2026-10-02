@@ -132,8 +132,8 @@ function fftLocal(re: Float64Array, im: Float64Array): void {
     j ^= bit;
 
     if (i < j) {
-      [re[i], re[j]] = [re[j], re[i]];
-      [im[i], im[j]] = [im[j], im[i]];
+      [re[i], re[j]] = [re[j] ?? 0, re[i] ?? 0];
+      [im[i], im[j]] = [im[j] ?? 0, im[i] ?? 0];
     }
   }
 
@@ -147,10 +147,10 @@ function fftLocal(re: Float64Array, im: Float64Array): void {
       let ci = 0;
 
       for (let k = 0; k < len >> 1; k++) {
-        const ar = re[i + k];
-        const ai = im[i + k];
-        const br = re[i + k + (len >> 1)] * cr - im[i + k + (len >> 1)] * ci;
-        const bi = re[i + k + (len >> 1)] * ci + im[i + k + (len >> 1)] * cr;
+        const ar = re[i + k] ?? 0;
+        const ai = im[i + k] ?? 0;
+        const br = (re[i + k + (len >> 1)] ?? 0) * cr - (im[i + k + (len >> 1)] ?? 0) * ci;
+        const bi = (re[i + k + (len >> 1)] ?? 0) * ci + (im[i + k + (len >> 1)] ?? 0) * cr;
         re[i + k] = ar + br;
         im[i + k] = ai + bi;
         re[i + k + (len >> 1)] = ar - br;
@@ -172,9 +172,9 @@ function pearsonLocal(a: number[], b: number[]): number {
   let db = 0;
 
   for (let i = 0; i < n; i++) {
-    num += (a[i] - ma) * (b[i] - mb);
-    da += (a[i] - ma) ** 2;
-    db += (b[i] - mb) ** 2;
+    num += ((a[i] ?? 0) - ma) * ((b[i] ?? 0) - mb);
+    da += ((a[i] ?? 0) - ma) ** 2;
+    db += ((b[i] ?? 0) - mb) ** 2;
   }
 
   return num / (Math.sqrt(da * db) || 1);
@@ -197,18 +197,18 @@ function legacyChroma(samples: Float32Array): number[] {
     const im = new Float64Array(N);
 
     for (let i = 0; i < N; i++) {
-      re[i] = (samples[start + i] ?? 0) * hann[i];
+      re[i] = (samples[start + i] ?? 0) * (hann[i] ?? 0);
     }
 
     fftLocal(re, im);
 
     for (let b = 1; b < N / 2; b++) {
-      const mag = Math.hypot(re[b], im[b]);
+      const mag = Math.hypot(re[b] ?? 0, im[b] ?? 0);
       const freq = (b * SAMPLE_RATE) / N;
 
       if (freq >= 55 && freq <= 5000) {
         const pc = ((Math.round(69 + 12 * Math.log2(freq / 440)) % 12) + 12) % 12;
-        chroma[pc] += mag;
+        chroma[pc] = (chroma[pc] ?? 0) + mag;
       }
     }
   }
@@ -289,7 +289,7 @@ function report(name: string, tally: Tally, total: number): void {
   );
 }
 
-async function main(): Promise<void> {
+async function main(csvPath: string): Promise<void> {
   if (spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status !== 0) {
     console.error("ffmpeg is required (skill prereq).");
     process.exit(1);
@@ -417,4 +417,4 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+await main(csvPath);

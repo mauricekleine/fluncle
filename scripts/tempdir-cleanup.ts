@@ -59,7 +59,7 @@ function isIdentifier(text: string | undefined): text is string {
   return text !== undefined && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(text);
 }
 
-function isStringLiteral(text: string | undefined): boolean {
+function isStringLiteral(text: string | undefined): text is string {
   return (
     text !== undefined &&
     text.length >= 2 &&
@@ -132,7 +132,7 @@ function tokensFor(source: string): Token[] {
     let index = start + 1;
     let inClass = false;
     while (index < source.length) {
-      const character = source[index];
+      const character = source.charAt(index);
       if (character === "\\") {
         index += 2;
         continue;
@@ -197,7 +197,7 @@ function tokensFor(source: string): Token[] {
   scanTemplate = (start: number): number => {
     let index = start + 1;
     while (index < source.length) {
-      const character = source[index];
+      const character = source.charAt(index);
       if (character === "\\") {
         index += 2;
         continue;
@@ -219,7 +219,7 @@ function tokensFor(source: string): Token[] {
     let index = start;
     let braceDepth = stopAtCloseBrace ? 1 : 0;
     while (index < source.length) {
-      const character = source[index];
+      const character = source.charAt(index);
 
       if (character === "{") {
         addToken(index, index + 1);

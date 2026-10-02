@@ -199,7 +199,7 @@ function validateResolvedArtists(
   duplicate: Catalogue["artists"][number] | undefined,
   duplicateSlug: string | undefined,
   repointOnly: boolean,
-): boolean {
+): canonical is Catalogue["artists"][number] {
   if (!canonical) {
     console.log(`\nABORTED — no artists row for --canonical "${canonicalSlug}".`);
     return false;
