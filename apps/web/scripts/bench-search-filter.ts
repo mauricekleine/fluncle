@@ -629,7 +629,7 @@ function configuredProviders(): { providers: Provider[]; skipped: string[] } {
     !workersToken ? "WORKERS_AI_API_TOKEN" : null,
   ].filter((name): name is string => name !== null);
 
-  if (missingWorkersEnv.length > 0) {
+  if (!accountId || !workersToken) {
     skipped.push(`Workers AI — missing ${missingWorkersEnv.join(", ")}`);
   } else {
     const model = process.env.WORKERS_AI_MODEL ?? DEFAULT_WORKERS_AI_MODEL;

@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest";
 
 const SUPERVISOR_PATH = fileURLToPath(new URL("./local-sidecar-supervisor.ts", import.meta.url));
 
-function processExists(pid: number): boolean {
+function processExists(pid: number | null): boolean {
+  if (pid === null) {
+    throw new Error("sidecar PID was not observed");
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -91,9 +94,9 @@ describe("local libSQL sidecar supervisor", () => {
           stdio: ["ignore", "pipe", "pipe", "ipc"],
         },
       );
-      supervisor.stdout.resume();
+      supervisor.stdout?.resume();
       let supervisorStderr = "";
-      supervisor.stderr.on("data", (chunk: Uint8Array) => {
+      supervisor.stderr?.on("data", (chunk: Uint8Array) => {
         supervisorStderr += Buffer.from(chunk).toString("utf8");
       });
       const supervisorPid = supervisor.pid;
@@ -199,8 +202,8 @@ describe("local libSQL sidecar supervisor", () => {
           return sidecarPid !== null;
         });
 
-        supervisor.stdout.destroy();
-        supervisor.stderr.destroy();
+        supervisor.stdout?.destroy();
+        supervisor.stderr?.destroy();
         const supervisorExited = new Promise<void>((resolve) =>
           supervisor.once("close", () => resolve()),
         );
@@ -261,9 +264,9 @@ describe("local libSQL sidecar supervisor", () => {
           stdio: ["ignore", "pipe", "pipe", "ipc"],
         },
       );
-      supervisor.stdout.resume();
+      supervisor.stdout?.resume();
       let supervisorStderr = "";
-      supervisor.stderr.on("data", (chunk: Uint8Array) => {
+      supervisor.stderr?.on("data", (chunk: Uint8Array) => {
         supervisorStderr += Buffer.from(chunk).toString("utf8");
       });
       const supervisorPid = supervisor.pid;
@@ -308,9 +311,9 @@ describe("local libSQL sidecar supervisor", () => {
           stdio: ["ignore", "pipe", "pipe", "ipc"],
         },
       );
-      supervisor.stdout.resume();
+      supervisor.stdout?.resume();
       let supervisorStderr = "";
-      supervisor.stderr.on("data", (chunk: Uint8Array) => {
+      supervisor.stderr?.on("data", (chunk: Uint8Array) => {
         supervisorStderr += Buffer.from(chunk).toString("utf8");
       });
       const supervisorPid = supervisor.pid;

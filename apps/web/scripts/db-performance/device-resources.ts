@@ -169,7 +169,7 @@ class LocalTargetClient implements DeviceTargetClient {
             rows: query.values(...args) as DeviceSqlValue[][],
           };
         }
-        const result = this.database.run(statement.sql, ...args);
+        const result = this.database.run(statement.sql, args);
         return { affectedRows: result.changes, columns: [], rows: [] };
       }),
     );
@@ -427,10 +427,12 @@ async function publicationStorageSample(
   previousGenerationPath: string,
 ): Promise<PublicationStorageSample> {
   const generationEntries = await Promise.all(
-    [
-      ["candidate-generation", generationPath],
-      ["last-verified-generation", previousGenerationPath],
-    ].map(async ([label, path]) => ({ bytes: await fileBytes(path), label: String(label) })),
+    (
+      [
+        ["candidate-generation", generationPath],
+        ["last-verified-generation", previousGenerationPath],
+      ] as const
+    ).map(async ([label, path]) => ({ bytes: await fileBytes(path), label: String(label) })),
   );
   const presentGenerations = generationEntries.filter((entry) => entry.bytes > 0);
   return {

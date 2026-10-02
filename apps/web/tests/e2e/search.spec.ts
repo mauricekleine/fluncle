@@ -15,6 +15,9 @@ const SEEDED_ARTIST_NAME = "Nova Kestrel";
 const SEEDED_LABEL_NAME = "Driftwave Audio";
 
 const FIRST_FINDING_TITLE = SEEDED_FINDING_TITLES[0];
+if (FIRST_FINDING_TITLE === undefined) {
+  throw new Error("search fixture requires a finding title");
+}
 const FIRST_FINDING_COORDINATE = "701.1.0A";
 
 const NO_MATCH_TOKEN = "zzzqqx";

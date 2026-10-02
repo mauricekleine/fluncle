@@ -433,7 +433,6 @@ function validDeviceResourceReport(profile: "1x" | "2x"): string {
 function child(overrides: Partial<ChildResult> = {}): ChildResult {
   return {
     durationMs: 1,
-    executionRoot: "detached-candidate-worktree",
     exitCode: 0,
     spawnError: null,
     stderr: "",
@@ -451,6 +450,7 @@ function commandResult(overrides: Partial<ReleaseCommandResult> = {}): ReleaseCo
     cwd: ".",
     deadlineMs: 1_000,
     durationMs: 1,
+    executionRoot: "detached-candidate-worktree",
     exitCode: 0,
     id: "component",
     profile: null,

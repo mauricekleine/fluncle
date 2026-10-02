@@ -117,7 +117,10 @@ describe("Goal H dominant regression inventory", () => {
     if (first === undefined) {
       throw new Error("missing unknown-proof fixture family");
     }
-    first.performanceContractIds = [...first.performanceContractIds, "unknown.proof"];
+    unknown[0] = {
+      ...first,
+      performanceContractIds: [...first.performanceContractIds, "unknown.proof"],
+    };
     expect(failuresFor(unknown)).toContain(
       "artist-identity-case-or: unknown performance contract unknown.proof",
     );
@@ -127,7 +130,10 @@ describe("Goal H dominant regression inventory", () => {
     if (staleRearm === undefined) {
       throw new Error("missing Contract D fixture family");
     }
-    staleRearm.performanceContractIds = staleRearm.performanceContractIds.slice(1);
+    missing[1] = {
+      ...staleRearm,
+      performanceContractIds: staleRearm.performanceContractIds.slice(1),
+    };
     expect(failuresFor(missing)).toContain(
       "Contract D ID projection.crawl-two-lane-claim must be mapped exactly once; found 0",
     );
@@ -137,10 +143,13 @@ describe("Goal H dominant regression inventory", () => {
     if (releaseHub === undefined) {
       throw new Error("missing duplicate Contract D fixture family");
     }
-    releaseHub.performanceContractIds = [
-      ...releaseHub.performanceContractIds,
-      "projection.crawl-two-lane-claim",
-    ];
+    duplicate[3] = {
+      ...releaseHub,
+      performanceContractIds: [
+        ...releaseHub.performanceContractIds,
+        "projection.crawl-two-lane-claim",
+      ],
+    };
     expect(failuresFor(duplicate)).toContain(
       "Contract D ID projection.crawl-two-lane-claim must be mapped exactly once; found 2",
     );

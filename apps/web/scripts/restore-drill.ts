@@ -45,7 +45,7 @@ if (keepPath && existsSync(keepPath)) {
   fail(`--keep target already exists: ${keepPath}`);
 }
 
-function resolveManifestPath(): string {
+function resolveManifestPath(dumpPath: string): string {
   if (manifestArg) {
     return manifestArg;
   }
@@ -66,7 +66,7 @@ function resolveManifestPath(): string {
   return sibling;
 }
 
-const manifestPath = resolveManifestPath();
+const manifestPath = resolveManifestPath(dumpPath);
 
 if (!existsSync(manifestPath)) {
   fail(`manifest not found (looked at ${manifestPath}); pass it as the 2nd argument`);

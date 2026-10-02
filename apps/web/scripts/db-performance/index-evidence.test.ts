@@ -149,7 +149,7 @@ describe("final index plan evidence", () => {
   });
 
   it("uses normal planner choice except for SQL that deliberately locks a production index", () => {
-    const runtimeLockedIndexes = new Set(INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES);
+    const runtimeLockedIndexes = new Set<string>(INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES);
     const expectedPolicyFragments: Record<string, string> = {
       "artifact-change-checkpoints-primary-key":
         "sqlite_autoindex_perf_artifact_change_checkpoints_1",
@@ -973,7 +973,7 @@ describe("final index plan evidence", () => {
               contractEvidence.plan !== null &&
               contractEvidence.plan.violations.length === 0 &&
               Number(contractEvidence.metadata?.minimumResultRows) <=
-                contractEvidence.resultRowCount?.p50 &&
+                (contractEvidence.resultRowCount?.p50 ?? 0) &&
               contractEvidence.metadata?.timingScope === "worst-single-final-statement" &&
               Number(contractEvidence.metadata.finalStatementRequestCount) >= 1 &&
               Number(contractEvidence.metadata.measuredRequestCount) >= 1 &&

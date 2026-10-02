@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 
 import { type ArtistSocialPlatform } from "../src/lib/artist-socials";
 import {
@@ -14,6 +15,18 @@ import {
   isLinkHubUrl,
   normalizeProfileUrl,
 } from "../src/lib/server/artist-resolution";
+
+const dumpRelationSchema = z.object({
+  "target-type": z.string().optional(),
+  type: z.string().optional(),
+  url: z.object({ resource: z.string().optional() }).optional(),
+});
+
+const dumpArtistSchema = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  relations: z.array(dumpRelationSchema).optional(),
+});
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const DUMP =
@@ -190,9 +203,9 @@ async function main(): Promise<void> {
     if (!line) {
       return;
     }
-    let record_: { id: string; name?: string; relations?: unknown[] };
+    let record_: z.infer<typeof dumpArtistSchema>;
     try {
-      record_ = JSON.parse(line);
+      record_ = dumpArtistSchema.parse(JSON.parse(line));
     } catch {
       return;
     }
@@ -211,17 +224,13 @@ async function main(): Promise<void> {
     }
 
     const socials_ = new Map<string, string>();
-    for (const rel of rels as {
-      type?: string;
-      "target-type"?: string;
-      url?: { resource?: string };
-    }[]) {
+    for (const rel of rels) {
       const resource = rel["target-type"] === "url" ? rel.url?.resource : undefined;
       if (!resource || isLinkHubUrl(resource)) {
         continue;
       }
       const platform = classifyMbUrl(resource, rel.type);
-      if (!platform || !SOCIAL_PLATFORMS.has(platform as ArtistSocialPlatform)) {
+      if (!platform || platform === "wikidata" || !SOCIAL_PLATFORMS.has(platform)) {
         continue;
       }
       if (socials_.has(platform)) {

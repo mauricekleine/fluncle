@@ -1,4 +1,4 @@
-import { getTableColumns, getTableName, type SQLiteTable } from "drizzle-orm";
+import { getTableColumns, getTableName } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
 import { albums, artists, findings, labels, trackArtists, tracks } from "../../src/db/schema";
@@ -27,7 +27,7 @@ describe("device database column boundary", () => {
     const liveColumnsByTable = new Map(
       LIVE_TABLES.map((table) => [
         getTableName(table),
-        new Set(Object.values(getTableColumns(table as SQLiteTable)).map((column) => column.name)),
+        new Set(Object.values(getTableColumns(table)).map((column) => column.name)),
       ]),
     );
 

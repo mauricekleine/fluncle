@@ -1,13 +1,15 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "lib": ["DOM", "DOM.Iterable", "ES2022"],
     "plugins": [{ "name": "@effect/language-service" }],
     "paths": {
       "@/*": ["./src/*"]
     },
-    "types": ["node", "vite/client"]
+    "types": ["bun", "node", "vite/client"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts", ".cloudflare/types/index.d.ts"]
+  "include": ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts", ".cloudflare/types/index.d.ts"],
+  "exclude": ["node_modules", ".source", ".output", "dist"]
 }

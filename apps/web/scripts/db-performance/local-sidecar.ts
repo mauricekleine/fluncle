@@ -113,7 +113,10 @@ async function allocateLoopbackPort(): Promise<number> {
   });
 }
 
-function collectStreamTail(stream: NodeJS.ReadableStream): () => string {
+function collectStreamTail(stream: NodeJS.ReadableStream | null): () => string {
+  if (stream === null) {
+    throw new Error("sidecar supervisor must expose piped output");
+  }
   const decoder = new TextDecoder();
   let tail = "";
   stream.on("data", (chunk: string | Uint8Array) => {
@@ -377,11 +380,12 @@ export async function startLocalLibsqlSidecar(
         cwd,
         scratchDirectory,
       );
-      readinessClient = runtime.createReadinessClient(
+      const attemptReadinessClient = runtime.createReadinessClient(
         url,
         identity.authToken,
         readinessRequestTimeoutMs,
       );
+      readinessClient = attemptReadinessClient;
       const deadline = runtime.now() + readinessTimeoutMs;
       let lastReadinessFailure = "no readiness request completed";
 
@@ -393,7 +397,7 @@ export async function startLocalLibsqlSidecar(
         const remainingMs = Math.max(1, deadline - runtime.now());
         try {
           await runtime.withTimeout(
-            readinessClient.execute("SELECT 1"),
+            attemptReadinessClient.execute("SELECT 1"),
             Math.min(readinessRequestTimeoutMs, remainingMs),
             "local libSQL readiness query",
           );
@@ -406,7 +410,7 @@ export async function startLocalLibsqlSidecar(
             );
           }
 
-          readinessClient.close();
+          attemptReadinessClient.close();
           readinessClient = null;
           client = runtime.createClient(url, identity.authToken);
           let closePromise: Promise<void> | null = null;

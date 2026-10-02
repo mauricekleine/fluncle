@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { createClient } from "@libsql/client/web";
+import { createClient, type InStatement } from "@libsql/client/web";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
@@ -206,7 +206,7 @@ async function recomputeCentroids(artistIds: string[]): Promise<void> {
       }
     }
 
-    const writes = [];
+    const writes: InStatement[] = [];
 
     for (const id of chunkIds) {
       const entry = grouped.get(id);
@@ -239,7 +239,7 @@ async function seedCentroidsAndEdges(): Promise<void> {
 
   for (let start = 0; start < artistCount; start += ARTIST_RANK_BATCH_SIZE) {
     const end = Math.min(artistCount, start + ARTIST_RANK_BATCH_SIZE);
-    const writes = [];
+    const writes: InStatement[] = [];
 
     for (let index = start; index < end; index += 1) {
       const artistId = `ar-${index}`;

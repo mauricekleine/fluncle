@@ -42,6 +42,9 @@ function expectCanonical(html: string, path: string): void {
 
 function trackJsonLd(html: string): Record<string, unknown> | undefined {
   for (const [, body] of html.matchAll(/<script type="application\/ld\+json">(.*?)<\/script>/gs)) {
+    if (body === undefined) {
+      continue;
+    }
     try {
       const parsed: unknown = JSON.parse(body.replaceAll("&#x27;", "'").replaceAll("&amp;", "&"));
 

@@ -313,7 +313,9 @@ export function promoteTrackParamOps(
     const op = (contract as Record<string, unknown>)[skip.name];
     const isPublicParamRead = op !== undefined && skip.className === "api-public";
     const { path } = isPublicParamRead ? routeOf(op) : { path: "" };
-    const params = [...path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
+    const params = [...path.matchAll(/\{([^}]+)\}/g)].flatMap((match) =>
+      match[1] === undefined ? [] : [match[1]],
+    );
     const onlyTrackId = params.length > 0 && params.every((param) => TRACK_ID_PARAMS.has(param));
 
     if (isPublicParamRead && onlyTrackId) {
@@ -628,12 +630,10 @@ async function runPool(
   fetchImpl: FetchLike,
   concurrency: number,
 ): Promise<void> {
-  let cursor = 0;
+  const iterator = entries.values();
 
   async function worker(): Promise<void> {
-    while (cursor < entries.length) {
-      const entry = entries[cursor];
-      cursor += 1;
+    for (const entry of iterator) {
       results[entry.index] = await probeOne(entry.target, entry.url, fetchImpl);
     }
   }
@@ -682,6 +682,9 @@ export function parseArgs(argv: string[]): Args {
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
+    if (arg === undefined) {
+      continue;
+    }
 
     if (arg === "--base-url") {
       const value = argv[i + 1];

@@ -182,7 +182,7 @@ async function main(): Promise<void> {
 
       process.exitCode = exitCode;
       if (process.connected) {
-        process.disconnect();
+        process.disconnect?.();
       }
       resolveCompletion?.();
     })();

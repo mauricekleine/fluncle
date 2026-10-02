@@ -76,7 +76,7 @@ async function routePresign(page: Page): Promise<void> {
   await page.route("**/set-video/presign", async (route) => {
     const request = route.request();
     const match = request.url().match(/recordings\/([^/]+)\/set-video/);
-    const recordingId = match ? decodeURIComponent(match[1]) : "unknown";
+    const recordingId = match?.[1] ? decodeURIComponent(match[1]) : "unknown";
     const body = JSON.parse(request.postData() ?? "{}") as { partCount?: number };
     const partCount = body.partCount ?? 1;
     const parts = Array.from({ length: partCount }, (_unused, index) => ({
