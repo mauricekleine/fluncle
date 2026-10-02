@@ -124,7 +124,12 @@ function expectReceiptCoordinates(calls: CurlCall[]): void {
   expect(healthCalls.length).toBeGreaterThan(0);
   expect(resolveCalls.length).toBe(1);
 
-  const payload = parseBody<HealthPayload>(healthCalls[0]);
+  const firstHealthCall = healthCalls[0];
+  const firstResolveCall = resolveCalls[0];
+  if (!firstHealthCall || !firstResolveCall) {
+    throw new Error("health update and receipt resolution must both run");
+  }
+  const payload = parseBody<HealthPayload>(firstHealthCall);
   expect(payload.operationKey).toBe(`health.snapshot:${payload.producer}:${payload.at}`);
   const canonicalCore = JSON.stringify({
     at: payload.at,
@@ -143,7 +148,7 @@ function expectReceiptCoordinates(calls: CurlCall[]): void {
   for (const healthCall of healthCalls) {
     expect(parseBody<HealthPayload>(healthCall)).toEqual(payload);
   }
-  expect(parseBody(resolveCalls[0])).toEqual({
+  expect(parseBody<Record<string, unknown>>(firstResolveCall)).toEqual({
     operationId: "health.snapshot",
     operationKey: payload.operationKey,
     requestDigest: payload.requestDigest,
@@ -239,16 +244,19 @@ function runWatchdog(scenario: string): CurlCall[] {
 }
 
 describe("receipt-backed shell health callers", () => {
-  test.each(CALLERS)("$name reconciles HTTP 524 and accepts the committed receipt", (caller) => {
-    const calls = runExtractedCaller(caller, "committed");
-    expect(urls(calls)).toEqual([
-      "https://worker.invalid/api/v1/admin/health",
-      "https://worker.invalid/api/v1/admin/operation-receipts/resolve",
-    ]);
-    expectReceiptCoordinates(calls);
-  });
+  test.each([...CALLERS])(
+    "$name reconciles HTTP 524 and accepts the committed receipt",
+    (caller) => {
+      const calls = runExtractedCaller(caller, "committed");
+      expect(urls(calls)).toEqual([
+        "https://worker.invalid/api/v1/admin/health",
+        "https://worker.invalid/api/v1/admin/operation-receipts/resolve",
+      ]);
+      expectReceiptCoordinates(calls);
+    },
+  );
 
-  test.each(CALLERS)("$name replays only after safely-retryable", (caller) => {
+  test.each([...CALLERS])("$name replays only after safely-retryable", (caller) => {
     const calls = runExtractedCaller(caller, "retry");
     expect(urls(calls)).toEqual([
       "https://worker.invalid/api/v1/admin/health",
@@ -258,7 +266,7 @@ describe("receipt-backed shell health callers", () => {
     expectReceiptCoordinates(calls);
   });
 
-  test.each(CALLERS)("$name reconciles a curl transport failure", (caller) => {
+  test.each([...CALLERS])("$name reconciles a curl transport failure", (caller) => {
     const calls = runExtractedCaller(caller, "transport");
     expect(urls(calls)).toEqual([
       "https://worker.invalid/api/v1/admin/health",

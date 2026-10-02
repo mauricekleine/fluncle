@@ -276,14 +276,14 @@ describe("listUnresolvedIssues — pagination + compaction against an injected f
 
   test("walks every page and compacts each row", async () => {
     const calls: string[] = [];
-    const fetchFn = (async (url: string | URL | Request) => {
+    const fetchFn = async (url: string | URL | Request) => {
       const u = typeof url === "string" ? url : url instanceof URL ? url.href : "";
       calls.push(u);
       if (!u.includes("cursor=")) {
         return pageResponse([{ id: "1", metadata: { type: "E" }, shortId: "A-1" }], "0:100:0");
       }
       return pageResponse([{ id: "2", metadata: { type: "E" }, shortId: "A-2" }]);
-    }) as typeof fetch;
+    };
 
     const issues = await listUnresolvedIssues("fluncle-web", "tok", { fetchFn });
     expect(issues.map((i) => i.id)).toEqual(["1", "2"]);
@@ -294,14 +294,14 @@ describe("listUnresolvedIssues — pagination + compaction against an injected f
 
   test("sends exactly query + limit, and never a stats period", async () => {
     const calls: string[] = [];
-    const fetchFn = (async (url: string | URL | Request) => {
+    const fetchFn = async (url: string | URL | Request) => {
       const u = typeof url === "string" ? url : url instanceof URL ? url.href : "";
       calls.push(u);
       if (!u.includes("cursor=")) {
         return pageResponse([{ id: "1" }], "0:100:0");
       }
       return pageResponse([{ id: "2" }]);
-    }) as typeof fetch;
+    };
 
     await listUnresolvedIssues("fluncle-web", "tok", { fetchFn });
 
@@ -323,7 +323,7 @@ describe("listUnresolvedIssues — pagination + compaction against an injected f
   });
 
   test("throws on a non-OK response so the driver records the per-project error", async () => {
-    const fetchFn = (async () => new Response("forbidden", { status: 403 })) as typeof fetch;
+    const fetchFn = async () => new Response("forbidden", { status: 403 });
     let message = "";
     try {
       await listUnresolvedIssues("fluncle-web", "bad", { fetchFn });

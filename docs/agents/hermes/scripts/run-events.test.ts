@@ -226,7 +226,7 @@ describe("the summary line states facts, never a verdict", () => {
     expect(emitted.length).toBeGreaterThan(0);
 
     for (const state of emitted) {
-      expect(LEDGER_GATE_STATES).toContain(state);
+      expect<string[]>([...LEDGER_GATE_STATES]).toContain(state);
     }
   });
 

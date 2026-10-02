@@ -172,7 +172,6 @@ describe("the trust setting", () => {
 
   test(
     "an ignored allowlist kills the run early and names it on the marker",
-    { timeout: FIXTURE_TIMEOUT_MS },
     async () => {
       await withLaunch(
         {
@@ -188,11 +187,11 @@ describe("the trust setting", () => {
         },
       );
     },
+    { timeout: FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a properly permissioned run is left alone and reports its own exit code",
-    { timeout: FIXTURE_TIMEOUT_MS },
     async () => {
       await withLaunch({ claudeOutput: "rendering" }, async (result) => {
         expect(await waitForFile(result.marker, 15_000)).toBe(true);
@@ -206,24 +205,24 @@ describe("the trust setting", () => {
         expect(result.claudeArgs()).toContain("--max-turns 150");
       });
     },
+    { timeout: FIXTURE_TIMEOUT_MS },
   );
 });
 
 describe("the reasoning effort", () => {
   test(
     "RENDER_CLAUDE_EFFORT overrides the pinned level",
-    { timeout: FIXTURE_TIMEOUT_MS },
     async () => {
       await withLaunch({ env: { RENDER_CLAUDE_EFFORT: "xhigh" } }, async (result) => {
         expect(await waitForFile(result.marker, 15_000)).toBe(true);
         expect(result.claudeArgs()).toContain("--effort xhigh");
       });
     },
+    { timeout: FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a level the CLI would not accept falls back to high and says so in the run log",
-    { timeout: FIXTURE_TIMEOUT_MS },
     async () => {
       await withLaunch({ env: { RENDER_CLAUDE_EFFORT: "ludicrous" } }, async (result) => {
         expect(await waitForFile(result.marker, 15_000)).toBe(true);
@@ -234,6 +233,7 @@ describe("the reasoning effort", () => {
         );
       });
     },
+    { timeout: FIXTURE_TIMEOUT_MS },
   );
 });
 

@@ -50,7 +50,7 @@ type PhaseEnvelope = JsonObject & {
   ok?: boolean;
   phase?: string;
 };
-type PrepareEnvelope = PhaseEnvelope & {
+type PrepareEnvelope = Omit<PhaseEnvelope, "kind"> & {
   boxFetch?: boolean;
   capabilities?: CommitBatchCapabilities;
   frontierPending?: number;

@@ -63,7 +63,9 @@ afterAll(() => {
 
 describe("fluncleJson parse-first contract (artist-sweep copy)", () => {
   test("exit 0 with JSON returns the parsed payload", () => {
-    expect(fluncleJson<{ filledCount: number; ok: boolean }>(["ok-json"])).toEqual({
+    expect(
+      fluncleJson<{ filledCount: number; ok: boolean; skippedCount: number }>(["ok-json"]),
+    ).toEqual({
       filledCount: 3,
       ok: true,
       skippedCount: 1,

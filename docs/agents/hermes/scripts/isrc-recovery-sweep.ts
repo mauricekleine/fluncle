@@ -131,7 +131,7 @@ export type IsrcRecoveryDeps = {
 
 export type RuntimeEffects = {
   env: Record<string, string | undefined>;
-  fetch: typeof fetch;
+  fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   log: (message: string) => void;
   output: (line: string) => void;
   sleep: (ms: number) => Promise<void>;
@@ -379,7 +379,10 @@ type DeezerAttempt =
   | { outcome: "quota" }
   | { outcome: "transport-failed" };
 
-async function attemptDeezerSearch(query: string, request: typeof fetch): Promise<DeezerAttempt> {
+async function attemptDeezerSearch(
+  query: string,
+  request: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+): Promise<DeezerAttempt> {
   let response: Response;
 
   try {

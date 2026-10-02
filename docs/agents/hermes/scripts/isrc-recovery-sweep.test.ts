@@ -88,7 +88,7 @@ function effects(
       FLUNCLE_API_TOKEN: "agent-token",
       ...(options.batch ? { FLUNCLE_ISRC_RECOVERY_BATCH: options.batch } : {}),
     },
-    fetch: ((input: string | URL | Request, init?: RequestInit) => {
+    fetch: (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       calls.push({
         ...(typeof init?.body === "string" ? { body: init.body } : {}),
@@ -99,7 +99,7 @@ function effects(
         timeline.push("deezer");
       }
       return request(url, init);
-    }) as typeof fetch,
+    },
     log: (message) => logs.push(message),
     output: (line) => output.push(line),
     sleep: (ms) => {
@@ -538,7 +538,7 @@ describe("searchDeezerCandidates", () => {
       const result = await searchDeezerCandidates(
         "q",
         {
-          fetch: (() => Promise.resolve(response)) as typeof fetch,
+          fetch: () => Promise.resolve(response),
           sleep: () => Promise.resolve(),
         },
         [],

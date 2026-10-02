@@ -153,14 +153,16 @@ function normalizeLabelDetail(
     return undefined;
   }
 
-  const images = records(value.images, 20).map((entry) => {
-    const type = entry.type === "primary" || entry.type === "secondary" ? entry.type : undefined;
-    const uri = boundedText(entry.uri, URI_MAX);
-    return {
-      ...(type === undefined ? {} : { type }),
-      ...(uri === undefined ? {} : { uri }),
-    };
-  });
+  const images = records(value.images, 20).map(
+    (entry): DiscogsLabelCandidate["detail"]["images"][number] => {
+      const type = entry.type === "primary" || entry.type === "secondary" ? entry.type : undefined;
+      const uri = boundedText(entry.uri, URI_MAX);
+      return {
+        ...(type === undefined ? {} : { type }),
+        ...(uri === undefined ? {} : { uri }),
+      };
+    },
+  );
 
   return { id: expectedId, images };
 }

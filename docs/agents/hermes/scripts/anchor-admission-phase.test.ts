@@ -17,7 +17,7 @@ import { markerSignals } from "./fluncle-healthcheck";
 
 const SCRIPT = join(import.meta.dir, "anchor-sweep.sh");
 const temporaryDirectories: string[] = [];
-const servers: Subprocess[] = [];
+const servers: Bun.Subprocess[] = [];
 
 afterEach(() => {
   for (const server of servers.splice(0)) {
@@ -373,7 +373,6 @@ test("fixture readiness publishes a complete port before the sweep starts", asyn
 
 test(
   "a slow anchor probe leaves the lease free for a sibling phase",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig();
     const anchor = Bun.spawn(["bash", SCRIPT, "--limit", "1"], {
@@ -399,11 +398,11 @@ test(
       produced: 1,
     });
   },
+  { timeout: 15_000 },
 );
 
 test(
   "an inherited whole-sweep lease uses direct calls without nested phase acquisition",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig();
     writeFileSync(join(fixture.directory, "lease"), "held");
@@ -420,11 +419,11 @@ test(
     expect(timeline).not.toContain("acquire:fluncle-anchor");
     expect(readFileSync(join(fixture.directory, "lease"), "utf8")).toBe("held");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a yielded commit records paused health and resumes without a duplicate write",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig();
     writeFileSync(join(fixture.directory, "yield-commit"), "1");
@@ -465,11 +464,11 @@ test(
     expect(JSON.parse(resumed.stdout.toString())).toMatchObject({ produced: 1 });
     expect(readFileSync(join(fixture.directory, "committed"), "utf8")).toBe("1");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a second-row commit yield replays paid rows before another worklist read",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "yield-second-commit"), "1");
@@ -507,11 +506,11 @@ test(
     );
     expect(readdirSync(progress).filter((name) => name.endsWith(".json"))).toHaveLength(0);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "post-actor admission yield replays saved candidates across a day boundary",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "yield-report"), "1");
@@ -554,11 +553,11 @@ test(
     );
     expect(readdirSync(progress).filter((name) => name.endsWith(".json"))).toHaveLength(0);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a definitive first commit conflict clears its unpaid checkpoint for a later tick",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -585,11 +584,11 @@ test(
     expect(timeline.match(/paid-commit:track-1/g)).toHaveLength(1);
     expect(timeline.match(/actor-run/g)).toHaveLength(1);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "one bad checkpoint does not prevent a later saved paid result from settling",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "yield-report"), "1");
@@ -643,11 +642,11 @@ test(
     expect(timeline.match(/actor-run/g)).toHaveLength(1);
     expect(timeline.match(/report:track-2/g)).toHaveLength(1);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a blocked checkpoint disarms another checkpoint's commit replay",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "yield-second-commit"), "1");
@@ -691,11 +690,11 @@ test(
       trackId: "track-1",
     });
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a checkpoint created during batch prepare is never overwritten and its sibling proceeds",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "race-checkpoint-track-1"), "1");
@@ -727,11 +726,11 @@ test(
     expect(timeline).toContain("free-commit:track-2");
     expect(timeline).not.toContain("paid-commit:track-1");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "an uncertain first commit keeps its checkpoint for the original receipt replay",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -762,11 +761,11 @@ test(
     expect(timeline.match(/paid-commit:track-1/g)).toHaveLength(1);
     expect(timeline.match(/actor-run/g)).toHaveLength(1);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a charged commit replay with Apify OFF keeps the exact pending receipt without starting an actor",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -797,11 +796,11 @@ test(
     expect(timeline).not.toContain("receipt-read:track-1");
     expect(timeline).not.toContain("actor-run:");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "an anchored commit replay settles its exact pending paid receipt before clearing",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -830,11 +829,11 @@ test(
       ),
     ).toHaveLength(0);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a refused anchored commit replay retains its pending checkpoint",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -865,11 +864,11 @@ test(
       ),
     ).toHaveLength(1);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a batch anchored verdict settles the same pending receipt before clearing",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -889,11 +888,11 @@ test(
       ),
     ).toHaveLength(0);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a single anchored verdict settles the same pending receipt before clearing",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-anchored-paid"), "1");
@@ -914,11 +913,11 @@ test(
       ),
     ).toHaveLength(0);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a K-row free commit clears checkpoints without per-row receipt reads",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "free-batch"), "1");
@@ -938,11 +937,11 @@ test(
       ),
     ).toHaveLength(0);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a legacy anchored verdict without receipt state reads and resolves its exact receipt",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -963,11 +962,11 @@ test(
       ),
     ).toHaveLength(0);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "expired commit evidence with a pending paid receipt resumes through its exact token",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1005,11 +1004,11 @@ test(
     expect(timeline).not.toContain("paid-commit:track-1");
     expect(timeline.match(/actor-run:query-track-1/g)).toHaveLength(1);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a server batch tail deferral still runs already admitted rows and keeps the due label",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "batch-defer-track-2"), "1");
@@ -1032,11 +1031,11 @@ test(
     expect(timeline).toContain("actor-run:query-track-1");
     expect(timeline).toContain("report:track-1");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a confirmed terminal actor run cancels its exact paid receipt",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1057,11 +1056,11 @@ test(
       "cancel-paid:track-1",
     );
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a definite 429 start refunds the cap slot and stops paid work for the tick",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "actor-start-429"), "1");
@@ -1076,11 +1075,11 @@ test(
     expect(timeline).toContain("refund-paid:track-1");
     expect(timeline).toContain("refund-paid:track-2");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "an uncertain actor start adopts a matching run without another POST",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1105,11 +1104,11 @@ test(
     expect(timeline.match(/actor-run:/g)).toHaveLength(1);
     expect(timeline).toContain("report:track-1");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a recovered batch matches the full actor input and polls its run once",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "actor-start-503"), "1");
@@ -1136,11 +1135,11 @@ test(
     expect(timeline).toContain("report:track-1");
     expect(timeline).toContain("report:track-2");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "an uncertain actor start with no run settles after its grace window",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1174,11 +1173,11 @@ test(
     expect(timeline).toContain("refund-paid:track-1");
     expect(timeline.match(/actor-run:/g)).toHaveLength(1);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "an old ambiguous actor start refreshes its exact token before unpaid cancellation",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1217,11 +1216,11 @@ test(
     expect(timeline).toContain("token-refresh:track-1");
     expect(timeline).toContain("refund-paid:track-1");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a legacy batch without saved actor input cannot be declared unpaid",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "actor-start-503"), "1");
@@ -1257,11 +1256,11 @@ test(
       "refund-paid:track-1",
     );
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a run started thirty seconds behind the box clock is adopted",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1286,11 +1285,11 @@ test(
     expect(timeline).toContain("report:track-1");
     expect(timeline).not.toContain("refund-paid:track-1");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "an ambiguous actor start recovers through an unfiltered paged run list",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1317,11 +1316,11 @@ test(
     expect(timeline).toContain("actor-poll:run-ambiguous");
     expect(timeline).toContain("report:track-1");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "an actor run nineteen minutes behind the box clock is adopted",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1346,36 +1345,40 @@ test(
       "actor-poll:run-ambiguous",
     );
   },
+  { timeout: 15_000 },
 );
 
-test("identical actor inputs adopt the earliest matching run", { timeout: 15_000 }, async () => {
-  const fixture = await rig({ paid: true });
-  writeFileSync(join(fixture.directory, "single-paid-row"), "1");
-  writeFileSync(join(fixture.directory, "actor-start-503"), "1");
-  expect(
-    Bun.spawnSync(["bash", SCRIPT, "--limit", "1"], {
+test(
+  "identical actor inputs adopt the earliest matching run",
+  async () => {
+    const fixture = await rig({ paid: true });
+    writeFileSync(join(fixture.directory, "single-paid-row"), "1");
+    writeFileSync(join(fixture.directory, "actor-start-503"), "1");
+    expect(
+      Bun.spawnSync(["bash", SCRIPT, "--limit", "1"], {
+        env: fixture.environment,
+        stderr: "pipe",
+        stdout: "pipe",
+      }).exitCode,
+    ).toBe(1);
+    writeFileSync(join(fixture.directory, "actor-list-match"), "1");
+    writeFileSync(join(fixture.directory, "actor-list-double-match"), "1");
+    rmSync(join(fixture.directory, "actor-start-503"));
+    const resumed = Bun.spawnSync(["bash", SCRIPT, "--limit", "1"], {
       env: fixture.environment,
       stderr: "pipe",
       stdout: "pipe",
-    }).exitCode,
-  ).toBe(1);
-  writeFileSync(join(fixture.directory, "actor-list-match"), "1");
-  writeFileSync(join(fixture.directory, "actor-list-double-match"), "1");
-  rmSync(join(fixture.directory, "actor-start-503"));
-  const resumed = Bun.spawnSync(["bash", SCRIPT, "--limit", "1"], {
-    env: fixture.environment,
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-  expect(resumed.exitCode, resumed.stderr.toString()).toBe(0);
-  expect(readFileSync(join(fixture.directory, "timeline"), "utf8")).toContain(
-    "actor-poll:run-earlier",
-  );
-});
+    });
+    expect(resumed.exitCode, resumed.stderr.toString()).toBe(0);
+    expect(readFileSync(join(fixture.directory, "timeline"), "utf8")).toContain(
+      "actor-poll:run-earlier",
+    );
+  },
+  { timeout: 15_000 },
+);
 
 test(
   "an unrelated unreadable actor input does not hide a matching run",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1401,11 +1404,11 @@ test(
     expect(timeline).toContain("actor-poll:run-ambiguous");
     expect(timeline).toContain("report:track-1");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "an oversized actor run window stays blocked without reading every run input",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1433,77 +1436,93 @@ test(
     expect(timeline).not.toContain("actor-input");
     expect(timeline).not.toContain("refund-paid:track-1");
   },
+  { timeout: 15_000 },
 );
 
-test("a report conflict resolves only its exact paid receipt", { timeout: 15_000 }, async () => {
-  const fixture = await rig({ paid: true });
-  writeFileSync(join(fixture.directory, "single-paid-row"), "1");
-  writeFileSync(join(fixture.directory, "report-gone"), "1");
-  const result = Bun.spawnSync(["bash", SCRIPT, "--limit", "1"], {
-    env: fixture.environment,
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-  expect(result.exitCode, result.stderr.toString()).toBe(0);
-  expect(JSON.parse(result.stdout.toString())).toMatchObject({ ok: true });
-  expect(
-    readdirSync(join(fixture.directory, "paid-progress")).filter((name) => name.endsWith(".json")),
-  ).toHaveLength(0);
-  expect(readFileSync(join(fixture.directory, "timeline"), "utf8")).toContain(
-    "resolve-paid:track-1",
-  );
-});
+test(
+  "a report conflict resolves only its exact paid receipt",
+  async () => {
+    const fixture = await rig({ paid: true });
+    writeFileSync(join(fixture.directory, "single-paid-row"), "1");
+    writeFileSync(join(fixture.directory, "report-gone"), "1");
+    const result = Bun.spawnSync(["bash", SCRIPT, "--limit", "1"], {
+      env: fixture.environment,
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(JSON.parse(result.stdout.toString())).toMatchObject({ ok: true });
+    expect(
+      readdirSync(join(fixture.directory, "paid-progress")).filter((name) =>
+        name.endsWith(".json"),
+      ),
+    ).toHaveLength(0);
+    expect(readFileSync(join(fixture.directory, "timeline"), "utf8")).toContain(
+      "resolve-paid:track-1",
+    );
+  },
+  { timeout: 15_000 },
+);
 
-test("a refused report resolution keeps the paid checkpoint", { timeout: 15_000 }, async () => {
-  const fixture = await rig({ paid: true });
-  writeFileSync(join(fixture.directory, "single-paid-row"), "1");
-  writeFileSync(join(fixture.directory, "report-gone"), "1");
-  writeFileSync(join(fixture.directory, "resolve-refuse"), "1");
-  const result = Bun.spawnSync(["bash", SCRIPT, "--limit", "1"], {
-    env: fixture.environment,
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-  expect(result.exitCode, result.stderr.toString()).toBe(0);
-  expect(JSON.parse(result.stdout.toString())).toMatchObject({
-    blockedReason: "paid_result_recovery",
-    ok: true,
-  });
-  expect(
-    readdirSync(join(fixture.directory, "paid-progress")).filter((name) => name.endsWith(".json")),
-  ).toHaveLength(1);
-  expect(readFileSync(join(fixture.directory, "timeline"), "utf8")).toContain(
-    "resolve-paid:track-1",
-  );
-});
+test(
+  "a refused report resolution keeps the paid checkpoint",
+  async () => {
+    const fixture = await rig({ paid: true });
+    writeFileSync(join(fixture.directory, "single-paid-row"), "1");
+    writeFileSync(join(fixture.directory, "report-gone"), "1");
+    writeFileSync(join(fixture.directory, "resolve-refuse"), "1");
+    const result = Bun.spawnSync(["bash", SCRIPT, "--limit", "1"], {
+      env: fixture.environment,
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(JSON.parse(result.stdout.toString())).toMatchObject({
+      blockedReason: "paid_result_recovery",
+      ok: true,
+    });
+    expect(
+      readdirSync(join(fixture.directory, "paid-progress")).filter((name) =>
+        name.endsWith(".json"),
+      ),
+    ).toHaveLength(1);
+    expect(readFileSync(join(fixture.directory, "timeline"), "utf8")).toContain(
+      "resolve-paid:track-1",
+    );
+  },
+  { timeout: 15_000 },
+);
 
-test("an Apify run lookup 404 keeps the paid checkpoint", { timeout: 15_000 }, async () => {
-  const fixture = await rig({ paid: true });
-  writeFileSync(join(fixture.directory, "single-paid-row"), "1");
-  writeFileSync(join(fixture.directory, "actor-run-gone"), "1");
-  const result = Bun.spawnSync(["bash", SCRIPT, "--limit", "1"], {
-    env: fixture.environment,
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-  expect(result.exitCode).toBe(1);
-  const progress = join(fixture.directory, "paid-progress");
-  const checkpointFile = readdirSync(progress).find((name) => name.endsWith(".json"));
-  if (!checkpointFile) {
-    throw new Error("missing paid actor checkpoint");
-  }
-  expect(JSON.parse(readFileSync(join(progress, checkpointFile), "utf8"))).toMatchObject({
-    apifyRunId: "run-1",
-    stage: "actor_started",
-  });
-  expect(readFileSync(join(fixture.directory, "timeline"), "utf8")).not.toContain(
-    "cancel-paid:track-1",
-  );
-});
+test(
+  "an Apify run lookup 404 keeps the paid checkpoint",
+  async () => {
+    const fixture = await rig({ paid: true });
+    writeFileSync(join(fixture.directory, "single-paid-row"), "1");
+    writeFileSync(join(fixture.directory, "actor-run-gone"), "1");
+    const result = Bun.spawnSync(["bash", SCRIPT, "--limit", "1"], {
+      env: fixture.environment,
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+    expect(result.exitCode).toBe(1);
+    const progress = join(fixture.directory, "paid-progress");
+    const checkpointFile = readdirSync(progress).find((name) => name.endsWith(".json"));
+    if (!checkpointFile) {
+      throw new Error("missing paid actor checkpoint");
+    }
+    expect(JSON.parse(readFileSync(join(progress, checkpointFile), "utf8"))).toMatchObject({
+      apifyRunId: "run-1",
+      stage: "actor_started",
+    });
+    expect(readFileSync(join(fixture.directory, "timeline"), "utf8")).not.toContain(
+      "cancel-paid:track-1",
+    );
+  },
+  { timeout: 15_000 },
+);
 
 test(
   "a terminal actor run refreshes its expired paid token before cancellation",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1538,11 +1557,11 @@ test(
     expect(timeline).toContain("token-refresh:track-1");
     expect(timeline).toContain("cancel-paid:track-1");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "an expired unpaid commit checks the exact receipt before dropping its checkpoint",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1577,11 +1596,11 @@ test(
     expect(timeline).toContain("receipt-read:track-1");
     expect(timeline).not.toContain("paid-commit:track-1");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a definite 409 settles an unpaid commit checkpoint before two hours",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1610,54 +1629,58 @@ test(
     expect(timeline).toContain("rejected-commit:track-1");
     expect(timeline).toContain("receipt-read:track-1");
   },
+  { timeout: 15_000 },
 );
 
-test("one recovery pass polls a shared running run only once", { timeout: 15_000 }, async () => {
-  const fixture = await rig({ paid: true });
-  const progress = join(fixture.directory, "paid-progress");
-  mkdirSync(progress);
-  writeFileSync(join(fixture.directory, "actor-running"), "1");
-  for (const trackId of ["track-1", "track-2"]) {
-    const file = `${createHash("sha256").update(trackId).digest("hex")}.json`;
-    writeFileSync(
-      join(progress, file),
-      JSON.stringify({
-        actorQueries: ["query-track-1", "query-track-2"],
-        actorStartedAt: Date.now() - 1_000,
-        allowPaid: true,
-        anchorQuery: `query-${trackId}`,
-        apifyRunId: "run-shared",
-        createdAt: Date.now(),
-        evidence: `evidence:${trackId}`,
-        paidResultToken: `result:${trackId}`,
-        prepared: `prepared:${trackId}`,
-        receiptAt: `receipt:${trackId}`,
-        stage: "actor_started",
-        trackId,
-      }),
-    );
-  }
-  const child = Bun.spawn(["bash", SCRIPT, "--limit", "2"], {
-    env: fixture.environment,
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-  const finished = await Promise.race([
-    child.exited,
-    Bun.sleep(3_000).then(() => "timeout" as const),
-  ]);
-  if (finished === "timeout") {
-    child.kill();
-  }
-  expect(finished).not.toBe("timeout");
-  const timeline = readFileSync(join(fixture.directory, "timeline"), "utf8");
-  expect(timeline.match(/actor-poll/g)).toHaveLength(1);
-  expect(readdirSync(progress).filter((name) => name.endsWith(".json"))).toHaveLength(2);
-});
+test(
+  "one recovery pass polls a shared running run only once",
+  async () => {
+    const fixture = await rig({ paid: true });
+    const progress = join(fixture.directory, "paid-progress");
+    mkdirSync(progress);
+    writeFileSync(join(fixture.directory, "actor-running"), "1");
+    for (const trackId of ["track-1", "track-2"]) {
+      const file = `${createHash("sha256").update(trackId).digest("hex")}.json`;
+      writeFileSync(
+        join(progress, file),
+        JSON.stringify({
+          actorQueries: ["query-track-1", "query-track-2"],
+          actorStartedAt: Date.now() - 1_000,
+          allowPaid: true,
+          anchorQuery: `query-${trackId}`,
+          apifyRunId: "run-shared",
+          createdAt: Date.now(),
+          evidence: `evidence:${trackId}`,
+          paidResultToken: `result:${trackId}`,
+          prepared: `prepared:${trackId}`,
+          receiptAt: `receipt:${trackId}`,
+          stage: "actor_started",
+          trackId,
+        }),
+      );
+    }
+    const child = Bun.spawn(["bash", SCRIPT, "--limit", "2"], {
+      env: fixture.environment,
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+    const finished = await Promise.race([
+      child.exited,
+      Bun.sleep(3_000).then(() => "timeout" as const),
+    ]);
+    if (finished === "timeout") {
+      child.kill();
+    }
+    expect(finished).not.toBe("timeout");
+    const timeline = readFileSync(join(fixture.directory, "timeline"), "utf8");
+    expect(timeline.match(/actor-poll/g)).toHaveLength(1);
+    expect(readdirSync(progress).filter((name) => name.endsWith(".json"))).toHaveLength(2);
+  },
+  { timeout: 15_000 },
+);
 
 test(
   "a legacy single-row prepare preserves receipt coordinates for expired unpaid recovery",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1694,11 +1717,11 @@ test(
       "receipt-read:track-1",
     );
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a failed poll recovers its run ID without a second actor POST",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "actor-fail"), "1");
@@ -1737,11 +1760,11 @@ test(
     expect(timeline.match(/worklist-read/g)).toHaveLength(2);
     expect(timeline.match(/paid-commit:track-2/g)).toHaveLength(1);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a saved Apify run refreshes its exact paid token after a day and settles without a second start",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1782,11 +1805,11 @@ test(
     expect(timeline).toContain("token-used:fresh-result:track-1");
     expect(timeline.match(/actor-run:query-track-1/g)).toHaveLength(1);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a blocked paid checkpoint still allows another row through free rungs",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1815,11 +1838,11 @@ test(
     expect(timeline).toContain("free-commit:track-2");
     expect(timeline).not.toContain("paid-commit:track-2");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "Apify OFF lets a started run settle but prevents an admitted row from starting",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "actor-fail"), "1");
@@ -1852,11 +1875,11 @@ test(
       readFileSync(join(fixture.directory, "timeline"), "utf8").match(/actor-run:/g),
     ).toHaveLength(1);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a definitive rejected Apify start settles the unpaid result without retiring its track",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1884,11 +1907,11 @@ test(
     expect(timeline.match(/paid-commit:track-1/g)).toHaveLength(2);
     expect(timeline.match(/actor-run:query-track-1/g)).toHaveLength(2);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a terminal invalid paid report settles its strike and removes its checkpoint",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1913,11 +1936,11 @@ test(
     expect(timeline.match(/actor-run/g)).toHaveLength(1);
     expect(timeline).toContain("cancel-paid:track-1");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a refused invalid-strike cancel retains the paid checkpoint",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1938,11 +1961,11 @@ test(
       "cancel-paid:track-1",
     );
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a concurrent direct sweep reports busy while the wrapper owns the whole tick",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     writeFileSync(join(fixture.directory, "single-paid-row"), "1");
@@ -1976,11 +1999,11 @@ test(
     expect(timeline.match(/actor-poll/g)).toHaveLength(1);
     expect(timeline.match(/actor-run/g)).toHaveLength(1);
   },
+  { timeout: 15_000 },
 );
 
 test(
   "systemic invalid recovered reports preserve every paid checkpoint",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     const progress = join(fixture.directory, "paid-progress");
@@ -2016,11 +2039,11 @@ test(
     expect(readdirSync(progress).filter((name) => name.endsWith(".json"))).toHaveLength(3);
     expect(readFileSync(join(fixture.directory, "timeline"), "utf8")).not.toContain("failure:");
   },
+  { timeout: 15_000 },
 );
 
 test(
   "a malformed checkpoint blocks new paid admission while valid saved results replay",
-  { timeout: 15_000 },
   async () => {
     const fixture = await rig({ paid: true });
     const progress = join(fixture.directory, "paid-progress");
@@ -2059,4 +2082,5 @@ test(
     expect(timeline).toContain("report:track-1");
     expect(timeline).not.toContain("actor-run:");
   },
+  { timeout: 15_000 },
 );
