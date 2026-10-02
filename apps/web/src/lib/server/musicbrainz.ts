@@ -26,6 +26,10 @@ class MusicbrainzUnreachable extends Data.TaggedError("MusicbrainzUnreachable")<
   cause: unknown;
 }> {}
 
+class MusicbrainzBodyFailed extends Data.TaggedError("MusicbrainzBodyFailed")<{
+  cause: unknown;
+}> {}
+
 class MusicbrainzUnavailable extends Data.TaggedError("MusicbrainzUnavailable")<{
   retryAfterSeconds: number;
   status: number;
@@ -55,15 +59,33 @@ function mbRequest<T>(path: string, context?: MbRequestContext): Effect.Effect<M
       : Effect.void;
 
   const attempt = Effect.gen(function* () {
-    const response = yield* Effect.tryPromise({
-      catch: (cause) => new MusicbrainzUnreachable({ cause }),
-      try: (signal) => fetch(url, { headers: { "User-Agent": MB_USER_AGENT }, signal }),
+    let readingBody = false;
+    const unreachable = (cause: unknown) =>
+      readingBody ? new MusicbrainzBodyFailed({ cause }) : new MusicbrainzUnreachable({ cause });
+
+    const exchange = yield* Effect.tryPromise({
+      catch: unreachable,
+      try: async (signal) => {
+        const response = await fetch(url, { headers: { "User-Agent": MB_USER_AGENT }, signal });
+
+        if (!response.ok) {
+          return { response };
+        }
+
+        readingBody = true;
+
+        return { data: (await response.json()) as T, response };
+      },
     }).pipe(
       Effect.timeoutOrElse({
         duration: MB_REQUEST_TIMEOUT,
-        orElse: () => Effect.fail(new MusicbrainzUnreachable({ cause: "timeout" })),
+        orElse: () => Effect.fail(unreachable(new Error("MusicBrainz request timed out"))),
       }),
+      Effect.catchTag("MusicbrainzBodyFailed", (error) =>
+        record("invalid").pipe(Effect.andThen(Effect.die(error.cause))),
+      ),
     );
+    const { response } = exchange;
 
     if (response.status === 503) {
       return yield* new MusicbrainzUnavailable({
@@ -72,20 +94,20 @@ function mbRequest<T>(path: string, context?: MbRequestContext): Effect.Effect<M
       });
     }
 
-    if (!response.ok) {
+    if (!("data" in exchange)) {
       return yield* new MusicbrainzRejected({
         status: response.status,
         statusText: response.statusText,
       });
     }
 
-    const data = yield* Effect.tryPromise(() => response.json() as Promise<T>).pipe(
-      Effect.tapError(() => record("invalid")),
-      Effect.orDie,
-    );
     yield* record("body");
 
-    return { data, rateLimited: false, status: response.status } satisfies MbResult<T>;
+    return {
+      data: exchange.data,
+      rateLimited: false,
+      status: response.status,
+    } satisfies MbResult<T>;
   });
 
   const retryOn503 = Schedule.recurs(MAX_503_RETRIES).pipe(

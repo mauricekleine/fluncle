@@ -34,14 +34,21 @@ class DiscogsUnreachable extends Data.TaggedError("DiscogsUnreachable")<{
   url: string;
 }> {}
 
-function discogsGet(url: string, token: string): Effect.Effect<Response, DiscogsUnreachable> {
+function discogsGet<B>(
+  url: string,
+  token: string,
+  read: (response: Response) => Promise<B> | undefined,
+): Effect.Effect<{ body: B | undefined; response: Response }, DiscogsUnreachable> {
   return Effect.tryPromise({
     catch: (cause) => new DiscogsUnreachable({ cause, url }),
-    try: (signal) =>
-      fetch(url, {
+    try: async (signal) => {
+      const response = await fetch(url, {
         headers: { Authorization: `Discogs token=${token}`, "User-Agent": USER_AGENT },
         signal,
-      }),
+      });
+
+      return { body: await read(response), response };
+    },
   }).pipe(
     Effect.timeoutOrElse({
       duration: DISCOGS_REQUEST_TIMEOUT,
@@ -386,7 +393,11 @@ function discogsFetch<T>(
   return runServerEffect(
     discogsQueue.run(
       Effect.gen(function* () {
-        const response = yield* discogsGet(`${DISCOGS_API_ROOT}${path}`, token);
+        const { body, response } = yield* discogsGet(
+          `${DISCOGS_API_ROOT}${path}`,
+          token,
+          (candidate) => (candidate.ok ? (candidate.json() as Promise<T>) : undefined),
+        );
         const remainingHeader = response.headers.get("X-Discogs-Ratelimit-Remaining");
         const remaining = remainingHeader === null ? Number.NaN : Number(remainingHeader);
 
@@ -403,7 +414,7 @@ function discogsFetch<T>(
           return undefined;
         }
 
-        return yield* Effect.promise(() => response.json() as Promise<T>);
+        return body;
       }),
     ),
   );
@@ -846,7 +857,11 @@ export async function fetchDiscogsLabelImage(
     const image = await runServerEffect(
       discogsQueue.run(
         Effect.gen(function* () {
-          const response = yield* discogsGet(uri, token);
+          const { body: bytes, response } = yield* discogsGet(uri, token, (candidate) =>
+            candidate.ok && (candidate.headers.get("content-type") ?? "").startsWith("image/")
+              ? candidate.arrayBuffer()
+              : undefined,
+          );
 
           if (response.status === 429) {
             signal.hit = true;
@@ -873,9 +888,7 @@ export async function fetchDiscogsLabelImage(
             return undefined;
           }
 
-          const bytes = yield* Effect.promise(() => response.arrayBuffer());
-
-          if (bytes.byteLength === 0 || bytes.byteLength > MAX_LABEL_IMAGE_BYTES) {
+          if (!bytes || bytes.byteLength === 0 || bytes.byteLength > MAX_LABEL_IMAGE_BYTES) {
             return undefined;
           }
 

@@ -217,3 +217,33 @@ describe("mbFetch 503 handling", () => {
     );
   });
 });
+
+describe("mbFetch stalled body", () => {
+  it("aborts and rejects when the body stalls after the headers arrive", async () => {
+    setMusicbrainzRateLimitForTests(0);
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    let aborted = false;
+    globalThis.fetch = vi.fn((_url: string, init?: RequestInit) => {
+      const body = new ReadableStream({
+        start(controller) {
+          init?.signal?.addEventListener("abort", () => {
+            aborted = true;
+            controller.error(new DOMException("aborted", "AbortError"));
+          });
+        },
+      });
+
+      return Promise.resolve(new Response(body, { status: 200 }));
+    }) as unknown as typeof fetch;
+
+    const pending = mbFetch("/label/stalled", { nodeKind: "label", requestKind: "label_browse" });
+    const settled = pending.then(
+      () => "resolved",
+      () => "rejected",
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await expect(settled).resolves.toBe("rejected");
+    expect(aborted).toBe(true);
+  });
+});
