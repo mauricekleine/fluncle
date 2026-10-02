@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { lookupSpotifyIdsByMbid } from "./listenbrainz";
+import { lookupSpotifyIdsByMbid, lookupSpotifyIdsByMetadata } from "./listenbrainz";
 
 const HIT = [
   {
@@ -14,6 +14,8 @@ const HIT = [
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("lookupSpotifyIdsByMbid", () => {
@@ -107,5 +109,62 @@ describe("lookupSpotifyIdsByMbid", () => {
 
     expect(await lookupSpotifyIdsByMbid("   ")).toEqual({ outcome: "invalid-mbid" });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("ListenBrainz deadlines — every outbound read is bounded, body included", () => {
+  it("maps a request that outlives the 10 second deadline to request-threw", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => new Promise<Response>(() => {})),
+    );
+
+    const pending = lookupSpotifyIdsByMbid("8f3471b5-7e6a-48da-86a9-c1c07a0f47ae");
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await pending).toEqual({ outcome: "request-threw" });
+  });
+
+  it("aborts a body that stalls after the headers arrive, reading it inside the deadline", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    let aborted = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        const stalled = new ReadableStream({
+          start(controller) {
+            init?.signal?.addEventListener("abort", () => {
+              aborted = true;
+              controller.error(new DOMException("aborted", "AbortError"));
+            });
+          },
+        });
+
+        return Promise.resolve(new Response(stalled, { status: 200 }));
+      }),
+    );
+
+    const pending = lookupSpotifyIdsByMbid("8f3471b5-7e6a-48da-86a9-c1c07a0f47ae");
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await pending).toEqual({ outcome: "malformed-body" });
+    expect(aborted).toBe(true);
+  });
+
+  it("maps a metadata request that outlives the 10 second deadline to request-threw", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => new Promise<Response>(() => {})),
+    );
+
+    const pending = lookupSpotifyIdsByMetadata("Calibre", "Shelter", "Mr Right On");
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await pending).toEqual({ outcome: "request-threw" });
   });
 });

@@ -22,6 +22,8 @@ const body = (data: unknown[]) => Response.json({ data });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("Deezer submission candidates", () => {
@@ -126,6 +128,7 @@ describe("Deezer submission candidates", () => {
   });
 
   it("bounds submission search with a 2.5 second abort signal", async () => {
+    vi.useFakeTimers();
     const fetchMock = vi.fn().mockImplementation(
       (_url: string, init: RequestInit) =>
         new Promise((_resolve, reject) => {
@@ -134,10 +137,13 @@ describe("Deezer submission candidates", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    expect(await searchDeezerSubmissionTracks("Calibre", 8)).toEqual([]);
+    const pending = searchDeezerSubmissionTracks("Calibre", 8);
+    await vi.advanceTimersByTimeAsync(2_500);
+
+    expect(await pending).toEqual([]);
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
     expect(init?.signal?.aborted).toBe(true);
-  }, 4_000);
+  });
 });
 
 describe("deezerSearchQuery — the one spelling, shared with the box", () => {
@@ -594,5 +600,212 @@ describe("lookupDeezerTrackByIsrc — the ledger-grade by-ISRC read", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({})));
 
     expect((await lookupDeezerTrackByIsrc("GBEXH1900314", 300_000)).outcome).toBe("failed");
+  });
+
+  it("maps a request that outlives the 10 second deadline to failed", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => new Promise<Response>(() => {})),
+    );
+
+    const pending = lookupDeezerTrackByIsrc("GBEXH1900314", 300_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await pending).toEqual({ error: "Deezer request timed out", outcome: "failed" });
+  });
+});
+
+function loggedEvents(): { attempts?: number; event: string; query?: string }[] {
+  return vi.mocked(console.warn).mock.calls.map(([line]) => JSON.parse(String(line)));
+}
+
+describe("searchDeezerCandidates — quota retries pace off the delay array", () => {
+  it("waits out each delay-array slot before re-asking on a quota answer", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(quotaResponse())
+      .mockResolvedValueOnce(quotaResponse())
+      .mockResolvedValueOnce(body([HIT]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = searchDeezerCandidates({ artists: ["Calibre"], title: "Mr Right On" });
+
+    await vi.advanceTimersByTimeAsync(1_199);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(2_499);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(await pending).toEqual([
+      {
+        artistName: "Calibre",
+        deezerTrackId: "3263968181",
+        durationMs: 132_000,
+        isrc: "GBEXH1900314",
+        title: "Mr Right On",
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("records the exhaustion when a saturated quota outlives the retry budget", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchMock = vi.fn().mockImplementation(() => quotaResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(
+      await searchDeezerCandidates({ artists: ["Calibre"], title: "Mr Right On" }, [0, 0]),
+    ).toEqual([]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(loggedEvents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          attempts: 3,
+          event: "deezer.search-quota-exhausted",
+          query: "Calibre Mr Right On",
+        }),
+      ]),
+    );
+  });
+});
+
+describe("Deezer deadlines — every outbound read is bounded, body included", () => {
+  it("fails a candidate search that outlives the 10 second deadline", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => new Promise<Response>(() => {})),
+    );
+
+    const pending = searchDeezerCandidates({ artists: ["Calibre"], title: "Mr Right On" });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await pending).toEqual([]);
+    expect(loggedEvents()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ event: "deezer.search-threw" })]),
+    );
+  });
+
+  it("aborts a candidate-search body that stalls after the headers arrive", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    let aborted = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        const stalled = new ReadableStream({
+          start(controller) {
+            init?.signal?.addEventListener("abort", () => {
+              aborted = true;
+              controller.error(new DOMException("aborted", "AbortError"));
+            });
+          },
+        });
+
+        return Promise.resolve(new Response(stalled, { status: 200 }));
+      }),
+    );
+
+    const pending = searchDeezerCandidates({ artists: ["Calibre"], title: "Mr Right On" });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await pending).toEqual([]);
+    expect(aborted).toBe(true);
+    expect(loggedEvents()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ event: "deezer.search-malformed-body" })]),
+    );
+  });
+
+  it("maps a submission track read that outlives the 10 second deadline to the submit error", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => new Promise<Response>(() => {})),
+    );
+
+    const pending = getDeezerSubmissionTrack("3263968181").catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await pending).toMatchObject({ code: "submission_unavailable", status: 503 });
+  });
+
+  it("bounds the by-name ISRC fallback with a 10 second deadline", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => new Promise<Response>(() => {})),
+    );
+
+    const pending = lookupIsrcFromDeezer({
+      artists: ["Calibre"],
+      durationMs: 132_000,
+      title: "Mr Right On",
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await pending).toBeUndefined();
+  });
+
+  it("bounds the by-ISRC enrichment read with a 10 second deadline", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => new Promise<Response>(() => {})),
+    );
+
+    const pending = enrichFromDeezer("GBEXH1900314", 132_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await pending).toEqual({});
+  });
+});
+
+describe("Deezer optional enrichment tolerates invalid provider fields", () => {
+  it("returns no ISRC when a search result cannot be inspected", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(body([null])));
+
+    await expect(
+      lookupIsrcFromDeezer({ artists: ["Calibre"], durationMs: 132_000, title: "Mr Right On" }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("returns no ISRC when a detail carries a non-string ISRC", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(body([HIT]))
+        .mockResolvedValueOnce(Response.json({ isrc: 123 })),
+    );
+
+    await expect(
+      lookupIsrcFromDeezer({ artists: ["Calibre"], durationMs: 132_000, title: "Mr Right On" }),
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    { album: undefined, preview: 123 },
+    { album: { id: 1 }, preview: "https://cdn.deezer.com/p.mp3" },
+  ])("returns no enrichment when a provider field cannot be trimmed: %j", async (fields) => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json({ duration: 132, id: 1, ...fields }))
+        .mockResolvedValueOnce(Response.json({ label: 123 })),
+    );
+
+    await expect(enrichFromDeezer("GBEXH1900314", 132_000)).resolves.toEqual({});
   });
 });

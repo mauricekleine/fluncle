@@ -1,7 +1,8 @@
 import { DEEZER_CANDIDATE_LIMIT } from "@fluncle/contracts/orpc";
+import { Data, Duration, Effect, Schedule } from "effect";
 
 import { ApiError } from "./api-error";
-import { logEvent } from "./log";
+import { runServerEffect } from "./effect/runtime";
 import { canonicalizeSearchTitle, matchKey } from "./track-match";
 
 type DeezerTrack = {
@@ -49,8 +50,8 @@ export type DeezerIsrcCandidate = {
 
 export const DEEZER_USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
 
-const DEEZER_TIMEOUT_MS = 10_000;
-const DEEZER_SUBMISSION_SEARCH_TIMEOUT_MS = 2_500;
+const DEEZER_REQUEST_TIMEOUT = Duration.millis(10_000);
+const DEEZER_SUBMISSION_SEARCH_TIMEOUT = Duration.millis(2_500);
 
 const DEEZER_SEARCH_LIMIT = DEEZER_CANDIDATE_LIMIT;
 
@@ -59,6 +60,58 @@ export const DEEZER_QUOTA_ERROR_CODE = 4;
 export const DEEZER_DATA_EXCEPTION_CODE = 800;
 
 const DEEZER_QUOTA_RETRY_DELAYS_MS = [1_200, 2_500];
+
+class DeezerApiFailed extends Data.TaggedError("DeezerApiFailed")<{
+  code: unknown;
+  error: unknown;
+}> {}
+
+class DeezerBodyFailed extends Data.TaggedError("DeezerBodyFailed")<{ cause: unknown }> {}
+
+class DeezerQuota extends Data.TaggedError("DeezerQuota")<{ error: unknown }> {}
+
+class DeezerRejected extends Data.TaggedError("DeezerRejected")<{ status: number }> {}
+
+class DeezerUnexpected extends Data.TaggedError("DeezerUnexpected")<{ body: unknown }> {}
+
+class DeezerUnreachable extends Data.TaggedError("DeezerUnreachable")<{ cause: unknown }> {}
+
+type DeezerFailure =
+  | DeezerApiFailed
+  | DeezerBodyFailed
+  | DeezerQuota
+  | DeezerRejected
+  | DeezerUnexpected
+  | DeezerUnreachable;
+
+function deezerExchange(url: string, timeout: Duration.Duration) {
+  let readingBody = false;
+  const unreachable = (cause: unknown) =>
+    readingBody ? new DeezerBodyFailed({ cause }) : new DeezerUnreachable({ cause });
+
+  return Effect.tryPromise({
+    catch: unreachable,
+    try: async (signal) => {
+      const response = await fetch(url, {
+        headers: { "User-Agent": DEEZER_USER_AGENT },
+        signal,
+      });
+
+      if (!response.ok) {
+        return { read: false as const, response };
+      }
+
+      readingBody = true;
+
+      return { data: (await response.json()) as unknown, read: true as const, response };
+    },
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: timeout,
+      orElse: () => Effect.fail(unreachable(new Error("Deezer request timed out"))),
+    }),
+  );
+}
 
 export function deezerSearchQuery(artists: string[], title: string): string | undefined {
   const collapse = (text: string) => text.replaceAll('"', " ").replace(/\s+/g, " ").trim();
@@ -72,10 +125,77 @@ export function deezerSearchQuery(artists: string[], title: string): string | un
   return [...names, canonical].join(" ");
 }
 
-type DeezerSearchAttempt =
-  | { candidates: DeezerIsrcCandidate[]; outcome: "ok" }
-  | { outcome: "quota" }
-  | { outcome: "failed" };
+function deezerSearchCandidates(
+  query: string,
+): Effect.Effect<DeezerIsrcCandidate[], DeezerFailure> {
+  const url = `https://api.deezer.com/search/track?q=${encodeURIComponent(query)}&limit=${DEEZER_SEARCH_LIMIT}`;
+
+  return Effect.gen(function* () {
+    const exchange = yield* deezerExchange(url, DEEZER_REQUEST_TIMEOUT);
+    const { response } = exchange;
+
+    if (!exchange.read) {
+      return yield* new DeezerRejected({ status: response.status });
+    }
+
+    const error = (exchange.data as DeezerSearchResult).error;
+
+    if (error) {
+      const code = (error as { code?: unknown }).code;
+
+      if (code === DEEZER_QUOTA_ERROR_CODE) {
+        return yield* new DeezerQuota({ error });
+      }
+
+      return yield* new DeezerApiFailed({ code, error });
+    }
+
+    const data = (exchange.data as DeezerSearchResult).data;
+
+    if (!Array.isArray(data)) {
+      return yield* new DeezerUnexpected({ body: exchange.data });
+    }
+
+    const candidates: DeezerIsrcCandidate[] = [];
+
+    for (const hit of data) {
+      const isrc = hit.isrc?.trim() ?? "";
+      const hitTitle = hit.title?.trim() ?? "";
+      const artistName = hit.artist?.name?.trim() ?? "";
+
+      if (
+        !isrc ||
+        !hitTitle ||
+        !artistName ||
+        typeof hit.duration !== "number" ||
+        hit.duration <= 0
+      ) {
+        continue;
+      }
+
+      candidates.push({
+        artistName,
+
+        ...(typeof hit.id === "number" ? { deezerTrackId: String(hit.id) } : {}),
+        durationMs: Math.round(hit.duration * 1000),
+        isrc,
+        title: hitTitle,
+      });
+    }
+
+    return candidates;
+  });
+}
+
+function quotaRetrySchedule(retryDelaysMs: number[]) {
+  const delayMs = (attempt: number) => retryDelaysMs[attempt - 1] ?? 0;
+
+  return Schedule.recurs(retryDelaysMs.length).pipe(
+    Schedule.setInputType<DeezerFailure>(),
+    Schedule.while(({ input }) => input._tag === "DeezerQuota"),
+    Schedule.modifyDelay(({ attempt }) => Effect.succeed(Duration.millis(delayMs(attempt)))),
+  );
+}
 
 export async function searchDeezerCandidates(
   input: {
@@ -90,110 +210,42 @@ export async function searchDeezerCandidates(
     return [];
   }
 
-  for (let attempt = 0; ; attempt += 1) {
-    const result = await attemptDeezerSearch(query);
-
-    if (result.outcome === "ok") {
-      return result.candidates;
-    }
-
-    const delay = result.outcome === "quota" ? retryDelaysMs[attempt] : undefined;
-
-    if (delay === undefined) {
-      if (result.outcome === "quota") {
-        logEvent("warn", "deezer.search-quota-exhausted", { attempts: attempt + 1, query });
-      }
-
-      return [];
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, delay));
-  }
-}
-
-async function attemptDeezerSearch(query: string): Promise<DeezerSearchAttempt> {
-  let response: Response;
-
-  try {
-    response = await fetch(
-      `https://api.deezer.com/search/track?q=${encodeURIComponent(query)}&limit=${DEEZER_SEARCH_LIMIT}`,
-      {
-        headers: { "User-Agent": DEEZER_USER_AGENT },
-        signal: AbortSignal.timeout(DEEZER_TIMEOUT_MS),
-      },
-    );
-  } catch (error) {
-    logEvent("warn", "deezer.search-threw", { error });
-
-    return { outcome: "failed" };
-  }
-
-  if (!response.ok) {
-    logEvent("warn", "deezer.search-http-error", { status: response.status });
-
-    return { outcome: "failed" };
-  }
-
-  let body: unknown;
-
-  try {
-    body = await response.json();
-  } catch (error) {
-    logEvent("warn", "deezer.search-malformed-body", { error });
-
-    return { outcome: "failed" };
-  }
-
-  const error = (body as DeezerSearchResult).error;
-
-  if (error) {
-    const code = (error as { code?: unknown }).code;
-
-    if (code === DEEZER_QUOTA_ERROR_CODE) {
-      return { outcome: "quota" };
-    }
-
-    logEvent("warn", "deezer.search-api-error", { error });
-
-    return { outcome: "failed" };
-  }
-
-  const data = (body as DeezerSearchResult).data;
-
-  if (!Array.isArray(data)) {
-    logEvent("warn", "deezer.search-unexpected-shape", {});
-
-    return { outcome: "failed" };
-  }
-
-  const candidates: DeezerIsrcCandidate[] = [];
-
-  for (const hit of data) {
-    const isrc = hit.isrc?.trim() ?? "";
-    const hitTitle = hit.title?.trim() ?? "";
-    const artistName = hit.artist?.name?.trim() ?? "";
-
-    if (
-      !isrc ||
-      !hitTitle ||
-      !artistName ||
-      typeof hit.duration !== "number" ||
-      hit.duration <= 0
-    ) {
-      continue;
-    }
-
-    candidates.push({
-      artistName,
-
-      ...(typeof hit.id === "number" ? { deezerTrackId: String(hit.id) } : {}),
-      durationMs: Math.round(hit.duration * 1000),
-      isrc,
-      title: hitTitle,
-    });
-  }
-
-  return { candidates, outcome: "ok" };
+  return runServerEffect(
+    deezerSearchCandidates(query).pipe(
+      Effect.retry(quotaRetrySchedule(retryDelaysMs)),
+      Effect.catchTags({
+        DeezerApiFailed: (error) =>
+          Effect.logWarning("deezer.search-api-error").pipe(
+            Effect.annotateLogs({ error: error.error }),
+            Effect.as<DeezerIsrcCandidate[]>([]),
+          ),
+        DeezerBodyFailed: (error) =>
+          Effect.logWarning("deezer.search-malformed-body").pipe(
+            Effect.annotateLogs({ error: error.cause }),
+            Effect.as<DeezerIsrcCandidate[]>([]),
+          ),
+        DeezerQuota: () =>
+          Effect.logWarning("deezer.search-quota-exhausted").pipe(
+            Effect.annotateLogs({ attempts: retryDelaysMs.length + 1, query }),
+            Effect.as<DeezerIsrcCandidate[]>([]),
+          ),
+        DeezerRejected: (error) =>
+          Effect.logWarning("deezer.search-http-error").pipe(
+            Effect.annotateLogs({ status: error.status }),
+            Effect.as<DeezerIsrcCandidate[]>([]),
+          ),
+        DeezerUnexpected: () =>
+          Effect.logWarning("deezer.search-unexpected-shape").pipe(
+            Effect.as<DeezerIsrcCandidate[]>([]),
+          ),
+        DeezerUnreachable: (error) =>
+          Effect.logWarning("deezer.search-threw").pipe(
+            Effect.annotateLogs({ error: error.cause }),
+            Effect.as<DeezerIsrcCandidate[]>([]),
+          ),
+      }),
+    ),
+  );
 }
 
 type DeezerTrackDetail = {
@@ -218,114 +270,184 @@ export type DeezerSubmissionCandidate = {
   title: string;
 };
 
+function deezerSubmissionSearch(
+  query: string,
+  limit: number,
+): Effect.Effect<DeezerSubmissionCandidate[], DeezerFailure> {
+  const url = `https://api.deezer.com/search/track?q=${encodeURIComponent(query)}&limit=${limit}`;
+
+  return Effect.gen(function* () {
+    const exchange = yield* deezerExchange(url, DEEZER_SUBMISSION_SEARCH_TIMEOUT);
+    const { response } = exchange;
+
+    if (!exchange.read) {
+      return yield* new DeezerRejected({ status: response.status });
+    }
+
+    const parsed = exchange.data as {
+      data?: Array<{
+        album?: { cover_medium?: string; title?: string };
+        artist?: { name?: string };
+        duration?: number;
+        id?: number;
+        isrc?: string;
+        link?: string;
+        title?: string;
+      }>;
+      error?: unknown;
+    } | null;
+
+    if (!parsed || typeof parsed !== "object") {
+      return yield* new DeezerUnexpected({ body: exchange.data });
+    }
+
+    if (parsed.error) {
+      const code = (parsed.error as { code?: unknown }).code;
+
+      if (code === DEEZER_QUOTA_ERROR_CODE) {
+        return yield* new DeezerQuota({ error: parsed.error });
+      }
+
+      return yield* new DeezerApiFailed({ code, error: parsed.error });
+    }
+
+    if (!Array.isArray(parsed.data)) {
+      return yield* new DeezerUnexpected({ body: exchange.data });
+    }
+
+    return parsed.data.flatMap((track) => {
+      if (!track || typeof track !== "object") {
+        return [];
+      }
+
+      const artist = track.artist?.name?.trim();
+      const title = track.title?.trim();
+
+      if (
+        !Number.isSafeInteger(track.id) ||
+        (track.id ?? 0) <= 0 ||
+        !artist ||
+        !title ||
+        !track.isrc?.trim() ||
+        typeof track.duration !== "number" ||
+        track.duration <= 0
+      ) {
+        return [];
+      }
+
+      const id = String(track.id);
+
+      return [
+        {
+          album: track.album?.title?.trim() || undefined,
+          artists: [artist],
+          artworkUrl: track.album?.cover_medium?.trim() || undefined,
+          durationMs: Math.round(track.duration * 1000),
+          externalUrl: track.link?.trim() || `https://www.deezer.com/track/${id}`,
+          id,
+          isrc: track.isrc.trim(),
+          provider: "deezer" as const,
+          spotifyUrl: "",
+          title,
+        },
+      ];
+    });
+  });
+}
+
 export async function searchDeezerSubmissionTracks(
   query: string,
   limit: number,
 ): Promise<DeezerSubmissionCandidate[]> {
-  let response: Response;
+  return runServerEffect(
+    deezerSubmissionSearch(query, limit).pipe(
+      Effect.catchTags({
+        DeezerApiFailed: (error) =>
+          Effect.logWarning("deezer.submit-search-api-error").pipe(
+            Effect.annotateLogs({ error: error.error }),
+            Effect.as<DeezerSubmissionCandidate[]>([]),
+          ),
+        DeezerBodyFailed: (error) =>
+          Effect.logWarning("deezer.submit-search-malformed-body").pipe(
+            Effect.annotateLogs({ error: error.cause }),
+            Effect.as<DeezerSubmissionCandidate[]>([]),
+          ),
+        DeezerQuota: (error) =>
+          Effect.logWarning("deezer.search-quota-exhausted").pipe(
+            Effect.annotateLogs({ error: error.error }),
+            Effect.as<DeezerSubmissionCandidate[]>([]),
+          ),
+        DeezerRejected: (error) =>
+          Effect.logWarning("deezer.submit-search-http-error").pipe(
+            Effect.annotateLogs({ status: error.status }),
+            Effect.as<DeezerSubmissionCandidate[]>([]),
+          ),
+        DeezerUnexpected: () =>
+          Effect.logWarning("deezer.submit-search-unexpected-shape").pipe(
+            Effect.as<DeezerSubmissionCandidate[]>([]),
+          ),
+        DeezerUnreachable: (error) =>
+          Effect.logWarning("deezer.submit-search-threw").pipe(
+            Effect.annotateLogs({ error: error.cause }),
+            Effect.as<DeezerSubmissionCandidate[]>([]),
+          ),
+      }),
+    ),
+  );
+}
 
-  try {
-    response = await fetch(
-      `https://api.deezer.com/search/track?q=${encodeURIComponent(query)}&limit=${limit}`,
-      {
-        headers: { "User-Agent": DEEZER_USER_AGENT },
-        signal: AbortSignal.timeout(DEEZER_SUBMISSION_SEARCH_TIMEOUT_MS),
-      },
-    );
-  } catch (error) {
-    logEvent("warn", "deezer.submit-search-threw", { error });
-    return [];
-  }
+function deezerSubmissionTrack(id: string) {
+  const url = `https://api.deezer.com/track/${id}`;
 
-  if (!response.ok) {
-    logEvent("warn", "deezer.submit-search-http-error", { status: response.status });
-    return [];
-  }
+  return Effect.gen(function* () {
+    const exchange = yield* deezerExchange(url, DEEZER_REQUEST_TIMEOUT);
+    const { response } = exchange;
 
-  let body: unknown;
-
-  try {
-    body = await response.json();
-  } catch (error) {
-    logEvent("warn", "deezer.submit-search-malformed-body", { error });
-    return [];
-  }
-
-  const parsed = body as {
-    data?: Array<{
-      album?: { cover_medium?: string; title?: string };
-      artist?: { name?: string };
-      duration?: number;
-      id?: number;
-      isrc?: string;
-      link?: string;
-      title?: string;
-    }>;
-    error?: unknown;
-  };
-
-  if (!parsed || typeof parsed !== "object") {
-    logEvent("warn", "deezer.submit-search-unexpected-shape", {});
-    return [];
-  }
-
-  if (parsed.error) {
-    const code = (parsed.error as { code?: unknown }).code;
-
-    logEvent(
-      "warn",
-      code === DEEZER_QUOTA_ERROR_CODE
-        ? "deezer.search-quota-exhausted"
-        : "deezer.submit-search-api-error",
-      {
-        error: parsed.error,
-      },
-    );
-    return [];
-  }
-
-  if (!Array.isArray(parsed.data)) {
-    logEvent("warn", "deezer.submit-search-unexpected-shape", {});
-    return [];
-  }
-
-  return parsed.data.flatMap((track) => {
-    if (!track || typeof track !== "object") {
-      return [];
+    if (!exchange.read) {
+      return yield* new DeezerRejected({ status: response.status });
     }
 
-    const artist = track.artist?.name?.trim();
-    const title = track.title?.trim();
+    const track = exchange.data as DeezerTrackDetail;
+
+    if (!track || typeof track !== "object") {
+      return yield* new DeezerUnexpected({ body: exchange.data });
+    }
+
+    if ((track.error as { code?: unknown } | undefined)?.code === DEEZER_QUOTA_ERROR_CODE) {
+      return yield* new DeezerQuota({ error: track.error });
+    }
+
+    if (track.error) {
+      return yield* new DeezerApiFailed({
+        code: (track.error as { code?: unknown }).code,
+        error: track.error,
+      });
+    }
 
     if (
-      !Number.isSafeInteger(track.id) ||
-      (track.id ?? 0) <= 0 ||
-      !artist ||
-      !title ||
+      track.id !== Number(id) ||
       !track.isrc?.trim() ||
+      !track.title?.trim() ||
+      !track.artist?.name?.trim() ||
       typeof track.duration !== "number" ||
       track.duration <= 0
     ) {
-      return [];
+      return undefined;
     }
 
-    const id = String(track.id);
-
-    return [
-      {
-        album: track.album?.title?.trim() || undefined,
-        artists: [artist],
-        artworkUrl: track.album?.cover_medium?.trim() || undefined,
-        durationMs: Math.round(track.duration * 1000),
-        externalUrl: track.link?.trim() || `https://www.deezer.com/track/${id}`,
-        id,
-        isrc: track.isrc.trim(),
-        provider: "deezer" as const,
-        spotifyUrl: "",
-        title,
-      },
-    ];
+    return {
+      artists: [track.artist.name.trim()],
+      durationMs: Math.round(track.duration * 1000),
+      isrc: track.isrc.trim(),
+      title: track.title.trim(),
+    };
   });
+}
+
+function submissionUnavailable(): Effect.Effect<never, ApiError> {
+  return Effect.fail(
+    new ApiError("submission_unavailable", "I can't check Deezer right now. Try again later.", 503),
+  );
 }
 
 export async function getDeezerSubmissionTrack(id: string): Promise<
@@ -341,88 +463,41 @@ export async function getDeezerSubmissionTrack(id: string): Promise<
     return undefined;
   }
 
-  let response: Response;
-
-  try {
-    response = await fetch(`https://api.deezer.com/track/${id}`, {
-      headers: { "User-Agent": DEEZER_USER_AGENT },
-      signal: AbortSignal.timeout(DEEZER_TIMEOUT_MS),
-    });
-  } catch (error) {
-    logEvent("warn", "deezer.submit-track-threw", { error });
-    throw new ApiError(
-      "submission_unavailable",
-      "I can't check Deezer right now. Try again later.",
-      503,
-    );
-  }
-
-  if (!response.ok) {
-    logEvent("warn", "deezer.submit-track-http-error", { status: response.status });
-    throw new ApiError(
-      "submission_unavailable",
-      "I can't check Deezer right now. Try again later.",
-      503,
-    );
-  }
-
-  let track: DeezerTrackDetail;
-
-  try {
-    track = (await response.json()) as DeezerTrackDetail;
-  } catch (error) {
-    logEvent("warn", "deezer.submit-track-malformed-body", { error });
-    throw new ApiError(
-      "submission_unavailable",
-      "I can't check Deezer right now. Try again later.",
-      503,
-    );
-  }
-
-  if (!track || typeof track !== "object") {
-    logEvent("warn", "deezer.submit-track-unexpected-shape", {});
-    throw new ApiError(
-      "submission_unavailable",
-      "I can't check Deezer right now. Try again later.",
-      503,
-    );
-  }
-
-  if ((track.error as { code?: unknown } | undefined)?.code === DEEZER_QUOTA_ERROR_CODE) {
-    logEvent("warn", "deezer.search-quota-exhausted", { trackId: id });
-    throw new ApiError(
-      "submission_unavailable",
-      "I can't check Deezer right now. Try again later.",
-      503,
-    );
-  }
-
-  if (track.error) {
-    logEvent("warn", "deezer.submit-track-api-error", { error: track.error });
-    throw new ApiError(
-      "submission_unavailable",
-      "I can't check Deezer right now. Try again later.",
-      503,
-    );
-  }
-
-  if (
-    track.id !== Number(id) ||
-    !track.isrc?.trim() ||
-    !track.title?.trim() ||
-    !track.artist?.name?.trim() ||
-    typeof track.duration !== "number" ||
-    track.duration <= 0
-  ) {
-    return undefined;
-  }
-
-  return {
-    artists: [track.artist.name.trim()],
-    durationMs: Math.round(track.duration * 1000),
-    isrc: track.isrc.trim(),
-    title: track.title.trim(),
-  };
+  return runServerEffect(
+    deezerSubmissionTrack(id).pipe(
+      Effect.catchTags({
+        DeezerApiFailed: (error) =>
+          Effect.logWarning("deezer.submit-track-api-error").pipe(
+            Effect.annotateLogs({ error: error.error }),
+            Effect.andThen(submissionUnavailable()),
+          ),
+        DeezerBodyFailed: (error) =>
+          Effect.logWarning("deezer.submit-track-malformed-body").pipe(
+            Effect.annotateLogs({ error: error.cause }),
+            Effect.andThen(submissionUnavailable()),
+          ),
+        DeezerQuota: () =>
+          Effect.logWarning("deezer.search-quota-exhausted").pipe(
+            Effect.annotateLogs({ trackId: id }),
+            Effect.andThen(submissionUnavailable()),
+          ),
+        DeezerRejected: (error) =>
+          Effect.logWarning("deezer.submit-track-http-error").pipe(
+            Effect.annotateLogs({ status: error.status }),
+            Effect.andThen(submissionUnavailable()),
+          ),
+        DeezerUnexpected: () =>
+          Effect.logWarning("deezer.submit-track-unexpected-shape").pipe(
+            Effect.andThen(submissionUnavailable()),
+          ),
+        DeezerUnreachable: (error) =>
+          Effect.logWarning("deezer.submit-track-threw").pipe(
+            Effect.annotateLogs({ error: error.cause }),
+            Effect.andThen(submissionUnavailable()),
+          ),
+      }),
+    ),
+  );
 }
 
 const DURATION_TOLERANCE_S = 4;
@@ -438,57 +513,87 @@ export async function lookupIsrcFromDeezer(input: {
     return undefined;
   }
 
-  try {
-    const searchResponse = await fetch(
-      `https://api.deezer.com/search/track?q=${encodeURIComponent(query)}`,
-    );
+  return runServerEffect(
+    Effect.gen(function* () {
+      const exchange = yield* deezerExchange(
+        `https://api.deezer.com/search/track?q=${encodeURIComponent(query)}`,
+        DEEZER_REQUEST_TIMEOUT,
+      );
 
-    if (!searchResponse.ok) {
-      return undefined;
-    }
+      if (!exchange.read) {
+        return yield* new DeezerRejected({ status: exchange.response.status });
+      }
 
-    const search = (await searchResponse.json()) as DeezerSearchResult;
+      const search = exchange.data as DeezerSearchResult;
 
-    if (search.error || !Array.isArray(search.data)) {
-      return undefined;
-    }
+      if (!search || typeof search !== "object") {
+        return yield* new DeezerUnexpected({ body: exchange.data });
+      }
 
-    const expectedSeconds = input.durationMs / 1000;
-    const rowKey = matchKey(input.artists, input.title);
-    const match = search.data.find(
-      (candidate) =>
-        typeof candidate.id === "number" &&
-        typeof candidate.duration === "number" &&
-        Math.abs(candidate.duration - expectedSeconds) <= DURATION_TOLERANCE_S &&
-        matchKey([candidate.artist?.name ?? ""], candidate.title ?? "") === rowKey,
-    );
+      if (search.error) {
+        return yield* new DeezerApiFailed({
+          code: (search.error as { code?: unknown }).code,
+          error: search.error,
+        });
+      }
 
-    if (!match?.id) {
-      return undefined;
-    }
+      if (!Array.isArray(search.data)) {
+        return yield* new DeezerUnexpected({ body: exchange.data });
+      }
 
-    const trackResponse = await fetch(`https://api.deezer.com/track/${match.id}`);
+      const expectedSeconds = input.durationMs / 1000;
+      const rowKey = matchKey(input.artists, input.title);
+      const match = yield* Effect.try({
+        catch: (body) => new DeezerUnexpected({ body }),
+        try: () =>
+          search.data?.find(
+            (candidate) =>
+              typeof candidate.id === "number" &&
+              typeof candidate.duration === "number" &&
+              Math.abs(candidate.duration - expectedSeconds) <= DURATION_TOLERANCE_S &&
+              matchKey([candidate.artist?.name ?? ""], candidate.title ?? "") === rowKey,
+          ),
+      });
 
-    if (!trackResponse.ok) {
-      return undefined;
-    }
+      if (!match?.id) {
+        return undefined;
+      }
 
-    const detail = (await trackResponse.json()) as DeezerTrackDetail;
+      const detailExchange = yield* deezerExchange(
+        `https://api.deezer.com/track/${match.id}`,
+        DEEZER_REQUEST_TIMEOUT,
+      );
 
-    if (detail.error || !detail.isrc?.trim()) {
-      return undefined;
-    }
+      if (!detailExchange.read) {
+        return yield* new DeezerRejected({ status: detailExchange.response.status });
+      }
 
-    return {
-      artistName: match.artist?.name?.trim() ?? "",
-      deezerTrackId: String(match.id),
-      durationMs: Math.round((match.duration ?? 0) * 1000),
-      isrc: detail.isrc.trim(),
-      title: match.title?.trim() ?? "",
-    };
-  } catch {
-    return undefined;
-  }
+      const detail = detailExchange.data as DeezerTrackDetail;
+
+      if (!detail || typeof detail !== "object") {
+        return yield* new DeezerUnexpected({ body: detailExchange.data });
+      }
+
+      if (detail.error) {
+        return yield* new DeezerApiFailed({
+          code: (detail.error as { code?: unknown }).code,
+          error: detail.error,
+        });
+      }
+
+      if (typeof detail.isrc !== "string" || !detail.isrc.trim()) {
+        return undefined;
+      }
+
+      return {
+        artistName: match.artist?.name?.trim() ?? "",
+        deezerTrackId: String(match.id),
+        durationMs: Math.round((match.duration ?? 0) * 1000),
+        isrc: detail.isrc.trim(),
+        title: match.title?.trim() ?? "",
+      };
+    }).pipe(Effect.orElseSucceed(() => undefined)),
+  );
 }
 
 export async function enrichFromDeezer(
@@ -499,45 +604,72 @@ export async function enrichFromDeezer(
     return {};
   }
 
-  try {
-    const trackResponse = await fetch(
-      `https://api.deezer.com/track/isrc:${encodeURIComponent(isrc.trim())}`,
-    );
+  return runServerEffect(
+    Effect.gen(function* () {
+      const exchange = yield* deezerExchange(
+        `https://api.deezer.com/track/isrc:${encodeURIComponent(isrc.trim())}`,
+        DEEZER_REQUEST_TIMEOUT,
+      );
 
-    if (!trackResponse.ok) {
-      return {};
-    }
+      if (!exchange.read) {
+        return yield* new DeezerRejected({ status: exchange.response.status });
+      }
 
-    const track = (await trackResponse.json()) as DeezerTrack;
+      const track = exchange.data as DeezerTrack;
 
-    if (track.error || !track.id) {
-      return {};
-    }
+      if (!track || typeof track !== "object") {
+        return yield* new DeezerUnexpected({ body: exchange.data });
+      }
 
-    const previewUrl = track.preview?.trim() ? track.preview : undefined;
-    const durationConfirmed =
-      typeof expectedDurationMs === "number" &&
-      expectedDurationMs > 0 &&
-      typeof track.duration === "number" &&
-      Math.abs(track.duration - expectedDurationMs / 1000) <= DURATION_TOLERANCE_S;
-    let label: string | undefined;
+      if (track.error) {
+        return yield* new DeezerApiFailed({
+          code: (track.error as { code?: unknown }).code,
+          error: track.error,
+        });
+      }
 
-    if (track.album?.id) {
-      const albumResponse = await fetch(`https://api.deezer.com/album/${track.album.id}`);
+      if (!track.id) {
+        return {};
+      }
 
-      if (albumResponse.ok) {
-        const album = (await albumResponse.json()) as DeezerAlbum;
+      const previewUrl = yield* Effect.try({
+        catch: (body) => new DeezerUnexpected({ body }),
+        try: () => (track.preview?.trim() ? track.preview : undefined),
+      });
+      const durationConfirmed =
+        typeof expectedDurationMs === "number" &&
+        expectedDurationMs > 0 &&
+        typeof track.duration === "number" &&
+        Math.abs(track.duration - expectedDurationMs / 1000) <= DURATION_TOLERANCE_S;
+      let label: string | undefined;
 
-        if (!album.error && album.label?.trim()) {
-          label = album.label.trim();
+      if (track.album?.id) {
+        const albumExchange = yield* deezerExchange(
+          `https://api.deezer.com/album/${track.album.id}`,
+          DEEZER_REQUEST_TIMEOUT,
+        );
+
+        if (albumExchange.read) {
+          const album = albumExchange.data as DeezerAlbum;
+
+          if (!album || typeof album !== "object") {
+            return yield* new DeezerUnexpected({ body: albumExchange.data });
+          }
+
+          label = yield* Effect.try({
+            catch: (body) => new DeezerUnexpected({ body }),
+            try: () => (!album.error && album.label?.trim() ? album.label.trim() : undefined),
+          });
         }
       }
-    }
 
-    return { ...(durationConfirmed ? { deezerTrackId: String(track.id) } : {}), label, previewUrl };
-  } catch {
-    return {};
-  }
+      return {
+        ...(durationConfirmed ? { deezerTrackId: String(track.id) } : {}),
+        label,
+        previewUrl,
+      };
+    }).pipe(Effect.orElseSucceed((): DeezerEnrichment => ({}))),
+  );
 }
 
 export type DeezerIsrcLookup =
@@ -546,6 +678,59 @@ export type DeezerIsrcLookup =
   | { outcome: "absent" }
   | { outcome: "quota" }
   | { outcome: "unvouchable" };
+
+type DeezerIsrcVerdict =
+  | { deezerTrackId: string; outcome: "matched" }
+  | { outcome: "absent" }
+  | { outcome: "unvouchable" };
+
+function deezerIsrcLookup(
+  trimmed: string,
+  expectedDurationMs: number,
+): Effect.Effect<DeezerIsrcVerdict, DeezerFailure> {
+  const url = `https://api.deezer.com/track/isrc:${encodeURIComponent(trimmed)}`;
+
+  return Effect.gen(function* () {
+    const exchange = yield* deezerExchange(url, DEEZER_REQUEST_TIMEOUT);
+    const { response } = exchange;
+
+    if (!exchange.read) {
+      return yield* new DeezerRejected({ status: response.status });
+    }
+
+    const track = exchange.data as DeezerTrack;
+    const error = track.error;
+
+    if (error) {
+      const code = (error as { code?: unknown }).code;
+
+      if (code === DEEZER_QUOTA_ERROR_CODE) {
+        return yield* new DeezerQuota({ error });
+      }
+
+      if (code === DEEZER_DATA_EXCEPTION_CODE) {
+        return { outcome: "absent" } satisfies DeezerIsrcVerdict;
+      }
+
+      return yield* new DeezerApiFailed({ code, error });
+    }
+
+    if (typeof track.id !== "number") {
+      return yield* new DeezerUnexpected({ body: exchange.data });
+    }
+
+    const durationConfirmed =
+      typeof track.duration === "number" &&
+      track.duration > 0 &&
+      Math.abs(track.duration - expectedDurationMs / 1000) <= DURATION_TOLERANCE_S;
+
+    if (!durationConfirmed) {
+      return { outcome: "unvouchable" } satisfies DeezerIsrcVerdict;
+    }
+
+    return { deezerTrackId: String(track.id), outcome: "matched" } satisfies DeezerIsrcVerdict;
+  });
+}
 
 export async function lookupDeezerTrackByIsrc(
   isrc: string,
@@ -557,69 +742,50 @@ export async function lookupDeezerTrackByIsrc(
     return { outcome: "unvouchable" };
   }
 
-  let response: Response;
-
-  try {
-    response = await fetch(`https://api.deezer.com/track/isrc:${encodeURIComponent(trimmed)}`, {
-      headers: { "User-Agent": DEEZER_USER_AGENT },
-      signal: AbortSignal.timeout(DEEZER_TIMEOUT_MS),
-    });
-  } catch (error) {
-    logEvent("warn", "deezer.isrc-lookup-threw", { error });
-
-    return { error: error instanceof Error ? error.message : String(error), outcome: "failed" };
-  }
-
-  if (!response.ok) {
-    logEvent("warn", "deezer.isrc-lookup-http-error", { status: response.status });
-
-    return { error: `Deezer answered HTTP ${response.status}`, outcome: "failed" };
-  }
-
-  let body: unknown;
-
-  try {
-    body = await response.json();
-  } catch (error) {
-    logEvent("warn", "deezer.isrc-lookup-malformed-body", { error });
-
-    return { error: "Deezer sent an unparseable body", outcome: "failed" };
-  }
-
-  const error = (body as DeezerTrack).error;
-
-  if (error) {
-    const code = (error as { code?: unknown }).code;
-
-    if (code === DEEZER_QUOTA_ERROR_CODE) {
-      return { outcome: "quota" };
-    }
-
-    if (code === DEEZER_DATA_EXCEPTION_CODE) {
-      return { outcome: "absent" };
-    }
-
-    logEvent("warn", "deezer.isrc-lookup-api-error", { error });
-
-    return { error: `Deezer error code ${String(code)}`, outcome: "failed" };
-  }
-
-  const track = body as DeezerTrack;
-
-  if (typeof track.id !== "number") {
-    logEvent("warn", "deezer.isrc-lookup-unexpected-shape", {});
-
-    return { error: "Deezer sent no track id", outcome: "failed" };
-  }
-
-  const durationConfirmed =
-    typeof track.duration === "number" &&
-    track.duration > 0 &&
-    Math.abs(track.duration - expectedDurationMs / 1000) <= DURATION_TOLERANCE_S;
-
-  if (!durationConfirmed) {
-    return { outcome: "unvouchable" };
-  }
-
-  return { deezerTrackId: String(track.id), outcome: "matched" };
+  return runServerEffect(
+    deezerIsrcLookup(trimmed, expectedDurationMs).pipe(
+      Effect.catchTags({
+        DeezerApiFailed: (error) =>
+          Effect.logWarning("deezer.isrc-lookup-api-error").pipe(
+            Effect.annotateLogs({ error: error.error }),
+            Effect.as<DeezerIsrcLookup>({
+              error: `Deezer error code ${String(error.code)}`,
+              outcome: "failed",
+            }),
+          ),
+        DeezerBodyFailed: (error) =>
+          Effect.logWarning("deezer.isrc-lookup-malformed-body").pipe(
+            Effect.annotateLogs({ error: error.cause }),
+            Effect.as<DeezerIsrcLookup>({
+              error: "Deezer sent an unparseable body",
+              outcome: "failed",
+            }),
+          ),
+        DeezerQuota: () => Effect.succeed<DeezerIsrcLookup>({ outcome: "quota" }),
+        DeezerRejected: (error) =>
+          Effect.logWarning("deezer.isrc-lookup-http-error").pipe(
+            Effect.annotateLogs({ status: error.status }),
+            Effect.as<DeezerIsrcLookup>({
+              error: `Deezer answered HTTP ${error.status}`,
+              outcome: "failed",
+            }),
+          ),
+        DeezerUnexpected: () =>
+          Effect.logWarning("deezer.isrc-lookup-unexpected-shape").pipe(
+            Effect.as<DeezerIsrcLookup>({
+              error: "Deezer sent no track id",
+              outcome: "failed",
+            }),
+          ),
+        DeezerUnreachable: (error) =>
+          Effect.logWarning("deezer.isrc-lookup-threw").pipe(
+            Effect.annotateLogs({ error: error.cause }),
+            Effect.as<DeezerIsrcLookup>({
+              error: error.cause instanceof Error ? error.cause.message : String(error.cause),
+              outcome: "failed",
+            }),
+          ),
+      }),
+    ),
+  );
 }

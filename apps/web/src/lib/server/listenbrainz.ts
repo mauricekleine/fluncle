@@ -1,11 +1,12 @@
-import { logEvent } from "./log";
+import { Data, Duration, Effect } from "effect";
+import { runServerEffect } from "./effect/runtime";
 import { MB_USER_AGENT } from "./musicbrainz";
 
 const LISTENBRAINZ_MBID_ENDPOINT = "https://labs.api.listenbrainz.org/spotify-id-from-mbid/json";
 const LISTENBRAINZ_METADATA_ENDPOINT =
   "https://labs.api.listenbrainz.org/spotify-id-from-metadata/json";
 
-const LISTENBRAINZ_TIMEOUT_MS = 10_000;
+const LISTENBRAINZ_REQUEST_TIMEOUT = Duration.millis(10_000);
 
 type ListenBrainzResponseItem = {
   artist_name?: string;
@@ -37,6 +38,110 @@ export type ListenBrainzLookupResult =
         | "request-threw";
     };
 
+class ListenBrainzBodyFailed extends Data.TaggedError("ListenBrainzBodyFailed")<{
+  cause: unknown;
+}> {}
+
+class ListenBrainzRejected extends Data.TaggedError("ListenBrainzRejected")<{ status: number }> {}
+
+class ListenBrainzUnreachable extends Data.TaggedError("ListenBrainzUnreachable")<{
+  cause: unknown;
+}> {}
+
+type ListenBrainzFailure = ListenBrainzBodyFailed | ListenBrainzRejected | ListenBrainzUnreachable;
+
+function listenbrainzExchange(endpoint: string, payload: unknown) {
+  let readingBody = false;
+  const unreachable = (cause: unknown) =>
+    readingBody ? new ListenBrainzBodyFailed({ cause }) : new ListenBrainzUnreachable({ cause });
+
+  return Effect.tryPromise({
+    catch: unreachable,
+    try: async (signal) => {
+      const response = await fetch(endpoint, {
+        body: JSON.stringify(payload),
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": MB_USER_AGENT,
+        },
+        method: "POST",
+        signal,
+      });
+
+      if (!response.ok) {
+        return { read: false as const, response };
+      }
+
+      readingBody = true;
+
+      return { data: (await response.json()) as unknown, read: true as const, response };
+    },
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: LISTENBRAINZ_REQUEST_TIMEOUT,
+      orElse: () => Effect.fail(unreachable(new Error("ListenBrainz request timed out"))),
+    }),
+  );
+}
+
+function listenbrainzMbidLookup(
+  clean: string,
+): Effect.Effect<ListenBrainzLookupResult, ListenBrainzFailure> {
+  return Effect.gen(function* () {
+    const exchange = yield* listenbrainzExchange(LISTENBRAINZ_MBID_ENDPOINT, [
+      { recording_mbid: clean },
+    ]);
+    const { response } = exchange;
+
+    if (!exchange.read) {
+      return yield* new ListenBrainzRejected({ status: response.status });
+    }
+
+    const body = exchange.data;
+
+    if (!Array.isArray(body)) {
+      yield* Effect.logWarning("listenbrainz.non-array-body").pipe(
+        Effect.annotateLogs({ recordingMbid: clean }),
+      );
+
+      return { outcome: "non-array-body" } satisfies ListenBrainzLookupResult;
+    }
+
+    const item = body.find((entry): entry is ListenBrainzResponseItem => {
+      if (typeof entry !== "object" || entry === null) {
+        return false;
+      }
+
+      const candidate = entry as ListenBrainzResponseItem;
+
+      return (candidate.recording_mbid ?? clean) === clean;
+    });
+
+    if (!item) {
+      return { outcome: "no-map" } satisfies ListenBrainzLookupResult;
+    }
+
+    const spotifyTrackIds = (Array.isArray(item.spotify_track_ids) ? item.spotify_track_ids : [])
+      .filter((id): id is string => typeof id === "string")
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+
+    if (spotifyTrackIds.length === 0) {
+      return { outcome: "empty-ids" } satisfies ListenBrainzLookupResult;
+    }
+
+    return {
+      match: {
+        artistName: item.artist_name ?? null,
+        recordingMbid: clean,
+        spotifyTrackIds,
+        trackName: item.track_name ?? null,
+      },
+      outcome: "match",
+    } satisfies ListenBrainzLookupResult;
+  });
+}
+
 export async function lookupSpotifyIdsByMbid(
   recordingMbid: string,
 ): Promise<ListenBrainzLookupResult> {
@@ -46,81 +151,78 @@ export async function lookupSpotifyIdsByMbid(
     return { outcome: "invalid-mbid" };
   }
 
-  let response: Response;
+  return runServerEffect(
+    listenbrainzMbidLookup(clean).pipe(
+      Effect.catchTags({
+        ListenBrainzBodyFailed: (error) =>
+          Effect.logWarning("listenbrainz.malformed-body").pipe(
+            Effect.annotateLogs({ error: error.cause, recordingMbid: clean }),
+            Effect.as<ListenBrainzLookupResult>({ outcome: "malformed-body" }),
+          ),
+        ListenBrainzRejected: (error) =>
+          Effect.logWarning("listenbrainz.request-failed").pipe(
+            Effect.annotateLogs({ recordingMbid: clean, status: error.status }),
+            Effect.as<ListenBrainzLookupResult>({ outcome: "request-failed" }),
+          ),
+        ListenBrainzUnreachable: (error) =>
+          Effect.logWarning("listenbrainz.request-threw").pipe(
+            Effect.annotateLogs({ error: error.cause, recordingMbid: clean }),
+            Effect.as<ListenBrainzLookupResult>({ outcome: "request-threw" }),
+          ),
+      }),
+    ),
+  );
+}
 
-  try {
-    response = await fetch(LISTENBRAINZ_MBID_ENDPOINT, {
-      body: JSON.stringify([{ recording_mbid: clean }]),
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": MB_USER_AGENT,
-      },
-      method: "POST",
-      signal: AbortSignal.timeout(LISTENBRAINZ_TIMEOUT_MS),
-    });
-  } catch (error) {
-    logEvent("warn", "listenbrainz.request-threw", { error, recordingMbid: clean });
+function listenbrainzMetadataLookup(
+  artistName: string,
+  releaseName: string,
+  trackName: string,
+): Effect.Effect<ListenBrainzLookupResult, ListenBrainzFailure> {
+  return Effect.gen(function* () {
+    const exchange = yield* listenbrainzExchange(LISTENBRAINZ_METADATA_ENDPOINT, [
+      { artist_name: artistName, release_name: releaseName, track_name: trackName },
+    ]);
+    const { response } = exchange;
 
-    return { outcome: "request-threw" };
-  }
-
-  if (!response.ok) {
-    logEvent("warn", "listenbrainz.request-failed", {
-      recordingMbid: clean,
-      status: response.status,
-    });
-
-    return { outcome: "request-failed" };
-  }
-
-  let body: unknown;
-
-  try {
-    body = await response.json();
-  } catch (error) {
-    logEvent("warn", "listenbrainz.malformed-body", { error, recordingMbid: clean });
-
-    return { outcome: "malformed-body" };
-  }
-
-  if (!Array.isArray(body)) {
-    logEvent("warn", "listenbrainz.non-array-body", { recordingMbid: clean });
-
-    return { outcome: "non-array-body" };
-  }
-
-  const item = body.find((entry): entry is ListenBrainzResponseItem => {
-    if (typeof entry !== "object" || entry === null) {
-      return false;
+    if (!exchange.read) {
+      return yield* new ListenBrainzRejected({ status: response.status });
     }
 
-    const candidate = entry as ListenBrainzResponseItem;
+    const body = exchange.data;
 
-    return (candidate.recording_mbid ?? clean) === clean;
+    if (!Array.isArray(body)) {
+      return { outcome: "non-array-body" } satisfies ListenBrainzLookupResult;
+    }
+
+    const item = body.find(
+      (entry): entry is ListenBrainzResponseItem =>
+        typeof entry === "object" && entry !== null && Array.isArray(entry.spotify_track_ids),
+    );
+
+    if (!item) {
+      return { outcome: "no-map" } satisfies ListenBrainzLookupResult;
+    }
+
+    const spotifyTrackIds = (item.spotify_track_ids ?? [])
+      .filter((id): id is string => typeof id === "string")
+      .map((id) => id.trim())
+      .filter(Boolean);
+
+    if (spotifyTrackIds.length === 0) {
+      return { outcome: "empty-ids" } satisfies ListenBrainzLookupResult;
+    }
+
+    return {
+      match: {
+        artistName: item.artist_name ?? null,
+        recordingMbid: "",
+        spotifyTrackIds,
+        trackName: item.track_name ?? null,
+      },
+      outcome: "match",
+    } satisfies ListenBrainzLookupResult;
   });
-
-  if (!item) {
-    return { outcome: "no-map" };
-  }
-
-  const spotifyTrackIds = (Array.isArray(item.spotify_track_ids) ? item.spotify_track_ids : [])
-    .filter((id): id is string => typeof id === "string")
-    .map((id) => id.trim())
-    .filter((id) => id.length > 0);
-
-  if (spotifyTrackIds.length === 0) {
-    return { outcome: "empty-ids" };
-  }
-
-  return {
-    match: {
-      artistName: item.artist_name ?? null,
-      recordingMbid: clean,
-      spotifyTrackIds,
-      trackName: item.track_name ?? null,
-    },
-    outcome: "match",
-  };
 }
 
 export async function lookupSpotifyIdsByMetadata(
@@ -131,53 +233,20 @@ export async function lookupSpotifyIdsByMetadata(
   if (!artistName.trim() || !trackName.trim()) {
     return { outcome: "no-map" };
   }
-  let response: Response;
-  try {
-    response = await fetch(LISTENBRAINZ_METADATA_ENDPOINT, {
-      body: JSON.stringify([
-        { artist_name: artistName, release_name: releaseName, track_name: trackName },
-      ]),
-      headers: { "Content-Type": "application/json", "User-Agent": MB_USER_AGENT },
-      method: "POST",
-      signal: AbortSignal.timeout(LISTENBRAINZ_TIMEOUT_MS),
-    });
-  } catch (error) {
-    logEvent("warn", "listenbrainz.metadata-request-threw", { error });
-    return { outcome: "request-threw" };
-  }
-  if (!response.ok) {
-    return { outcome: "request-failed" };
-  }
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    return { outcome: "malformed-body" };
-  }
-  if (!Array.isArray(body)) {
-    return { outcome: "non-array-body" };
-  }
-  const item = body.find(
-    (entry): entry is ListenBrainzResponseItem =>
-      typeof entry === "object" && entry !== null && Array.isArray(entry.spotify_track_ids),
+
+  return runServerEffect(
+    listenbrainzMetadataLookup(artistName, releaseName, trackName).pipe(
+      Effect.catchTags({
+        ListenBrainzBodyFailed: () =>
+          Effect.succeed<ListenBrainzLookupResult>({ outcome: "malformed-body" }),
+        ListenBrainzRejected: () =>
+          Effect.succeed<ListenBrainzLookupResult>({ outcome: "request-failed" }),
+        ListenBrainzUnreachable: (error) =>
+          Effect.logWarning("listenbrainz.metadata-request-threw").pipe(
+            Effect.annotateLogs({ error: error.cause }),
+            Effect.as<ListenBrainzLookupResult>({ outcome: "request-threw" }),
+          ),
+      }),
+    ),
   );
-  if (!item) {
-    return { outcome: "no-map" };
-  }
-  const spotifyTrackIds = (item.spotify_track_ids ?? [])
-    .filter((id): id is string => typeof id === "string")
-    .map((id) => id.trim())
-    .filter(Boolean);
-  if (spotifyTrackIds.length === 0) {
-    return { outcome: "empty-ids" };
-  }
-  return {
-    match: {
-      artistName: item.artist_name ?? null,
-      recordingMbid: "",
-      spotifyTrackIds,
-      trackName: item.track_name ?? null,
-    },
-    outcome: "match",
-  };
 }
