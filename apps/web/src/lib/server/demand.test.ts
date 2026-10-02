@@ -121,6 +121,8 @@ beforeEach(async () => {
 
 afterEach(() => {
   delete process.env.SIMPLE_ANALYTICS_API_KEY;
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("path extraction", () => {
@@ -416,4 +418,74 @@ describe("readSocialReferrers", () => {
     expect(result.total).toBe(0);
     expect(result.arrivals).toEqual([]);
   });
+});
+
+describe("Simple Analytics request deadlines and diagnostics", () => {
+  const operations = [
+    { field: "pages", operation: "read", read: recordDemand },
+    { field: "referrers", operation: "referrers read", read: readSocialReferrers },
+  ];
+
+  for (const { field, operation, read } of operations) {
+    it.each(["headers", "body", "error body"])(
+      `${field} aborts slow %s before the deadline`,
+      async (phase) => {
+        vi.useFakeTimers();
+        const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const delay = <T>(value: T) =>
+          new Promise<T>((resolve) => setTimeout(() => resolve(value), 20_001));
+        const response = {
+          json: () =>
+            phase === "body" ? delay({ [field]: [] }) : Promise.resolve({ [field]: [] }),
+          ok: phase !== "error body",
+          status: 403,
+          text: () => delay("denied"),
+        };
+        const fetchImpl = vi.fn((_url: RequestInfo | URL, _init?: RequestInit) =>
+          phase === "headers" ? delay(response) : Promise.resolve(response),
+        );
+        const result = read({ fetchImpl: fetchImpl as unknown as typeof fetch, now: NOW }).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+
+        await vi.advanceTimersByTimeAsync(20_001);
+
+        expect(await result).toEqual({
+          error: expect.objectContaining({
+            _tag: "DemandTimeout",
+            message: `Simple Analytics ${operation} timed out`,
+          }),
+        });
+        expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+        expect(warning).toHaveBeenCalledWith(expect.stringContaining('"failure":"DemandTimeout"'));
+      },
+    );
+
+    it.each([
+      { failure: "DemandUnreachable", response: () => Promise.reject(new Error("offline")) },
+      {
+        failure: "DemandHttpFailed",
+        response: () => Promise.resolve(new Response("denied", { status: 403 })),
+      },
+      {
+        failure: "DemandParseFailed",
+        response: () => Promise.resolve(new Response("invalid JSON")),
+      },
+    ])(
+      `${field} logs $failure and rejects before writing demand`,
+      async ({ failure, response }) => {
+        const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const result = read({ fetchImpl: response as unknown as typeof fetch, now: NOW });
+
+        await expect(result).rejects.toMatchObject({ _tag: failure });
+        expect(warning).toHaveBeenCalledWith(expect.stringContaining(`"failure":"${failure}"`));
+        if (failure === "DemandHttpFailed") {
+          await expect(result).rejects.toThrow(
+            `Simple Analytics ${operation} failed (403): denied`,
+          );
+        }
+      },
+    );
+  }
 });

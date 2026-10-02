@@ -53,6 +53,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -109,5 +111,52 @@ describe("getEurRates read-through cache", () => {
     mockFetch(false);
 
     expect(await getEurRates()).toBeNull();
+  });
+});
+
+describe("exchange rate request deadlines and diagnostics", () => {
+  it.each(["headers", "body"])("uses stale rates when %s exceed the deadline", async (phase) => {
+    vi.useFakeTimers();
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockDb([cacheRow(new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString())]);
+    const delay = <T>(value: T) =>
+      new Promise<T>((resolve) => setTimeout(() => resolve(value), 4001));
+    const response = {
+      json: () => (phase === "body" ? delay(FRANKFURTER_BODY) : Promise.resolve(FRANKFURTER_BODY)),
+      ok: true,
+    };
+    const fetchSpy = vi.fn((_input: unknown, _init?: RequestInit) =>
+      phase === "headers" ? delay(response) : Promise.resolve(response),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = getEurRates();
+    await vi.advanceTimersByTimeAsync(4001);
+
+    await expect(result).resolves.toEqual({ rates: { USD: 1.05 }, ratesDate: "2026-07-01" });
+    expect(execute).toHaveBeenCalledTimes(1);
+    const init = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init?.signal?.aborted).toBe(true);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('"failure":"FxTimeout"'));
+  });
+
+  it.each([
+    { failure: "FxHttpFailed", response: new Response(null, { status: 503 }) },
+    { failure: "FxParseFailed", response: new Response("invalid JSON") },
+    { failure: "FxParseFailed", response: Response.json([]) },
+    { failure: "FxUnreachable", response: new TypeError("offline") },
+  ])("returns null and diagnoses $failure", async ({ failure, response }) => {
+    mockDb([]);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        response instanceof Error ? Promise.reject(response) : Promise.resolve(response),
+      ),
+    );
+
+    await expect(getEurRates()).resolves.toBeNull();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining(`"failure":"${failure}"`));
   });
 });

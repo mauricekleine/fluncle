@@ -12,6 +12,7 @@ import {
   isSonarTrackEnabled,
   SONAR_MAX_PROBES,
   SONAR_MAX_TOP_K,
+  SONAR_TIMEOUT_MS,
   readSonarHealth,
   searchSonar,
 } from "./sonar";
@@ -44,6 +45,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 function reply(matches: Array<{ id: string; score: number }>) {
@@ -194,16 +197,6 @@ describe("searchSonar — the triple-gated fallback client", () => {
     expect(await searchSonar(REQUEST)).toBeNull();
   });
 
-  it("puts the call on a deadline — a hung sonar must never become a slow page", async () => {
-    fetchMock.mockResolvedValue(reply([]));
-
-    await searchSonar(REQUEST);
-
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
-
-    expect(init?.signal).toBeInstanceOf(AbortSignal);
-  });
-
   it("returns null when the body is missing `matches`", async () => {
     fetchMock.mockResolvedValue({ json: async () => ({ nope: true }), ok: true });
 
@@ -254,6 +247,67 @@ describe("searchSonar — the triple-gated fallback client", () => {
     expect(RECOMMENDATIONS_POOL).toBeLessThanOrEqual(SONAR_MAX_TOP_K);
     expect(MAX_REC_SEEDS).toBeLessThanOrEqual(SONAR_MAX_PROBES);
   });
+});
+
+describe("Sonar request deadlines and diagnostics", () => {
+  const operations = [
+    { path: "/health", payload: HEALTH, read: readSonarHealth },
+    { path: "/search", payload: { matches: [] }, read: () => searchSonar(REQUEST) },
+  ];
+
+  for (const { path, payload, read } of operations) {
+    it(`${path} falls back when the configured base URL is invalid`, async () => {
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+      readOptionalEnv.mockImplementation(async (name) =>
+        name === "SONAR_BASE_URL" ? "invalid URL" : "shhh",
+      );
+
+      await expect(read()).resolves.toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('"failure":"SonarParseFailed"'));
+    });
+
+    it.each(["headers", "body"])(`${path} aborts a slow %s and returns null`, async (phase) => {
+      vi.useFakeTimers();
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const delay = <T>(value: T) =>
+        new Promise<T>((resolve) => setTimeout(() => resolve(value), SONAR_TIMEOUT_MS + 1));
+      const response = {
+        json: () => (phase === "body" ? delay(payload) : Promise.resolve(payload)),
+        ok: true,
+      };
+      fetchMock.mockImplementation(() =>
+        phase === "headers" ? delay(response) : Promise.resolve(response),
+      );
+
+      const result = read();
+      await vi.advanceTimersByTimeAsync(SONAR_TIMEOUT_MS + 1);
+
+      await expect(result).resolves.toBeNull();
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+      expect(init?.signal?.aborted).toBe(true);
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('"failure":"SonarTimeout"'));
+    });
+
+    it.each([
+      { failure: "SonarUnreachable", response: () => Promise.reject(new Error("offline")) },
+      { failure: "SonarHttpFailed", response: () => Promise.resolve({ ok: false, status: 503 }) },
+      {
+        failure: "SonarParseFailed",
+        response: () =>
+          Promise.resolve({
+            json: () => Promise.reject(new SyntaxError("invalid JSON")),
+            ok: true,
+          }),
+      },
+    ])(`${path} identifies $failure while returning null`, async ({ failure, response }) => {
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+      fetchMock.mockImplementation(response);
+
+      await expect(read()).resolves.toBeNull();
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining(`"failure":"${failure}"`));
+    });
+  }
 });
 
 describe("the dark flags — default OFF, only 'true' enables", () => {

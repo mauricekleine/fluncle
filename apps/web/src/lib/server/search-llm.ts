@@ -1,3 +1,5 @@
+import { Data, Effect } from "effect";
+import { runServerEffect } from "./effect/runtime";
 import { type SearchFilters, SearchFiltersSchema } from "@fluncle/contracts/orpc";
 import { priceOpenRouterTokens } from "./cost-rates";
 import { captureCostEvents, costEventId } from "./costs";
@@ -17,30 +19,57 @@ type OpenRouterChatResponse = {
   usage?: { completion_tokens?: number; cost?: number; prompt_tokens?: number };
 };
 
-export function parseFilterReply(content: string): SearchFilters | null {
+function decodeFilterReply(content: string): SearchFilters | null {
   const start = content.indexOf("{");
   const end = content.lastIndexOf("}");
 
   if (start === -1 || end <= start) {
-    return null;
+    throw new Error("Missing filter object");
   }
 
-  let raw: unknown;
-
-  try {
-    raw = JSON.parse(content.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-
+  const raw: unknown = JSON.parse(content.slice(start, end + 1));
   const parsed = SearchFiltersSchema.safeParse(raw);
 
   if (!parsed.success) {
-    return null;
+    throw parsed.error;
   }
 
   return Object.values(parsed.data).some((value) => value !== undefined) ? parsed.data : null;
 }
+
+export function parseFilterReply(content: string): SearchFilters | null {
+  try {
+    return decodeFilterReply(content);
+  } catch {
+    return null;
+  }
+}
+
+class SearchLlmTimeout extends Data.TaggedError("SearchLlmTimeout") {}
+
+class SearchLlmHttpFailed extends Data.TaggedError("SearchLlmHttpFailed")<{ status: number }> {}
+
+class SearchLlmParseFailed extends Data.TaggedError("SearchLlmParseFailed")<{ cause: unknown }> {}
+
+class SearchLlmUnreachable extends Data.TaggedError("SearchLlmUnreachable")<{ cause: unknown }> {}
+
+class SearchLlmCostFailed extends Data.TaggedError("SearchLlmCostFailed")<{ cause: unknown }> {}
+
+type SearchLlmFailure =
+  | SearchLlmTimeout
+  | SearchLlmHttpFailed
+  | SearchLlmParseFailed
+  | SearchLlmUnreachable
+  | SearchLlmCostFailed;
+
+const logSearchFailure = (error: SearchLlmFailure) =>
+  Effect.logWarning("search.llm-failed").pipe(
+    Effect.annotateLogs({
+      error,
+      failure: error._tag,
+      ...(error instanceof SearchLlmHttpFailed ? { status: error.status } : {}),
+    }),
+  );
 
 export async function translateQuery(query: string): Promise<SearchFilters | null> {
   const apiKey = await readOptionalEnv("OPENROUTER_API_KEY");
@@ -55,44 +84,78 @@ export async function translateQuery(query: string): Promise<SearchFilters | nul
 
   const prompt = await resolvePrompt("search_filter");
 
-  try {
-    const response = await fetch(OPENROUTER_CHAT_URL, {
-      body: JSON.stringify({
-        messages: [
-          { content: prompt.body, role: "system" },
-          { content: query, role: "user" },
-        ],
-        model,
-        ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
-        response_format: { type: "json_object" },
-        ...samplingFor(model, 0),
-        usage: { include: true },
-      }),
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+  let readingBody = false;
+
+  const exchange = await runServerEffect(
+    Effect.tryPromise({
+      catch: (cause) =>
+        cause instanceof SearchLlmHttpFailed || cause instanceof SearchLlmParseFailed
+          ? cause
+          : readingBody
+            ? new SearchLlmParseFailed({ cause })
+            : new SearchLlmUnreachable({ cause }),
+      try: async (signal) => {
+        const response = await fetch(OPENROUTER_CHAT_URL, {
+          body: JSON.stringify({
+            messages: [
+              { content: prompt.body, role: "system" },
+              { content: query, role: "user" },
+            ],
+            model,
+            ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
+            response_format: { type: "json_object" },
+            ...samplingFor(model, 0),
+            usage: { include: true },
+          }),
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+          signal,
+        });
+
+        if (!response.ok) {
+          throw new SearchLlmHttpFailed({ status: response.status });
+        }
+
+        readingBody = true;
+        const payload = (await response.json()) as OpenRouterChatResponse;
+        const content = payload.choices?.[0]?.message?.content;
+
+        if (typeof content !== "string") {
+          throw new SearchLlmParseFailed({ cause: "Missing filter reply" });
+        }
+
+        return { content, payload };
       },
-      method: "POST",
-      signal: AbortSignal.timeout(SEARCH_LLM_TIMEOUT_MS),
-    });
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: SEARCH_LLM_TIMEOUT_MS,
+        orElse: () => Effect.fail(new SearchLlmTimeout()),
+      }),
+      Effect.catch((error) => logSearchFailure(error).pipe(Effect.as(null))),
+    ),
+  );
 
-    if (!response.ok) {
-      return null;
-    }
-
-    const payload = (await response.json()) as OpenRouterChatResponse;
-    const content = payload.choices?.[0]?.message?.content;
-
-    if (typeof content !== "string") {
-      return null;
-    }
-
-    await captureSearchCost(payload, model);
-
-    return parseFilterReply(content);
-  } catch {
+  if (!exchange) {
     return null;
   }
+
+  try {
+    await captureSearchCost(exchange.payload, model);
+  } catch (cause) {
+    await runServerEffect(logSearchFailure(new SearchLlmCostFailed({ cause })));
+
+    return null;
+  }
+
+  return runServerEffect(
+    Effect.try({
+      catch: (cause) => new SearchLlmParseFailed({ cause }),
+      try: () => decodeFilterReply(exchange.content),
+    }).pipe(Effect.catch((error) => logSearchFailure(error).pipe(Effect.as(null)))),
+  );
 }
 
 async function captureSearchCost(payload: OpenRouterChatResponse, model: string): Promise<void> {

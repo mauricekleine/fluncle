@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkYoutubeOfficial, isOfficialAuthor, isTopicChannel } from "./youtube-official";
 
 describe("isTopicChannel — YouTube's auto-generated art-track channels", () => {
@@ -222,4 +222,64 @@ describe("checkYoutubeOfficial — a verdict only when YouTube actually answered
 
     expect(verdict).toBeNull();
   });
+});
+
+describe("checkYoutubeOfficial request failures", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it.each([
+    { failure: "YoutubeOfficialHttpError", response: new Response(null, { status: 404 }) },
+    { failure: "YoutubeOfficialParseError", response: new Response("invalid JSON") },
+    { failure: "YoutubeOfficialParseError", response: Response.json({ title: "a song" }) },
+    { failure: "YoutubeOfficialNetworkError", response: new TypeError("network down") },
+  ])("keeps a null verdict and diagnoses $failure", async ({ failure, response }) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchImpl = vi.fn(async () => {
+      if (response instanceof Error) {
+        throw response;
+      }
+
+      return response;
+    }) as unknown as typeof fetch;
+
+    await expect(
+      checkYoutubeOfficial("abc123", { artists: ["Netsky"] }, fetchImpl),
+    ).resolves.toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`"failure":"${failure}"`));
+  });
+
+  it.each(["request", "body"])(
+    "aborts a stalled %s within the complete deadline",
+    async (phase) => {
+      vi.useFakeTimers();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      let signal: AbortSignal | null | undefined;
+      const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        signal = init?.signal;
+
+        if (phase === "request") {
+          return new Promise<Response>(() => {});
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+
+        return {
+          json: () => new Promise(() => {}),
+          ok: true,
+        } as unknown as Response;
+      }) as unknown as typeof fetch;
+      const pending = checkYoutubeOfficial("abc123", { artists: ["Netsky"] }, fetchImpl);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(pending).resolves.toBeNull();
+      expect(signal?.aborted).toBe(true);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('"failure":"YoutubeOfficialTimeout"'),
+      );
+    },
+  );
 });
