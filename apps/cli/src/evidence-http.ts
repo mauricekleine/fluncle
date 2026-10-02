@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { Data, Effect, Schedule } from "effect";
 
 export type EvidenceSource = "apple" | "beatport" | "discogs" | "musicbrainz";
 
@@ -29,19 +30,26 @@ export type EvidenceFailureKind =
   | "rate_limited"
   | "timeout";
 
-export class EvidenceFetchError extends Error {
-  readonly attempts: number;
-  readonly kind: EvidenceFailureKind;
-  readonly status?: number;
-
+export class EvidenceFetchError extends Data.TaggedError("EvidenceFetchError")<{
+  attempts: number;
+  kind: EvidenceFailureKind;
+  message: string;
+  status?: number;
+}> {
   constructor(kind: EvidenceFailureKind, message: string, attempts: number, status?: number) {
-    super(message);
+    super({ attempts, kind, message, status });
     this.name = "EvidenceFetchError";
-    this.kind = kind;
-    this.attempts = attempts;
-    this.status = status;
   }
 }
+
+class EvidenceRetryable extends Data.TaggedError("EvidenceRetryable")<{
+  failure: EvidenceFetchError;
+  retryAfterMs: null | number;
+}> {}
+
+class EvidencePerformError extends Data.TaggedError("EvidencePerformError")<{
+  cause: unknown;
+}> {}
 
 export type RawResponse = {
   headers: { get(name: string): null | string };
@@ -80,7 +88,7 @@ export function createEvidenceHttp(overrides: Partial<EvidenceHttp> = {}): Evide
     policies: SOURCE_POLICIES,
     random: Math.random,
     refresh: false,
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    sleep: (ms) => Effect.runPromise(Effect.sleep(ms)),
     stats: { cacheHits: 0, requests: 0 },
     ...overrides,
   };
@@ -172,7 +180,7 @@ async function withSlotLock<T>(
         continue;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 15 + Math.floor(Math.random() * 35)));
+      await Effect.runPromise(Effect.sleep(15 + Math.floor(Math.random() * 35)));
     }
   }
 
@@ -246,32 +254,6 @@ function failureKind(status: number): EvidenceFailureKind {
   return status === 429 || status === 503 ? "rate_limited" : "http";
 }
 
-async function performWithTimeout(
-  perform: Perform,
-  timeoutMs: number,
-): Promise<{ response: RawResponse } | { timedOut: true } | { error: unknown }> {
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<{ timedOut: true }>((resolve) => {
-    timer = setTimeout(() => {
-      controller.abort();
-      resolve({ timedOut: true });
-    }, timeoutMs);
-  });
-
-  try {
-    return await Promise.race([
-      perform(controller.signal).then(
-        (response) => ({ response }),
-        (error: unknown) => (controller.signal.aborted ? { timedOut: true as const } : { error }),
-      ),
-      timeout,
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 export type AcceptBody = (text: string) => boolean;
 
 export async function fetchEvidenceText(
@@ -290,92 +272,131 @@ export async function fetchEvidenceText(
   }
 
   const policy = http.policies[source];
-  let last: EvidenceFetchError | undefined;
-
-  for (let attempt = 1; attempt <= policy.attempts; attempt += 1) {
-    await reserveSlot(http, source);
+  let attempt = 0;
+  const request = Effect.gen(function* () {
+    attempt += 1;
+    yield* Effect.promise(() => reserveSlot(http, source));
     http.stats.requests += 1;
-    const outcome = await performWithTimeout(perform, policy.timeoutMs);
-    let retryAfterMs: null | number = null;
-
-    if ("response" in outcome) {
-      const { response } = outcome;
-
-      const success = response.status >= 200 && response.status < 300;
-
-      if (success && accept(response.text)) {
-        await writeCache(http, source, cacheKey, response.text);
-
-        return { cached: false, text: response.text };
-      }
-
-      if (success) {
-        last = new EvidenceFetchError(
-          "invalid",
-          `${source} answered HTTP ${response.status} with a body that is not the expected data`,
-          attempt,
-          response.status,
-        );
-      } else {
-        last = new EvidenceFetchError(
-          failureKind(response.status),
-          `${source} answered HTTP ${response.status}`,
-          attempt,
-          response.status,
-        );
-
-        if (!isRetryableStatus(response.status)) {
-          throw last;
+    let returned = false;
+    const response = yield* Effect.tryPromise({
+      catch: (error) => {
+        if (!returned) {
+          return new EvidencePerformError({ cause: error });
         }
 
-        retryAfterMs = parseRetryAfter(response.headers.get("retry-after"), http.now());
+        const reason = error instanceof Error ? error.message : String(error);
 
-        if (retryAfterMs !== null) {
-          await pushSlotBack(
-            http,
-            source,
-            http.now() + Math.min(retryAfterMs, policy.maxBackoffMs),
-          );
-        }
-
-        if (retryAfterMs !== null && retryAfterMs > policy.maxBackoffMs) {
-          throw new EvidenceFetchError(
-            "rate_limited",
-            `${source} asked to wait ${Math.ceil(retryAfterMs / 1000)} s, past the ${policy.maxBackoffMs / 1000} s limit`,
+        return new EvidenceRetryable({
+          failure: new EvidenceFetchError(
+            "network",
+            `${source} request failed: ${reason}`,
             attempt,
-            response.status,
-          );
-        }
-      }
-    } else if ("timedOut" in outcome) {
-      last = new EvidenceFetchError(
-        "timeout",
-        `${source} did not answer within ${policy.timeoutMs} ms`,
-        attempt,
-      );
-    } else {
-      const reason = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
-      last = new EvidenceFetchError("network", `${source} request failed: ${reason}`, attempt);
+          ),
+          retryAfterMs: null,
+        });
+      },
+      try: (signal) => {
+        const pending = perform(signal);
+        returned = true;
+
+        return pending;
+      },
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: policy.timeoutMs,
+        orElse: () =>
+          Effect.fail(
+            new EvidenceRetryable({
+              failure: new EvidenceFetchError(
+                "timeout",
+                `${source} did not answer within ${policy.timeoutMs} ms`,
+                attempt,
+              ),
+              retryAfterMs: null,
+            }),
+          ),
+      }),
+    );
+    const success = response.status >= 200 && response.status < 300;
+
+    if (success && accept(response.text)) {
+      yield* Effect.promise(() => writeCache(http, source, cacheKey, response.text));
+
+      return { cached: false, text: response.text };
     }
 
-    if (attempt === policy.attempts) {
-      break;
-    }
-
-    const exponential = policy.intervalMs * 2 ** attempt;
-    const backoff = Math.min(
-      policy.maxBackoffMs,
-      Math.max(retryAfterMs ?? 0, exponential) + Math.floor(http.random() * 250),
+    const failure = new EvidenceFetchError(
+      success ? "invalid" : failureKind(response.status),
+      success
+        ? `${source} answered HTTP ${response.status} with a body that is not the expected data`
+        : `${source} answered HTTP ${response.status}`,
+      attempt,
+      response.status,
     );
 
-    await http.sleep(backoff);
-  }
+    if (!success && !isRetryableStatus(response.status)) {
+      return yield* failure;
+    }
 
-  throw new EvidenceFetchError(
-    last?.kind ?? "network",
-    `${last?.message ?? `${source} request failed`} (gave up after ${policy.attempts} attempts)`,
-    policy.attempts,
-    last?.status,
+    const retryAfterMs = success
+      ? null
+      : parseRetryAfter(response.headers.get("retry-after"), http.now());
+
+    if (retryAfterMs !== null) {
+      yield* Effect.promise(() =>
+        pushSlotBack(http, source, http.now() + Math.min(retryAfterMs, policy.maxBackoffMs)),
+      );
+    }
+
+    if (retryAfterMs !== null && retryAfterMs > policy.maxBackoffMs) {
+      return yield* new EvidenceFetchError(
+        "rate_limited",
+        `${source} asked to wait ${Math.ceil(retryAfterMs / 1000)} s, past the ${policy.maxBackoffMs / 1000} s limit`,
+        attempt,
+        response.status,
+      );
+    }
+
+    return yield* new EvidenceRetryable({ failure, retryAfterMs });
+  });
+  const retry = Schedule.recurs(policy.attempts - 1).pipe(
+    Schedule.setInputType<EvidenceFetchError | EvidencePerformError | EvidenceRetryable>(),
+    Schedule.while(({ input }) => input._tag === "EvidenceRetryable"),
+    Schedule.tap(({ input }) => {
+      if (input._tag !== "EvidenceRetryable") {
+        return Effect.void;
+      }
+
+      const backoff = Math.min(
+        policy.maxBackoffMs,
+        Math.max(input.retryAfterMs ?? 0, policy.intervalMs * 2 ** input.failure.attempts) +
+          Math.floor(http.random() * 250),
+      );
+
+      return Effect.promise(() => http.sleep(backoff));
+    }),
+  );
+  const exhausted = (last?: EvidenceFetchError) =>
+    new EvidenceFetchError(
+      last?.kind ?? "network",
+      `${last?.message ?? `${source} request failed`} (gave up after ${policy.attempts} attempts)`,
+      policy.attempts,
+      last?.status,
+    );
+
+  return Effect.runPromise(
+    policy.attempts <= 0
+      ? Effect.fail(exhausted())
+      : request.pipe(
+          Effect.retry(retry),
+          Effect.mapError((error) => {
+            if (error._tag === "EvidencePerformError") {
+              return error.cause;
+            }
+
+            return error._tag === "EvidenceRetryable" ? exhausted(error.failure) : error;
+          }),
+        ),
   );
 }
 

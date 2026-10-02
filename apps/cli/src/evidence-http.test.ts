@@ -7,6 +7,7 @@ import {
   EvidenceFetchError,
   type EvidenceHttp,
   fetchEvidenceText,
+  fetchEvidenceJson,
   parseRetryAfter,
   type Perform,
   type RawResponse,
@@ -88,8 +89,12 @@ describe("fetchEvidenceText", () => {
   test("gives up with a timeout failure once every attempt hangs past the bound", async () => {
     const http = fakeHttp({ attempts: 2, timeoutMs: 20 });
     let calls = 0;
+    let aborts = 0;
     const counted: Perform = (signal) => {
       calls += 1;
+      signal.addEventListener("abort", () => {
+        aborts += 1;
+      });
 
       return hang(signal);
     };
@@ -101,8 +106,11 @@ describe("fetchEvidenceText", () => {
     expect(failure).toBeInstanceOf(EvidenceFetchError);
     expect((failure as EvidenceFetchError).kind).toBe("timeout");
     expect((failure as EvidenceFetchError).attempts).toBe(2);
-    expect((failure as Error).message).toContain("gave up after 2 attempts");
+    expect((failure as Error).message).toBe(
+      "musicbrainz did not answer within 20 ms (gave up after 2 attempts)",
+    );
     expect(calls).toBe(2);
+    expect(aborts).toBe(2);
   });
 
   test("recovers from a timeout when a later attempt answers", async () => {
@@ -216,13 +224,19 @@ describe("fetchEvidenceText", () => {
     expect(calls()).toBe(3);
   });
 
-  test("backs off exponentially from the source interval, capped", async () => {
-    const http = fakeHttp({ attempts: 4, intervalMs: 1_000, maxBackoffMs: 5_000 });
+  test.each([
+    { random: 0, waits: [2_000, 4_000, 5_000] },
+    { random: 0.5, waits: [2_125, 4_125, 5_000] },
+  ])("backs off exponentially with additive jitter, capped ($random)", async (input) => {
+    const http = fakeHttp(
+      { attempts: 4, intervalMs: 1_000, maxBackoffMs: 5_000 },
+      { random: () => input.random },
+    );
     const { perform } = scripted([reply(500), reply(500), reply(500), reply(200, "ok")]);
 
     await fetchEvidenceText(http, "musicbrainz", "k", perform);
 
-    expect(http.sleeps.filter((ms) => ms >= 1_000)).toEqual([2_000, 4_000, 5_000]);
+    expect(http.sleeps.filter((ms) => ms >= 1_000)).toEqual([...input.waits]);
   });
 
   test("never retries a 404", async () => {
@@ -247,6 +261,70 @@ describe("fetchEvidenceText", () => {
 
     expect((await fetchEvidenceText(http, "musicbrainz", "k", perform)).text).toBe("ok");
     expect(calls()).toBe(2);
+  });
+
+  test("preserves a synchronous perform failure without retrying", async () => {
+    const http = fakeHttp({ attempts: 3 });
+    const failure = new Error("synchronous failure");
+    let calls = 0;
+    const perform: Perform = () => {
+      calls += 1;
+      throw failure;
+    };
+
+    expect(
+      await fetchEvidenceText(http, "musicbrainz", "k", perform).catch((error: unknown) => error),
+    ).toBe(failure);
+    expect(calls).toBe(1);
+    expect(http.sleeps).toEqual([]);
+  });
+
+  test.each([401, 501])("never retries a permanent HTTP %s failure", async (status) => {
+    const http = fakeHttp({ attempts: 3 });
+    const { calls, perform } = scripted([reply(status)]);
+    const failure: unknown = await fetchEvidenceText(http, "musicbrainz", "k", perform).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(EvidenceFetchError);
+    expect(failure).toMatchObject({
+      attempts: 1,
+      kind: "http",
+      message: `musicbrainz answered HTTP ${status}`,
+      name: "EvidenceFetchError",
+      status,
+    });
+    expect(calls()).toBe(1);
+    expect(http.sleeps).toEqual([]);
+  });
+
+  test("includes body reading in the timeout and aborts the fetch signal", async () => {
+    let aborted = false;
+    const http = fakeHttp(
+      { attempts: 1, timeoutMs: 20 },
+      {
+        fetch: async (_url, init) => {
+          init?.signal?.addEventListener("abort", () => {
+            aborted = true;
+          });
+
+          return new Response(new ReadableStream());
+        },
+      },
+    );
+    const failure: unknown = await fetchEvidenceJson(
+      http,
+      "musicbrainz",
+      "https://musicbrainz.test/recording",
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(EvidenceFetchError);
+    expect(failure).toMatchObject({
+      attempts: 1,
+      kind: "timeout",
+      message: "musicbrainz did not answer within 20 ms (gave up after 1 attempts)",
+    });
+    expect(aborted).toBe(true);
   });
 
   test("serves a fresh cached answer without a request, and refresh or expiry refetches", async () => {

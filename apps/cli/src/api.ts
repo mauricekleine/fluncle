@@ -1,3 +1,4 @@
+import { Data, Effect } from "effect";
 import { getApiBaseUrl, loadEnv } from "./env";
 import { CliError, isJsonFailure } from "./output";
 import { readUserToken } from "./user-token";
@@ -99,30 +100,55 @@ function adminHeaders(): Record<string, string> {
   };
 }
 
+class ApiTransportError extends Data.TaggedError("ApiTransportError")<{
+  cause: unknown;
+}> {}
+
+class ApiResponseError extends Data.TaggedError("ApiResponseError")<{
+  code: string;
+  message: string;
+}> {}
+
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${getApiBaseUrl()}${path}`, init);
-  const text = await response.text();
-  const data = parseJson(text);
+  const url = `${getApiBaseUrl()}${path}`;
 
-  if (!response.ok) {
-    const failure = isJsonFailure(data) ? data : undefined;
-    throw new CliError(
-      failure?.code ?? `http_${response.status}`,
-      failure?.message ?? `${response.status} ${response.statusText}`,
-    );
-  }
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const { response, text } = yield* Effect.tryPromise({
+        catch: (cause) => new ApiTransportError({ cause }),
+        try: async (signal) => {
+          const response = await fetch(url, { ...init, signal });
 
-  return data as T;
+          return { response, text: await response.text() };
+        },
+      });
+      const data = yield* parseJson(text);
+
+      if (!response.ok) {
+        const failure = isJsonFailure(data) ? data : undefined;
+
+        return yield* new ApiResponseError({
+          code: failure?.code ?? `http_${response.status}`,
+          message: failure?.message ?? `${response.status} ${response.statusText}`,
+        });
+      }
+
+      return data as T;
+    }).pipe(
+      Effect.mapError((error) =>
+        error._tag === "ApiTransportError" ? error.cause : new CliError(error.code, error.message),
+      ),
+    ),
+  );
 }
 
-function parseJson(text: string): unknown {
+function parseJson(text: string): Effect.Effect<unknown, ApiResponseError> {
   if (!text) {
-    return undefined;
+    return Effect.void;
   }
 
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    throw new CliError("invalid_api_response", text);
-  }
+  return Effect.try({
+    catch: () => new ApiResponseError({ code: "invalid_api_response", message: text }),
+    try: () => JSON.parse(text) as unknown,
+  });
 }
