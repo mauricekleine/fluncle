@@ -41,6 +41,7 @@
         "@fluncle/registry": "workspace:*",
         "commander": "catalog:",
         "dotenv": "catalog:",
+        "effect": "catalog:",
       },
       "devDependencies": {
         "@fluncle/test-support": "workspace:*",
