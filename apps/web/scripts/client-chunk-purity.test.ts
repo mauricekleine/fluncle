@@ -35,6 +35,17 @@ describe("clientChunkPurityReport", () => {
     expect(clientChunkPurityMessage(report)).toBeNull();
   });
 
+  it("fires on the Effect runtime in a client chunk, which stays server-only", () => {
+    const report = clientChunkPurityReport(
+      {
+        "assets/entry.js": chunk(true, { "/repo/node_modules/effect/dist/Effect.js": 5120 }),
+      },
+      NO_IMPORTS,
+    );
+
+    expect(report).toEqual({ eager: ["node_modules/effect/dist/Effect.js (5120 B)"], lazy: [] });
+  });
+
   it("fires on a server module in a LAZY route chunk — the shape that takes a route down", () => {
     const report = clientChunkPurityReport(
       {

@@ -1,6 +1,6 @@
 import { type Plugin, type Rollup } from "vite";
 
-const CLIENT_SERVER_ONLY = /\/apps\/web\/src\/(lib\/server\/|db\/)/;
+const CLIENT_SERVER_ONLY = /\/apps\/web\/src\/(lib\/server\/|db\/)|\/node_modules\/effect\//;
 
 const CLIENT_CHUNK_PURE_EXCEPTION = "/apps/web/src/lib/server/track-match.ts";
 
@@ -38,7 +38,7 @@ export function clientChunkPurityReport(
 
         offender = `${CLIENT_CHUNK_PURE_EXCEPTION.slice(1)} — exempt ONLY while import-free, and it now imports ${imported.length}`;
       } else {
-        offender = `${id.replace(/^.*\/apps\/web\//, "")} (${module.renderedLength} B)`;
+        offender = `${id.replace(/^.*\/apps\/web\//, "").replace(/^.*\/node_modules\//, "node_modules/")} (${module.renderedLength} B)`;
       }
 
       if (chunk.isEntry) {

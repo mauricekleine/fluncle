@@ -9,6 +9,8 @@
       "packages/*"
     ],
     "catalog": {
+      "@effect/tsgo": "~0.47.2",
+      "@effect/vitest": "~4.0.0",
       "@ai-sdk/react": "4.0.20",
       "@base-ui/react": "~1.7.0",
       "@libsql/client": "~0.17.4",
@@ -39,6 +41,7 @@
       "dotenv": "~17.4.2",
       "drizzle-kit": "~0.31.10",
       "drizzle-orm": "~0.45.2",
+      "effect": "~4.0.0",
       "playwright-core": "~1.62.1",
       "react": "~19.2.8",
       "react-dom": "~19.2.8",
@@ -79,6 +82,7 @@
     "doctor": "react-doctor"
   },
   "devDependencies": {
+    "@effect/tsgo": "catalog:",
     "@oxlint/plugins": "~1.80.0",
     "@types/bun": "catalog:",
     "@types/node": "catalog:",
