@@ -104,6 +104,20 @@ The method the briefs enforce, and why:
 - Name the conflation in the evidence whenever one MBID contains releases from distinct labels; enabling crawls by MBID, so an in-lane strand is split upstream before enabling.
 - On a partial failure (an agent dies mid-run), **resume with `resumeFromRunId`** — completed batches replay from cache, only the dead slice re-runs.
 
+### 2a · Stage the round
+
+Merge the research and census task results from the workflow journal before building the verify input:
+
+```bash
+python3 <skill>/scripts/merge-round.py \
+  --journal <triage run>/journal.jsonl --scope undecided.json \
+  --round <round number> --out label-triage.json
+```
+
+`--scope` is the exact label array the research workflow read; use its subset file when the round only researched part of the pile. Repeat `--journal` for separate research and census runs. Paths are explicit, `--round` optionally records the round number, and omitting `--out` emits JSON on stdout. Census results replace provisional research verdicts after both phases resolve their slugs against the scope: an exact slug, a unique punctuation-free slug, or a unique label name. A repaired row retains `_slugFixedFrom`. Ambiguous matches, conflicting slug/name identities, duplicate verdicts and verify answers are refused before writing output; repeated results for the same task key use the latest result once. The counts describe the final buckets, applied census replacements and proposed rules.
+
+Read stderr before continuing: missing research labels and pending census labels are named there, and a census-only label is reported without adding it to the round. Resume missing workflow tasks and re-run this merge from their journals until every scoped label has a research verdict and every `needsCensus` label has its census. This stages the first pass; `merge-verify.py` below handles second opinions.
+
 ### 2b · Verify the judgment calls
 
 The verify pass is a second opinion that tries to REFUTE each verdict with evidence the first pass did not cite, and it is the round's only defence against a confident wrong call — it has refuted roughly a fifth of what it read, including enables that would have stored off-genre catalogue and one label whose central cited claim turned out to be false. Build its input from the staged round, then run `verify-workflow.js` over it:
@@ -130,7 +144,7 @@ Every checked row ends in one outcome. **Confirmed** (same bucket at high) is pr
 
 ### 3 · Present for ratification
 
-Stage the workflow's result object as `label-triage.json`, then render the review page and hand over its path:
+Render the staged, verified `label-triage.json` and hand over the review page's path:
 
 ```bash
 python3 <skill>/scripts/render-ratification.py   # prints the local HTML path
@@ -191,7 +205,7 @@ The audit-only `update_artist_rule` PATCH carries the drift stamps: `checked_at`
 - The scripts' offline behaviour is testable without credentials:
   ```bash
   python3 <skill>/scripts/apply-rulings.py apply --dry-run   # prints the planned HTTP calls
-  uv run --with pytest pytest <skill>/scripts/tests/
+  bun run test:label-triage:python                           # from the repo root; pinned Python + pytest through uv
   bun test --cwd <skill>/scripts                             # every worker brief names this skill + the evidence command
   ```
 

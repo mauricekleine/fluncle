@@ -114,6 +114,21 @@ describe("quality topology", () => {
     expect(at(setupGo, "with", "cache")).toBe(false);
   });
 
+  test("Python setup and evidence use the classifier-selected lane", () => {
+    const coreSteps = at(quality, "jobs", "core", "steps") as Array<Record<string, unknown>>;
+    const setup = coreSteps.find((step) => step.name === "Setup uv for label-triage Python tests");
+    const run = coreSteps.find((step) => step.name === "Run label-triage Python tests");
+    const guard = "steps.classify.outputs.label_triage_python == 'true'";
+    expect(at(setup, "if")).toBe(guard);
+    expect(at(setup, "with", "version")).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(at(setup, "with", "enable-cache")).toBe(false);
+    expect(at(run, "if")).toBe(guard);
+    expect(at(run, "run")).toContain("--lane label-triage-python");
+    expect(coreSteps.indexOf(setup as Record<string, unknown>)).toBeLessThan(
+      coreSteps.indexOf(run as Record<string, unknown>),
+    );
+  });
+
   test("generated quality artifacts stay outside the checkout", () => {
     expect(qualitySource).not.toMatch(/(?:--output|--plan) \.quality-plan\.json/);
     expect(qualitySource).not.toContain("--metrics .quality-metrics.jsonl");

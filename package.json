@@ -55,7 +55,7 @@
   "scripts": {
     "audit": "bun audit --audit-level=high --ignore=GHSA-w3rx-r6r6-pgpr --ignore=GHSA-5p2g-fcmc-qvqq --ignore=GHSA-86w9-cpqp-85rv",
     "build": "turbo run build",
-    "check": "bun run lint && bun run format:check && bun run go:check && bun run typecheck && bun run test && bun run test:scripts && bun run build",
+    "check": "bun run lint && bun run format:check && bun run go:check && bun run typecheck && bun run test && bun run test:scripts && bun run test:label-triage:python && bun run build",
     "check:fix": "bun run lint:fix && bun run format",
     "deploy:gate": "bun run format:check && bun run lint && bun run go:check && bun run typecheck && bun run test && bun run test:scripts:worker",
     "deploy:verify": "node scripts/quality/deploy-verify.mjs",
@@ -71,6 +71,7 @@
     "stories:build": "bun scripts/build-user-story-matrix.ts",
     "social:preview": "bun run --cwd packages/video social:preview",
     "test": "turbo run test",
+    "test:label-triage:python": "uv run --no-project --python 3.11.15 --with pytest==8.4.2 python -m pytest -q -p no:cacheprovider packages/skills/fluncle-label-triage/scripts/tests",
     "test:scripts": "bun run test:scripts:worker && bun run test:scripts:box",
     "test:scripts:box": "bun test --cwd docs/agents/hermes/scripts",
     "test:scripts:worker": "bun run typecheck:ux-capture && bun test --cwd scripts && bun test --cwd .claude/hooks && bun test --cwd packages/skills/fluncle-track-enrichment/scripts && bun test --cwd packages/skills/fluncle-box-restore/scripts && bun test --cwd packages/skills/fluncle-catalogue-prune/scripts && bun test --cwd packages/skills/fluncle-label-triage/scripts",
