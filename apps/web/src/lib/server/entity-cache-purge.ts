@@ -1,6 +1,12 @@
-import { waitUntil } from "cloudflare:workers";
+import { Data, Effect } from "effect";
+import { runServerEffect } from "./effect/runtime";
+import { keepAlive } from "./effect/wait-until";
 import { getDb, typedRows } from "./db";
 import { type EntityCacheKind, purgeEntityCachesNow } from "./edge-cache";
+
+class EntityCachePurgeFailed extends Data.TaggedError("EntityCachePurgeFailed")<{
+  cause: unknown;
+}> {}
 
 export async function getTrackEntityPurgeTargets(
   trackId: string,
@@ -44,5 +50,15 @@ export function purgeTrackEntityPages(trackId: string | null | undefined): void 
 
   const id = trackId.trim();
 
-  waitUntil(getTrackEntityPurgeTargets(id).then((targets) => purgeEntityCachesNow(targets)));
+  const task = getTrackEntityPurgeTargets(id).then((targets) => purgeEntityCachesNow(targets));
+
+  void runServerEffect(
+    keepAlive(
+      "entity-cache.purge-error",
+      Effect.tryPromise({
+        catch: (cause) => new EntityCachePurgeFailed({ cause }),
+        try: () => task,
+      }),
+    ),
+  );
 }

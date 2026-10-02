@@ -1,4 +1,11 @@
-import { env, waitUntil } from "cloudflare:workers";
+import { env } from "cloudflare:workers";
+import { Data, Duration, Effect } from "effect";
+import { runServerEffect } from "./effect/runtime";
+import { keepAlive } from "./effect/wait-until";
+
+class EdgeCacheFailed extends Data.TaggedError("EdgeCacheFailed")<{
+  cause: unknown;
+}> {}
 
 function edgeCache(): Cache | undefined {
   const store = (globalThis as { caches?: { default?: Cache } }).caches;
@@ -254,7 +261,15 @@ export async function withEdgeCache(
       return tagHit(hit, "fresh", cachePolicy);
     }
 
-    waitUntil(refresh(cache, cacheKey, render, cachePolicy));
+    void runServerEffect(
+      keepAlive(
+        "edge-cache.refresh-failed",
+        Effect.tryPromise({
+          catch: (cause) => new EdgeCacheFailed({ cause }),
+          try: () => refresh(cache, cacheKey, render, cachePolicy),
+        }),
+      ),
+    );
 
     return tagHit(hit, "stale", cachePolicy);
   }
@@ -266,7 +281,15 @@ export async function withEdgeCache(
   const response = await render();
 
   if (isStorable(response, cachePolicy)) {
-    waitUntil(cache.put(cacheKey, toStoredResponse(response.clone(), cachePolicy)));
+    void runServerEffect(
+      keepAlive(
+        "edge-cache.store-failed",
+        Effect.tryPromise({
+          catch: (cause) => new EdgeCacheFailed({ cause }),
+          try: () => cache.put(cacheKey, toStoredResponse(response.clone(), cachePolicy)),
+        }),
+      ),
+    );
   }
 
   return tagResponse(response, "miss", cachePolicy);
@@ -341,7 +364,15 @@ export function purgeLogCache(logId: string | null | undefined): void {
     return;
   }
 
-  waitUntil(purgeLogCacheNow(logId.trim()));
+  void runServerEffect(
+    keepAlive(
+      "edge-cache.log-purge-failed",
+      Effect.tryPromise({
+        catch: (cause) => new EdgeCacheFailed({ cause }),
+        try: () => purgeLogCacheNow(logId.trim()),
+      }),
+    ),
+  );
 }
 
 async function purgeLogCacheNow(logId: string): Promise<void> {
@@ -369,15 +400,29 @@ export async function purgePathsNow(paths: string[]): Promise<void> {
   const urls = paths.map((path) => `${CANONICAL_ORIGIN}${path}`);
 
   try {
-    await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/purge_cache`, {
-      body: JSON.stringify({ files: urls }),
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      method: "POST",
-    });
-  } catch {}
+    await runServerEffect(
+      Effect.tryPromise({
+        catch: (cause) => new EdgeCacheFailed({ cause }),
+        try: (signal) =>
+          fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/purge_cache`, {
+            body: JSON.stringify({ files: urls }),
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            method: "POST",
+            signal,
+          }),
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: Duration.seconds(15),
+          orElse: () => Effect.fail(new EdgeCacheFailed({ cause: "timeout" })),
+        }),
+      ),
+    );
+  } catch (error) {
+    await runServerEffect(keepAlive("edge-cache.purge-error", Effect.fail(error)));
+  }
 }
 
 export type EntityCacheKind = "artist" | "album" | "label" | "track";
@@ -405,7 +450,15 @@ export async function purgeEntityCachesNow(
 }
 
 export function purgeEntityCaches(targets: { kind: EntityCacheKind; slug: string }[]): void {
-  waitUntil(purgeEntityCachesNow(targets));
+  void runServerEffect(
+    keepAlive(
+      "edge-cache.entity-purge-failed",
+      Effect.tryPromise({
+        catch: (cause) => new EdgeCacheFailed({ cause }),
+        try: () => purgeEntityCachesNow(targets),
+      }),
+    ),
+  );
 }
 
 export function purgeEntityCache(kind: EntityCacheKind, slug: string | null | undefined): void {

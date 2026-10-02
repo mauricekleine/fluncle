@@ -1,6 +1,12 @@
+import { Data, Effect } from "effect";
 import { getDb, typedRow } from "./db";
+import { runServerEffect } from "./effect/runtime";
 import { ApiError } from "./api-error";
 import { FINDING_TRACK_OR_LOG_ID_CTE } from "./track-id-resolver";
+
+class PreviewArchiveStorageFailed extends Data.TaggedError("PreviewArchiveStorageFailed")<{
+  cause: unknown;
+}> {}
 
 type PreviewArchiveTrack = {
   logId?: string;
@@ -126,9 +132,15 @@ export async function archivePreviewForTrack(
   const extension = previewExtensionForMime(mime);
   const archivedAt = (input.now ?? new Date()).toISOString();
 
-  await input.bucket.put(key, input.bytes, {
-    httpMetadata: { contentType: mime },
-  });
+  await runServerEffect(
+    Effect.tryPromise({
+      catch: (cause) => new PreviewArchiveStorageFailed({ cause }),
+      try: () =>
+        input.bucket.put(key, input.bytes, {
+          httpMetadata: { contentType: mime },
+        }),
+    }).pipe(Effect.mapError((error) => error.cause)),
+  );
 
   await client.execute({
     args: [key, source, mime, archivedAt, input.track.trackId],
@@ -144,7 +156,17 @@ export async function archivePreviewForTrack(
     .filter((ext) => ext !== extension)
     .map((ext) => `${logId}/preview.${ext}`);
 
-  await Promise.all(staleSiblings.map((siblingKey) => input.bucket.delete(siblingKey)));
+  await runServerEffect(
+    Effect.forEach(
+      staleSiblings,
+      (siblingKey) =>
+        Effect.tryPromise({
+          catch: (cause) => new PreviewArchiveStorageFailed({ cause }),
+          try: () => input.bucket.delete(siblingKey),
+        }),
+      { concurrency: "unbounded", discard: true },
+    ).pipe(Effect.mapError((error) => error.cause)),
+  );
 
   return { archivedAt, key, mime, source };
 }

@@ -126,6 +126,7 @@ describe("presignMultipartParts", () => {
 describe("copyObject / deleteObject request shapes", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("HEADs the source, then PUTs a same-bucket copy with x-amz-copy-source", async () => {
@@ -198,6 +199,37 @@ describe("copyObject / deleteObject request shapes", () => {
     );
     expect(puts).toBe(0);
   });
+
+  it.each(["headers", "body"])(
+    "aborts an R2 request with stalled %s after 60 seconds",
+    async (stall) => {
+      vi.useFakeTimers();
+      let signal: AbortSignal | undefined;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        signal = (input as Request).signal;
+        if (stall === "headers") {
+          return new Promise<Response>(() => {});
+        }
+        const body = new ReadableStream({
+          start(controller) {
+            signal?.addEventListener("abort", () => controller.error(new Error("aborted")));
+          },
+        });
+        return new Response(body, { status: 403 });
+      });
+
+      const pending = deleteObject("recordings/rec-1/set.mp4");
+      const outcome = pending.then(
+        () => "resolved",
+        (error: Error) => error.message,
+      );
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await outcome).toBe("R2 request timed out");
+      expect(signal?.aborted).toBe(true);
+    },
+  );
 
   it("DELETEs a key and tolerates an already-gone (404) object", async () => {
     const requests: Request[] = [];
