@@ -1,5 +1,6 @@
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stepOutsideFridayWindow } from "@/test/outside-friday-window";
 
 import { createIntegrationDb } from "./integration-db";
 
@@ -10,7 +11,12 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(async () => {
+  stepOutsideFridayWindow();
   db = await createIntegrationDb();
   await db.execute({
     args: ["mb_d99a706f-1e9f-4117-a800-3d2453af800c"],

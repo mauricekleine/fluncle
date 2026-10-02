@@ -1,5 +1,6 @@
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stepOutsideFridayWindow } from "@/test/outside-friday-window";
 
 import { createIntegrationDb, seedEmbedding, seedTrack } from "./integration-db";
 
@@ -47,7 +48,12 @@ async function seedUnanchored(row: {
   });
 }
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(async () => {
+  stepOutsideFridayWindow();
   db = await createIntegrationDb();
 });
 

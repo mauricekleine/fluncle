@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stepOutsideFridayWindow } from "@/test/outside-friday-window";
 
 import { createIntegrationDb } from "./integration-db";
 
@@ -129,6 +130,7 @@ function metadata(over: Partial<Record<string, unknown>> = {}): Record<string, u
 }
 
 beforeEach(async () => {
+  stepOutsideFridayWindow();
   directory = await mkdtemp(join(tmpdir(), "fluncle-anchor-resolve-"));
   db = await createIntegrationDb({ url: `file:${join(directory, "anchor.db")}` });
   lookupSpotifyIdsByMbid.mockReset();
@@ -139,6 +141,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   db.close();
   await rm(directory, { force: true, recursive: true });
 });
