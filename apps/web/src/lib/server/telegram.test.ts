@@ -1,5 +1,19 @@
-import { describe, expect, it } from "vitest";
-import { formatMixtapeAnnouncement } from "./telegram";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("./env", () => ({
+  readEnvs: async () => ({ TELEGRAM_BOT_TOKEN: "test-token", TELEGRAM_CHANNEL_ID: "test-channel" }),
+}));
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+import {
+  formatMixtapeAnnouncement,
+  pinChatMessage,
+  postLiveToTelegram,
+  unpinChatMessage,
+} from "./telegram";
 
 const BASE = {
   externalUrls: {
@@ -100,5 +114,76 @@ describe("formatTelegramMessage — the Spotify line is conditional on a presenc
 
     expect(message).toContain("🎧 Spotify: https://open.spotify.com/track/x");
     expect(message).toContain("/log/044.1.3L");
+  });
+});
+
+describe("Telegram delivery", () => {
+  it.each([
+    ["live post", () => postLiveToTelegram("test set")],
+    ["pin", () => pinChatMessage(42)],
+    ["unpin", () => unpinChatMessage(42)],
+  ] as const)("aborts a stalled %s request after 15 seconds", async (_name, send) => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | null | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        signal = init?.signal;
+        return new Promise<Response>(() => undefined);
+      }),
+    );
+    const result = send().catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await result).toMatchObject({ message: expect.stringContaining("request timed out") });
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it.each([200, 429])("aborts a stalled live response body with status %s", async (status) => {
+    vi.useFakeTimers();
+    let aborted = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async (_url: string, init?: RequestInit) =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                init?.signal?.addEventListener("abort", () => {
+                  aborted = true;
+                  controller.error(new Error("aborted"));
+                });
+              },
+            }),
+            { status },
+          ),
+      ),
+    );
+    const result = postLiveToTelegram().catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await result).toMatchObject({ message: "Telegram live post failed: request timed out" });
+    expect(aborted).toBe(true);
+  });
+
+  it.each([
+    [{ ok: true, result: { message_id: 42 } }, 42],
+    [{ ok: true }, null],
+  ])("preserves the live message id or null fallback", async (payload, expected) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify(payload))),
+    );
+    await expect(postLiveToTelegram()).resolves.toBe(expected);
+  });
+
+  it("preserves Telegram's rejected delivery detail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () => new Response("rate limited", { status: 429, statusText: "Too Many Requests" }),
+      ),
+    );
+    await expect(pinChatMessage(42)).rejects.toThrow(
+      "Telegram pin failed: 429 Too Many Requests - rate limited",
+    );
   });
 });

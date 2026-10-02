@@ -4,6 +4,7 @@ import { notifyDiscordSignup } from "./discord-alert";
 afterEach(() => {
   delete process.env.DISCORD_ALERT_WEBHOOK;
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("notifyDiscordSignup", () => {
@@ -65,4 +66,33 @@ describe("notifyDiscordSignup", () => {
       "Discord signup alert failed: 429 rate limited",
     );
   });
+});
+
+it.each(["request", "body"])("aborts a stalled Discord %s after 15 seconds", async (stage) => {
+  process.env.DISCORD_ALERT_WEBHOOK = "https://discord.com/api/webhooks/test/token";
+  vi.useFakeTimers();
+  let signal: AbortSignal | null | undefined;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal;
+      if (stage === "request") {
+        return new Promise<Response>(() => undefined);
+      }
+      return Promise.resolve(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              signal?.addEventListener("abort", () => controller.error(new Error("aborted")));
+            },
+          }),
+          { status: 429 },
+        ),
+      );
+    }),
+  );
+  const result = notifyDiscordSignup({}).catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(await result).toMatchObject({ message: "Discord signup alert failed: request timed out" });
+  expect(signal?.aborted).toBe(true);
 });

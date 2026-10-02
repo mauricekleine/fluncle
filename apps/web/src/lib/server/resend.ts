@@ -1,7 +1,13 @@
+import { Data, Effect } from "effect";
+import { runServerEffect } from "./effect/runtime";
 import { readEnv, readOptionalEnv } from "./env";
 import { ApiError } from "./api-error";
 
 const resendApiUrl = "https://api.resend.com";
+
+class ResendRequestFailed extends Data.TaggedError("ResendRequestFailed")<{
+  cause: unknown;
+}> {}
 
 type ResendErrorBody = { message?: string; name?: string };
 
@@ -38,10 +44,11 @@ export function resolveResendApiUrl({
   }
 }
 
-async function resendFetch(
+async function resendFetch<A>(
   path: string,
   init: { body?: unknown; idempotencyKey?: string; method: "GET" | "POST" },
-): Promise<Response> {
+  read: (response: Response) => Promise<A>,
+): Promise<A> {
   const apiKey = await readEnv("RESEND_API_KEY");
   const [override, e2e] = await Promise.all([
     readOptionalEnv("RESEND_API_URL"),
@@ -57,11 +64,31 @@ async function resendFetch(
     headers["Idempotency-Key"] = init.idempotencyKey;
   }
 
-  return fetch(`${baseUrl}${path}`, {
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
-    headers,
-    method: init.method,
-  });
+  return runServerEffect(
+    Effect.tryPromise({
+      catch: (cause) => new ResendRequestFailed({ cause }),
+      try: async (signal) => {
+        const response = await fetch(`${baseUrl}${path}`, {
+          body: init.body === undefined ? undefined : JSON.stringify(init.body),
+          headers,
+          method: init.method,
+          signal,
+        });
+        return read(response);
+      },
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: "15 seconds",
+        orElse: () =>
+          Effect.fail(
+            new ResendRequestFailed({
+              cause: new ResendDeliveryError("Resend request timed out", 504),
+            }),
+          ),
+      }),
+      Effect.catchTag("ResendRequestFailed", (error) => Effect.fail(error.cause)),
+    ),
+  );
 }
 
 async function readError(response: Response): Promise<string> {
@@ -73,39 +100,31 @@ async function readError(response: Response): Promise<string> {
 export async function addContactToSegment(email: string): Promise<void> {
   const segmentId = await readEnv("RESEND_SEGMENT_ID");
 
-  const createResponse = await resendFetch("/contacts", {
-    body: { email, unsubscribed: false },
-    method: "POST",
-  });
-
-  if (!createResponse.ok && createResponse.status !== 409 && createResponse.status !== 422) {
-    if (createResponse.status === 429) {
-      throw new ApiError("rate_limited", "Try again in a minute.", 503);
+  const readSubscription = async (response: Response): Promise<void> => {
+    if (!response.ok && response.status !== 409 && response.status !== 422) {
+      if (response.status === 429) {
+        throw new ApiError("rate_limited", "Try again in a minute.", 503);
+      }
+      throw new ApiError(
+        "subscribe_failed",
+        `Could not subscribe (${await readError(response)})`,
+        502,
+      );
     }
-
-    throw new ApiError(
-      "subscribe_failed",
-      `Could not subscribe (${await readError(createResponse)})`,
-      502,
-    );
-  }
-
-  const segmentResponse = await resendFetch(
+  };
+  await resendFetch(
+    "/contacts",
+    {
+      body: { email, unsubscribed: false },
+      method: "POST",
+    },
+    readSubscription,
+  );
+  await resendFetch(
     `/contacts/${encodeURIComponent(email)}/segments/${encodeURIComponent(segmentId)}`,
     { method: "POST" },
+    readSubscription,
   );
-
-  if (!segmentResponse.ok && segmentResponse.status !== 409 && segmentResponse.status !== 422) {
-    if (segmentResponse.status === 429) {
-      throw new ApiError("rate_limited", "Try again in a minute.", 503);
-    }
-
-    throw new ApiError(
-      "subscribe_failed",
-      `Could not subscribe (${await readError(segmentResponse)})`,
-      502,
-    );
-  }
 }
 
 export async function createBroadcast(params: {
@@ -125,58 +144,66 @@ export async function createBroadcast(params: {
     );
   }
 
-  const response = await resendFetch("/broadcasts", {
-    body: {
-      from,
-      html: params.html,
-      name: params.name,
-      segment_id: segmentId,
-      subject: params.subject,
+  return resendFetch(
+    "/broadcasts",
+    {
+      body: {
+        from,
+        html: params.html,
+        name: params.name,
+        segment_id: segmentId,
+        subject: params.subject,
+      },
+      idempotencyKey: `edition-broadcast/${params.editionId}`,
+      method: "POST",
     },
-    idempotencyKey: `edition-broadcast/${params.editionId}`,
-    method: "POST",
-  });
+    async (response) => {
+      if (!response.ok) {
+        throw new ApiError(
+          "broadcast_create_failed",
+          `Resend could not create the broadcast (${await readError(response)})`,
+          502,
+        );
+      }
 
-  if (!response.ok) {
-    throw new ApiError(
-      "broadcast_create_failed",
-      `Resend could not create the broadcast (${await readError(response)})`,
-      502,
-    );
-  }
+      const data = (await response.json().catch(() => undefined)) as { id?: string } | undefined;
 
-  const data = (await response.json().catch(() => undefined)) as { id?: string } | undefined;
+      if (!data?.id) {
+        throw new ApiError("broadcast_create_failed", "Resend did not return a broadcast id", 502);
+      }
 
-  if (!data?.id) {
-    throw new ApiError("broadcast_create_failed", "Resend did not return a broadcast id", 502);
-  }
-
-  return { id: data.id };
+      return { id: data.id };
+    },
+  );
 }
 
 export async function countSegmentRecipients(): Promise<number | null> {
   try {
     const segmentId = await readEnv("RESEND_SEGMENT_ID");
-    const response = await resendFetch(`/segments/${encodeURIComponent(segmentId)}/contacts`, {
-      method: "GET",
-    });
+    return await resendFetch(
+      `/segments/${encodeURIComponent(segmentId)}/contacts`,
+      {
+        method: "GET",
+      },
+      async (response) => {
+        if (!response.ok) {
+          return null;
+        }
 
-    if (!response.ok) {
-      return null;
-    }
+        const body = (await response.json().catch(() => undefined)) as
+          | { data?: { data?: unknown[] } | unknown[] }
+          | undefined;
+        const data = body?.data;
 
-    const body = (await response.json().catch(() => undefined)) as
-      | { data?: { data?: unknown[] } | unknown[] }
-      | undefined;
-    const data = body?.data;
+        if (Array.isArray(data)) {
+          return data.length;
+        }
 
-    if (Array.isArray(data)) {
-      return data.length;
-    }
+        const nested = data?.data;
 
-    const nested = data?.data;
-
-    return Array.isArray(nested) ? nested.length : null;
+        return Array.isArray(nested) ? nested.length : null;
+      },
+    );
   } catch {
     return null;
   }
@@ -186,19 +213,23 @@ export async function sendBroadcast(
   broadcastId: string,
   options: { scheduledAt?: string } = {},
 ): Promise<void> {
-  const response = await resendFetch(`/broadcasts/${encodeURIComponent(broadcastId)}/send`, {
-    body: options.scheduledAt ? { scheduled_at: options.scheduledAt } : undefined,
-    idempotencyKey: `edition-send/${broadcastId}`,
-    method: "POST",
-  });
-
-  if (!response.ok) {
-    throw new ApiError(
-      "broadcast_send_failed",
-      `Resend could not send the broadcast (${await readError(response)})`,
-      502,
-    );
-  }
+  return resendFetch(
+    `/broadcasts/${encodeURIComponent(broadcastId)}/send`,
+    {
+      body: options.scheduledAt ? { scheduled_at: options.scheduledAt } : undefined,
+      idempotencyKey: `edition-send/${broadcastId}`,
+      method: "POST",
+    },
+    async (response) => {
+      if (!response.ok) {
+        throw new ApiError(
+          "broadcast_send_failed",
+          `Resend could not send the broadcast (${await readError(response)})`,
+          502,
+        );
+      }
+    },
+  );
 }
 
 async function sendTransactionalEmail(params: {
@@ -220,28 +251,32 @@ async function sendTransactionalEmail(params: {
     );
   }
 
-  const response = await resendFetch("/emails", {
-    body: {
-      from,
-      headers: params.headers,
-      html: params.html,
-      subject: params.subject,
-      text: params.text,
-      to: params.to,
+  return resendFetch(
+    "/emails",
+    {
+      body: {
+        from,
+        headers: params.headers,
+        html: params.html,
+        subject: params.subject,
+        text: params.text,
+        to: params.to,
+      },
+      idempotencyKey: params.idempotencyKey,
+      method: "POST",
     },
-    idempotencyKey: params.idempotencyKey,
-    method: "POST",
-  });
+    async (response) => {
+      if (!response.ok) {
+        throw new ResendDeliveryError(
+          `Resend could not send the email (${await readError(response)})`,
+          response.status,
+        );
+      }
 
-  if (!response.ok) {
-    throw new ResendDeliveryError(
-      `Resend could not send the email (${await readError(response)})`,
-      response.status,
-    );
-  }
-
-  const body = (await response.json().catch(() => undefined)) as { id?: string } | undefined;
-  return { id: body?.id };
+      const body = (await response.json().catch(() => undefined)) as { id?: string } | undefined;
+      return { id: body?.id };
+    },
+  );
 }
 
 export async function sendFollowDigestEmail(params: {

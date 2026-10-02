@@ -375,13 +375,39 @@ describe("weekly follow digest", () => {
     await seedArtist(db, { id: "artist-a", name: "Artist A", slug: "artist-a" });
     await watch("one", "artist", "artist-a", "watch-a");
     await track("release", "2026-09-24", { artistId: "artist-a" });
-    sendEmail
-      .mockRejectedValueOnce(new ResendDeliveryError("rate limited", 429))
-      .mockRejectedValueOnce(new ResendDeliveryError("server error", 503));
-    expect(await sendFollowDigests({ now: new Date("2026-09-25T15:00:00.000Z") })).toMatchObject({
-      failed: 0,
-      sent: 1,
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const sendTimes: number[] = [];
+    let firstAttempt: () => void = () => {};
+    let secondAttempt: () => void = () => {};
+    const first = new Promise<void>((resolve) => {
+      firstAttempt = resolve;
     });
+    const second = new Promise<void>((resolve) => {
+      secondAttempt = resolve;
+    });
+    sendEmail.mockImplementation(async () => {
+      sendTimes.push(Date.now());
+      if (sendTimes.length === 1) {
+        firstAttempt();
+        throw new ResendDeliveryError("rate limited", 429);
+      }
+      if (sendTimes.length === 2) {
+        secondAttempt();
+        throw new ResendDeliveryError("server error", 503);
+      }
+      return { id: "resend-test" };
+    });
+    const sending = sendFollowDigests({ now: new Date("2026-09-25T15:00:00.000Z") });
+    await first;
+    await vi.advanceTimersByTimeAsync(249);
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await second;
+    await vi.advanceTimersByTimeAsync(499);
+    expect(sendEmail).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await sending).toMatchObject({ failed: 0, sent: 1 });
+    expect(sendTimes.map((at) => at - (sendTimes[0] ?? 0))).toEqual([0, 250, 750]);
     expect(sendEmail).toHaveBeenCalledTimes(3);
     expect(new Set(sendEmail.mock.calls.map(([payload]) => payload.idempotencyKey)).size).toBe(1);
     const state = await db.execute(

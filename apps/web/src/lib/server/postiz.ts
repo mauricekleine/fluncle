@@ -1,5 +1,6 @@
+import { Data, Duration, Effect } from "effect";
 import { readEnv, readOptionalEnv } from "./env";
-import { logEvent } from "./log";
+import { runServerEffect } from "./effect/runtime";
 import { ApiError } from "./api-error";
 
 const DEFAULT_BASE = "https://api.postiz.com/public/v1";
@@ -16,25 +17,54 @@ type Integration = {
 
 type Media = { id: string; path: string };
 
+class PostizRequestFailed extends Data.TaggedError("PostizRequestFailed")<{
+  cause: unknown;
+}> {}
+
+class PostizDecodeFailed extends Data.TaggedError("PostizDecodeFailed")<{
+  cause: unknown;
+}> {}
+
 async function postizFetch(
   path: string,
   init: RequestInit,
   fetchImpl: typeof fetch = fetch,
-): Promise<Response> {
+  readBody = true,
+): Promise<{ response: Response; text: string }> {
   const key = await readEnv("POSTIZ_API_KEY");
   const base = (await readOptionalEnv("POSTIZ_API_URL")) ?? DEFAULT_BASE;
 
-  return fetchImpl(`${base}${path}`, {
-    ...init,
-    headers: { Authorization: key, ...(init.headers as Record<string, string> | undefined) },
-  });
+  return runServerEffect(
+    Effect.tryPromise({
+      catch: (cause) => new PostizRequestFailed({ cause }),
+      try: async (signal) => {
+        const response = await fetchImpl(`${base}${path}`, {
+          ...init,
+          headers: { Authorization: key, ...(init.headers as Record<string, string> | undefined) },
+          signal,
+        });
+        return { response, text: response.ok && readBody ? await response.text() : "" };
+      },
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: path === "/upload-from-url" ? Duration.minutes(15) : Duration.seconds(30),
+        orElse: () =>
+          Effect.fail(
+            new PostizRequestFailed({
+              cause: new ApiError("postiz_timeout", "Postiz request timed out", 502),
+            }),
+          ),
+      }),
+      Effect.catchTag("PostizRequestFailed", (error) => Effect.fail(error.cause)),
+    ),
+  );
 }
 
 async function resolveIntegration(
   candidates: string[],
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ id: string; identifier: string }> {
-  const response = await postizFetch("/integrations", { method: "GET" }, fetchImpl);
+  const { response, text } = await postizFetch("/integrations", { method: "GET" }, fetchImpl);
 
   if (!response.ok) {
     throw new ApiError(
@@ -44,7 +74,7 @@ async function resolveIntegration(
     );
   }
 
-  const list = (await response.json()) as Integration[];
+  const list = JSON.parse(text) as Integration[];
   const live = list.filter((item) => !item.disabled);
 
   for (const candidate of candidates) {
@@ -76,13 +106,17 @@ export async function getPostizPlatformAnalytics(
   fetchImpl: typeof fetch = fetch,
 ): Promise<PostizMetric[]> {
   const { id } = await resolveIntegration(candidates, fetchImpl);
-  const response = await postizFetch(`/analytics/${id}?date=${days}`, { method: "GET" }, fetchImpl);
+  const { response, text } = await postizFetch(
+    `/analytics/${id}?date=${days}`,
+    { method: "GET" },
+    fetchImpl,
+  );
 
   if (!response.ok) {
     throw new ApiError("postiz_analytics", `Postiz analytics failed (${response.status})`, 502);
   }
 
-  const body = (await response.json()) as unknown;
+  const body = JSON.parse(text) as unknown;
 
   if (!Array.isArray(body)) {
     throw new ApiError(
@@ -197,7 +231,7 @@ export async function getPostizPostAnalytics(
   days = 7,
   fetchImpl: typeof fetch = fetch,
 ): Promise<PostAnalyticsResult> {
-  const response = await postizFetch(
+  const { response, text } = await postizFetch(
     `/analytics/post/${encodeURIComponent(postId)}?date=${days}`,
     { method: "GET" },
     fetchImpl,
@@ -211,11 +245,11 @@ export async function getPostizPostAnalytics(
     );
   }
 
-  return parsePostAnalytics(await readLenientJson(response));
+  return parsePostAnalytics(await readLenientJson(text));
 }
 
 async function uploadFromUrl(url: string): Promise<Media> {
-  const response = await postizFetch("/upload-from-url", {
+  const { response, text } = await postizFetch("/upload-from-url", {
     body: JSON.stringify({ url }),
     headers: { "Content-Type": "application/json" },
     method: "POST",
@@ -225,7 +259,7 @@ async function uploadFromUrl(url: string): Promise<Media> {
     throw new ApiError("postiz_upload", `Postiz upload-from-url failed (${response.status})`, 502);
   }
 
-  const media = (await response.json()) as Media;
+  const media = JSON.parse(text) as Media;
 
   return { id: media.id, path: media.path };
 }
@@ -252,7 +286,7 @@ async function createPost(input: {
     type: "now",
   };
 
-  const response = await postizFetch("/posts", {
+  const { response, text } = await postizFetch("/posts", {
     body: JSON.stringify(body),
     headers: { "Content-Type": "application/json" },
     method: "POST",
@@ -262,7 +296,7 @@ async function createPost(input: {
     throw new ApiError("postiz_post", `Postiz post create failed (${response.status})`, 502);
   }
 
-  const created = (await response.json()) as Array<{ integration: string; postId: string }>;
+  const created = JSON.parse(text) as Array<{ integration: string; postId: string }>;
   const postId = created[0]?.postId;
 
   if (!postId) {
@@ -272,24 +306,31 @@ async function createPost(input: {
   return { postId };
 }
 
-async function readLenientJson(response: Response): Promise<unknown> {
-  const text = await response.text();
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    const escaped = text
-      .replace(/\r\n/g, "\\n")
-      .replace(/\n/g, "\\n")
-      .replace(/\r/g, "\\n")
-      .replace(/\t/g, "\\t");
-
-    try {
-      return JSON.parse(escaped);
-    } catch {
-      return null;
-    }
-  }
+function readLenientJson(text: string): Promise<unknown> {
+  const decode = (input: string) =>
+    Effect.try({
+      catch: (cause) => new PostizDecodeFailed({ cause }),
+      try: () => JSON.parse(input) as unknown,
+    });
+  return runServerEffect(
+    decode(text).pipe(
+      Effect.catchTag("PostizDecodeFailed", () =>
+        decode(
+          text
+            .replace(/\r\n/g, "\\n")
+            .replace(/\n/g, "\\n")
+            .replace(/\r/g, "\\n")
+            .replace(/\t/g, "\\t"),
+        ),
+      ),
+      Effect.catchTag("PostizDecodeFailed", (error) =>
+        Effect.logWarning("postiz.decode-failed").pipe(
+          Effect.annotateLogs({ error: error.cause }),
+          Effect.as(null),
+        ),
+      ),
+    ),
+  );
 }
 
 export type PostizListPost = {
@@ -311,15 +352,17 @@ export async function getDatedPosts(): Promise<PostizListPost[]> {
   const endDate = new Date(now + LIST_LOOKAHEAD_MS).toISOString();
   const query = `?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`;
 
-  const response = await postizFetch(`/posts${query}`, { method: "GET" });
+  const { response, text } = await postizFetch(`/posts${query}`, { method: "GET" });
 
   if (!response.ok) {
     return [];
   }
 
-  const raw = await readLenientJson(response);
+  const raw = await readLenientJson(text);
 
-  logEvent("warn", "postiz.posts-raw-body", { query, raw });
+  await runServerEffect(
+    Effect.logWarning("postiz.posts-raw-body").pipe(Effect.annotateLogs({ query, raw })),
+  );
 
   const posts = isRecord(raw) && Array.isArray(raw.posts) ? (raw.posts as unknown[]) : [];
 
@@ -335,15 +378,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export async function getMissingContent(
   postId: string,
 ): Promise<Array<{ id: string; url: string }>> {
-  const response = await postizFetch(`/posts/${postId}/missing`, { method: "GET" });
+  const { response, text } = await postizFetch(`/posts/${postId}/missing`, { method: "GET" });
 
   if (!response.ok) {
     return [];
   }
 
-  const raw = await readLenientJson(response);
+  const raw = await readLenientJson(text);
 
-  logEvent("warn", "postiz.missing-raw-body", { postId, raw });
+  await runServerEffect(
+    Effect.logWarning("postiz.missing-raw-body").pipe(Effect.annotateLogs({ postId, raw })),
+  );
 
   const items = Array.isArray(raw) ? (raw as Array<{ id?: unknown; url?: unknown }>) : [];
 
@@ -478,14 +523,23 @@ export async function postizSetReleaseId(postId: string, releaseId: string): Pro
     return;
   }
 
-  const response = await postizFetch(`/posts/${postId}/release-id`, {
-    body: JSON.stringify({ releaseId: trimmed }),
-    headers: { "Content-Type": "application/json" },
-    method: "PUT",
-  });
+  const { response } = await postizFetch(
+    `/posts/${postId}/release-id`,
+    {
+      body: JSON.stringify({ releaseId: trimmed }),
+      headers: { "Content-Type": "application/json" },
+      method: "PUT",
+    },
+    fetch,
+    false,
+  );
 
   if (!response.ok) {
-    logEvent("warn", "postiz.release-link-failed", { postId, status: response.status });
+    await runServerEffect(
+      Effect.logWarning("postiz.release-link-failed").pipe(
+        Effect.annotateLogs({ postId, status: response.status }),
+      ),
+    );
   }
 }
 

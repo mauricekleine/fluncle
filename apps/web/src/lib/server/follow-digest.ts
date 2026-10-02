@@ -1,5 +1,7 @@
 import { bestAlbumCoverUrl, trackMedia } from "../media";
 import { randomUUID } from "node:crypto";
+import { Data, Effect, Schedule } from "effect";
+import { runServerEffect } from "./effect/runtime";
 import { publicTrackWhere } from "../../db/public-track-visibility";
 import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
@@ -22,6 +24,14 @@ const CLAIM_GRACE_MS = 2 * 60_000;
 const RESEND_IDEMPOTENCY_SAFE_MS = 23 * 60 * 60_000;
 const MAX_SEND_ATTEMPTS = 3;
 const SITE = "https://www.fluncle.com";
+
+class FollowDigestAttemptFailed extends Data.TaggedError("FollowDigestAttemptFailed")<{
+  cause: unknown;
+}> {}
+
+class FollowDigestSendFailed extends Data.TaggedError("FollowDigestSendFailed")<{
+  cause: unknown;
+}> {}
 
 type SubscriberRow = {
   id: string;
@@ -261,7 +271,12 @@ async function sendClaimedDelivery(
   const payload = JSON.parse(delivery.payload_json) as DeliveryPayload;
   let attempts = delivery.attempts;
   const allowance = Math.max(1, MAX_SEND_ATTEMPTS - attempts);
-  for (let retry = 0; retry < allowance; retry += 1) {
+  const attempt = async (): Promise<
+    | { response: Awaited<ReturnType<typeof sendFollowDigestEmail>> }
+    | "failed"
+    | "skipped"
+    | "unknown"
+  > => {
     const attemptAt = clock();
     if (!scheduledDigestFriday(attemptAt).sendWindow) {
       throw new Error("Follow digest send window closed");
@@ -303,37 +318,65 @@ async function sendClaimedDelivery(
     }
     try {
       response = await sendFollowDigestEmail(payload);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const transient =
-        error instanceof TypeError ||
-        (error instanceof ResendDeliveryError &&
-          (error.upstreamStatus === 429 || error.upstreamStatus >= 500));
-      if (transient && retry + 1 < allowance) {
-        await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** retry));
-        continue;
-      }
-      return setDeliveryStatus(db, delivery.id, "failed", clock(), message);
+    } catch (cause) {
+      throw new FollowDigestSendFailed({ cause });
     }
-    const sentAt = clock().toISOString();
-    if (testRecipient) {
-      const completed = await db.execute({
-        args: [response.id, sentAt, sentAt, delivery.id],
-        sql: `update follow_digest_deliveries set status = 'sent', resend_id = ?, sent_at = ?, updated_at = ?
+    return { response };
+  };
+  let outcome: Awaited<ReturnType<typeof attempt>>;
+  try {
+    outcome = await runServerEffect(
+      Effect.tryPromise({
+        catch: (cause) =>
+          cause instanceof FollowDigestSendFailed
+            ? cause
+            : new FollowDigestAttemptFailed({ cause }),
+        try: attempt,
+      }).pipe(
+        Effect.retry({
+          schedule: Schedule.exponential("250 millis"),
+          times: allowance - 1,
+          while: (error) =>
+            error instanceof FollowDigestSendFailed &&
+            (error.cause instanceof TypeError ||
+              (error.cause instanceof ResendDeliveryError &&
+                (error.cause.upstreamStatus === 429 || error.cause.upstreamStatus >= 500))),
+        }),
+      ),
+    );
+  } catch (error) {
+    if (error instanceof FollowDigestAttemptFailed) {
+      throw error.cause;
+    }
+    if (!(error instanceof FollowDigestSendFailed)) {
+      throw error;
+    }
+    const message = error.cause instanceof Error ? error.cause.message : String(error.cause);
+    return setDeliveryStatus(db, delivery.id, "failed", clock(), message);
+  }
+  if (typeof outcome === "string") {
+    return outcome;
+  }
+  const { response } = outcome;
+  const sentAt = clock().toISOString();
+  if (testRecipient) {
+    const completed = await db.execute({
+      args: [response.id, sentAt, sentAt, delivery.id],
+      sql: `update follow_digest_deliveries set status = 'sent', resend_id = ?, sent_at = ?, updated_at = ?
           where id = ? and status <> 'sent'`,
-      });
-      return completedDeliveryOutcome(db, delivery.id, completed.rowsAffected);
-    } else {
-      const completed = await db.batch(
-        [
-          {
-            args: [response.id, sentAt, sentAt, delivery.id],
-            sql: `update follow_digest_deliveries set status = 'sent', resend_id = ?, sent_at = ?, updated_at = ?
+    });
+    return completedDeliveryOutcome(db, delivery.id, completed.rowsAffected);
+  } else {
+    const completed = await db.batch(
+      [
+        {
+          args: [response.id, sentAt, sentAt, delivery.id],
+          sql: `update follow_digest_deliveries set status = 'sent', resend_id = ?, sent_at = ?, updated_at = ?
               where id = ? and status <> 'sent'`,
-          },
-          {
-            args: [weekKey, sentAt, delivery.release_count, sentAt, delivery.id, userId],
-            sql: `insert into user_follow_digests
+        },
+        {
+          args: [weekKey, sentAt, delivery.release_count, sentAt, delivery.id, userId],
+          sql: `insert into user_follow_digests
               (user_id, last_week_key, last_sent_at, last_release_count, updated_at)
               select u.id, ?, ?, ?, ? from "user" u
               join follow_digest_deliveries f on f.user_id = u.id and f.id = ? and f.status = 'sent'
@@ -346,14 +389,12 @@ async function sendClaimedDelivery(
               where user_follow_digests.unsubscribed_at is null
                 and (user_follow_digests.last_week_key is null
                   or user_follow_digests.last_week_key <> excluded.last_week_key)`,
-          },
-        ],
-        "write",
-      );
-      return completedDeliveryOutcome(db, delivery.id, completed[0]?.rowsAffected ?? 0);
-    }
+        },
+      ],
+      "write",
+    );
+    return completedDeliveryOutcome(db, delivery.id, completed[0]?.rowsAffected ?? 0);
   }
-  return "failed";
 }
 
 async function recoverClaimedDelivery(
@@ -549,7 +590,7 @@ export async function sendFollowDigests(
       continue;
     }
     if (base.sent > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      await runServerEffect(Effect.sleep("600 millis"));
     }
     const tokens = await recipientTokens(subscriber.id);
     if (!tokens) {
