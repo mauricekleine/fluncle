@@ -84,6 +84,7 @@ function writeGithubOutput(path, plan) {
     go_dns: plan.lanes.goDns,
     go_ssh: plan.lanes.goSsh,
     head: plan.head,
+    label_triage_python: plan.lanes.labelTriagePython,
     migrations: plan.lanes.migrations,
     packages: JSON.stringify(plan.packages),
     scripts: plan.lanes.scripts,

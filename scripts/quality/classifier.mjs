@@ -195,6 +195,15 @@ function classifyPath(
   }
 
   if (
+    isWithin(path, "packages/skills/fluncle-label-triage/scripts") ||
+    isWithin(path, ".agents/skills/fluncle-label-triage/scripts")
+  ) {
+    lanes.labelTriagePython = true;
+    lanes.scripts = true;
+    matched = true;
+  }
+
+  if (
     SCRIPT_DIRECTORIES.some((directory) => path.startsWith(directory)) ||
     path.startsWith("docs/agents/hermes/scripts/")
   ) {
@@ -274,6 +283,7 @@ export function classifyPaths(paths, options = {}) {
     e2e: false,
     goDns: false,
     goSsh: false,
+    labelTriagePython: false,
     migrations: false,
     scripts: false,
     sonar: false,
@@ -308,6 +318,7 @@ export function classifyPaths(paths, options = {}) {
       e2e: true,
       goDns: true,
       goSsh: true,
+      labelTriagePython: true,
       migrations: true,
       scripts: true,
       sonar: true,
@@ -330,6 +341,7 @@ export function classifyPaths(paths, options = {}) {
       e2e: true,
       goDns: true,
       goSsh: true,
+      labelTriagePython: true,
       migrations: true,
       scripts: true,
       sonar: true,

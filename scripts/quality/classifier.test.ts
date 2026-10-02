@@ -14,9 +14,17 @@ describe("dependency-closure classifier", () => {
     expect(local.lanes.e2e).toBe(false);
     expect(local.lanes.static).toBe(false);
     expect(
-      ["static", "packages", "scripts", "go-ssh", "go-dns", "sonar", "workflows", "e2e"].flatMap(
-        (lane) => commandsForLane(local, lane),
-      ),
+      [
+        "static",
+        "packages",
+        "scripts",
+        "label-triage-python",
+        "go-ssh",
+        "go-dns",
+        "sonar",
+        "workflows",
+        "e2e",
+      ].flatMap((lane) => commandsForLane(local, lane)),
     ).toEqual([]);
   });
 
@@ -82,6 +90,42 @@ describe("dependency-closure classifier", () => {
     expect(classifyPaths(["docs/agents/hermes/scripts/crawl-sweep.ts"]).lanes.scripts).toBe(true);
   });
 
+  test("label-triage scripts select Python without forcing the full matrix", () => {
+    for (const path of [
+      "packages/skills/fluncle-label-triage/scripts/merge-round.py",
+      "packages/skills/fluncle-label-triage/scripts/tests/test_merge_verify.py",
+      "packages/skills/fluncle-label-triage/scripts/triage-workflow.js",
+      ".agents/skills/fluncle-label-triage/scripts/merge-round.py",
+    ]) {
+      const plan = classifyPaths([path]);
+      expect(plan.full, path).toBe(false);
+      expect(plan.unknownFiles, path).toEqual([]);
+      expect(plan.lanes.e2e, path).toBe(false);
+      expect(commandsForLane(plan, "label-triage-python"), path).toEqual([
+        { args: ["run", "test:label-triage:python"], options: {}, program: "bun" },
+      ]);
+    }
+  });
+
+  test("unrelated owned paths exclude label-triage Python", () => {
+    for (const path of [
+      "docs/label-entity.md",
+      "apps/cli/src/cli.ts",
+      "apps/web/src/routes/index.tsx",
+      "scripts/ux-capture.ts",
+      ".agents/skills/other/scripts/helper.py",
+    ]) {
+      expect(commandsForLane(classifyPaths([path]), "label-triage-python"), path).toEqual([]);
+    }
+  });
+
+  test("scheduled and explicit full backstops include label-triage Python", () => {
+    expect(
+      classifyPaths(["docs/label-entity.md"], { forceFull: true }).lanes.labelTriagePython,
+    ).toBe(true);
+    expect(classifyPaths([]).lanes.labelTriagePython).toBe(true);
+  });
+
   test("the pipeline evaluator selects web checks for its web integration consumer", () => {
     const plan = classifyPaths(["docs/agents/hermes/scripts/pipeline-watch-evaluate.ts"]);
     expect(plan.full).toBe(false);
@@ -119,6 +163,7 @@ describe("dependency-closure classifier", () => {
       expect(plan.lanes.e2e, path).toBe(true);
       expect(plan.lanes.goDns, path).toBe(true);
       expect(plan.lanes.sonar, path).toBe(true);
+      expect(plan.lanes.labelTriagePython, path).toBe(true);
     }
 
     expect(
@@ -137,6 +182,7 @@ describe("dependency-closure classifier", () => {
       e2e: false,
       goDns: false,
       goSsh: false,
+      labelTriagePython: false,
       migrations: false,
       scripts: false,
       sonar: false,

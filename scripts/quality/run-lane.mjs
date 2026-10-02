@@ -54,6 +54,12 @@ export function commandsForLane(plan, lane) {
     return plan.lanes.scripts ? [command("bun", ["run", "test:scripts"])] : [];
   }
 
+  if (lane === "label-triage-python") {
+    return plan.lanes.labelTriagePython
+      ? [command("bun", ["run", "test:label-triage:python"])]
+      : [];
+  }
+
   if (lane === "go-ssh" || lane === "go-dns") {
     const app = lane === "go-ssh" ? "ssh" : "dns";
     const enabled = lane === "go-ssh" ? plan.lanes.goSsh : plan.lanes.goDns;
