@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { escapeXml } from "../lib/feed-xml";
 import { logPageUrl, siteUrl } from "../lib/fluncle-links";
-import { mixtapeCoverUrl } from "../lib/mixtapes";
+import { mixtapeCoverUrl, mixtapeDisplayTitle } from "../lib/mixtapes";
 import { parseArtistsJson } from "../lib/server/artists";
 import { getDb, typedRows } from "../lib/server/db";
 
@@ -60,7 +60,9 @@ export const Route = createFileRoute("/rss.xml")({
         const items = rows.map((row) => {
           const artists = parseArtistsJson(row.artists_json);
           const title =
-            row.item_type === "mixtape" ? row.title : `${artists.join(", ")} — ${row.title}`;
+            row.item_type === "mixtape"
+              ? mixtapeDisplayTitle(row.title)
+              : `${artists.join(", ")} — ${row.title}`;
           const link = row.log_id ? logPageUrl(row.log_id) : (row.spotify_url ?? siteUrl);
           const description = [title, row.note?.trim() || undefined, row.spotify_url ?? undefined]
             .filter(Boolean)

@@ -13,7 +13,7 @@ export const COPY = {
     copySsh: "Copy ssh command",
     copyWebUrl: "Copy web URL",
     open: "Open in Fluncle",
-    openSpotify: "Open in Spotify",
+    openSpotify: "Listen on Spotify",
   },
 
   copied: "Copied",

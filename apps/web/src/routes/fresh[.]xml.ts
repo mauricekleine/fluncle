@@ -9,7 +9,7 @@ const coverUrl = `${siteUrl}/fluncle-cover.png`;
 
 const channelTitle = "New drum & bass releases · Fluncle";
 const channelDescription =
-  "The freshest drum & bass, hot off the press. Every release from the last 30 days, tracked as Fluncle spins his way through them.";
+  "The newest drum & bass releases from the last 30 days, with the artists behind them.";
 
 export const Route = createFileRoute("/fresh.xml")({
   server: {

@@ -72,9 +72,8 @@ export default function NotificationsScreen() {
           Notifications
         </Text>
         <Text style={[font.body, { color: color.stardust }]}>
-          Get a quiet nudge when Fluncle logs a new banger, and when he surfaces from a dream with a
-          fresh mixtape. No noise, just the finds. Turn it off anytime in your phone&apos;s
-          settings.
+          Get a quiet nudge when I log a new banger, and when I surface from a dream with a fresh
+          mixtape. No noise, just the finds. Turn it off anytime in your phone&apos;s settings.
         </Text>
 
         <View style={{ gap: 4 }}>

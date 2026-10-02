@@ -131,7 +131,7 @@ export function mintToastMessage(status: FrontierMintStatus): string {
     case "edition_only":
       return "Saved. Your Spotify playlist follows soon.";
     case "minted":
-      return "Done. It's on your Spotify.";
+      return "Done. The playlist is on your Spotify.";
     case "refreshed":
       return "Refreshed with your latest picks.";
     case "unchanged":
@@ -187,10 +187,10 @@ export function seedMutationMessage(input: { body: unknown; ok: boolean; status:
   const message = readMessage(input.body);
 
   if (input.status === 409) {
-    return message ?? "You can pick up to 12 seeds. Remove one to add another.";
+    return message ?? "You can have up to 12 picks. Remove one to add another.";
   }
 
-  return message ?? "Could not update your seeds. Try again in a moment.";
+  return message ?? "Couldn't update your picks. Try again in a moment.";
 }
 
 export function resolveOpenSummary(

@@ -84,7 +84,9 @@ describe("/artist/$slug/fresh.xml — release-framed, two tiers, one artist", ()
     expect(xml).toContain("<pubDate>Fri, 10 Jul 2026 00:00:00 GMT</pubDate>");
 
     expect(xml).toContain("<title>New Camo &amp; Krooked releases · Fluncle</title>");
-    expect(xml).toContain("The freshest from Camo &amp; Krooked, hot off the press.");
+    expect(xml).toContain(
+      "New drum &amp; bass releases from Camo &amp; Krooked in the last 30 days.",
+    );
 
     expect(xml).toContain("<link>https://www.fluncle.com/artist/camo-and-krooked</link>");
     expect(xml).not.toMatch(/found/i);
@@ -155,7 +157,7 @@ describe("/label/$slug/fresh.xml — release-framed, two tiers, one label", () =
     expect(xml).toContain(`<link>${CERTIFIED_LOG}</link>`);
 
     expect(xml).toContain("<title>New releases on Hospital Records · Fluncle</title>");
-    expect(xml).toContain("The freshest on Hospital Records, hot off the press.");
+    expect(xml).toContain("New drum &amp; bass releases on Hospital Records in the last 30 days.");
     expect(xml).toContain("<link>https://www.fluncle.com/label/hospital-records</link>");
     expect(xml).not.toMatch(/found/i);
   });

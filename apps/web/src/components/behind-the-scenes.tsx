@@ -90,7 +90,7 @@ export function VideoBehindTheScenes({ track }: { track: Track }) {
           <p className="log-behind-lede">
             Every finding travels back with its own footage: one moving piece, made for this tune
             and nothing else. I built a machine that listens to the track and composes the whole
-            thing from the sound up. Here's what it reached for on this one.
+            video from the sound up. Here's what it reached for on this tune.
           </p>
 
           {posterUrl ? (

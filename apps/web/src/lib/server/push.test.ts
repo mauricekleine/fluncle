@@ -16,7 +16,13 @@ vi.mock("./db", () => ({
   typedRows: <T>(rows: T[]): T[] => rows,
 }));
 
-import { chunkMessages, notifyNewFinding, sweepPushReceipts, tokensForCategory } from "./push";
+import {
+  chunkMessages,
+  notifyNewFinding,
+  notifyNewMixtape,
+  sweepPushReceipts,
+  tokensForCategory,
+} from "./push";
 
 const FETCH = vi.fn();
 const waitUntil = vi.hoisted(() => vi.fn());
@@ -113,6 +119,25 @@ describe("notifyNewFinding — the no-op-when-unset property", () => {
 
     expect(readOptionalEnv).not.toHaveBeenCalled();
     expect(FETCH).not.toHaveBeenCalled();
+  });
+});
+
+describe("notifyNewMixtape", () => {
+  it("names the mixtape by its display title, never the stored coordinate suffix", async () => {
+    readOptionalEnv.mockResolvedValue("expo_token");
+    execute.mockResolvedValue({ rows: [{ muted_json: null, token: "ExponentPushToken[a]" }] });
+    FETCH.mockResolvedValue({
+      json: async () => ({ data: [{ id: "receipt-1", status: "ok" }] }),
+      ok: true,
+    });
+
+    notifyNewMixtape({ logId: "019.F.3A", title: "Fluncle Drum & Bass Mixtape #3 | 019.F.3A" });
+    await flush();
+
+    const [, init] = FETCH.mock.calls[0] as [string, RequestInit];
+    const sent = JSON.parse(init.body as string) as { body: string; data: { url: string } }[];
+    expect(sent[0]?.body).toBe("Fluncle Drum & Bass Mixtape #3");
+    expect(sent[0]?.data.url).toContain("/log/019.F.3A");
   });
 });
 

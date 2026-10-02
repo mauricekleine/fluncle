@@ -60,7 +60,7 @@ for (const outcome of ["already_logged", "failed", "offline", "rate_limited"] as
 
 assertEqual(
   submitOutcomeCopy.rate_limited,
-  "Easy, fam. That's a fair few in a short stretch. Give it an hour, then send the next one.",
+  "Easy, fam. That's a fair few tracks in a short stretch. Give it an hour, then send the next track.",
   "rate_limited copy is the ratified string",
 );
 

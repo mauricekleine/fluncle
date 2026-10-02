@@ -3,6 +3,7 @@ import { runServerEffect } from "./effect/runtime";
 import { keepAlive } from "./effect/wait-until";
 import { type PushCategory } from "@fluncle/contracts";
 import { logPageUrl } from "../fluncle-links";
+import { mixtapeDisplayTitle } from "../mixtapes";
 import { getDb, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
 
@@ -106,7 +107,7 @@ export function notifyNewMixtape(mixtape: { logId?: string; title: string }): vo
   }
 
   scheduleNotify({
-    body: mixtape.title,
+    body: mixtapeDisplayTitle(mixtape.title),
     category: "mixtapes",
     channelId: MIXTAPES_CHANNEL,
     title: "Fresh mixtape on the deck",

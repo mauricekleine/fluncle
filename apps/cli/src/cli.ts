@@ -747,7 +747,7 @@ function addShareCommands(program: Command): void {
 function addAccountCommands(program: Command): void {
   program
     .command("login")
-    .description("Link this device to your Fluncle account (sync your Galaxy)")
+    .description("Link this device to your Fluncle account (take your Galaxy to the terminal)")
     .action(async () => {
       const { loginCommand } = await import("./commands/login");
       await loginCommand();
@@ -4408,7 +4408,7 @@ async function runTrackSimilar(
   }
 
   if (result.findings.length === 0) {
-    console.log("Nothing sounds near this one yet. It may still be waiting on its embedding.");
+    console.log("Nothing sounds near this track yet. I might not have measured its sound.");
     return;
   }
 

@@ -28,11 +28,11 @@ export function derivePillState(services: StatusService[]): PillState {
 
 export function pillLabel(state: PillState): string {
   if (state.tone === "loading") {
-    return "checking systems";
+    return "Checking systems";
   }
 
   if (state.tone === "ok") {
-    return "all systems operational";
+    return "All systems operational";
   }
 
   const noun = state.count === 1 ? "system" : "systems";

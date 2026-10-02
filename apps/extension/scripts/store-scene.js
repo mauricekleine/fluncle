@@ -21,7 +21,7 @@ function popup() {
           <div class="lens-row-title">Break — Whatever It Takes</div>
           <div class="lens-actions">
             <a class="lens-action">Open in Fluncle</a>
-            <a class="lens-action">Open in Spotify</a>
+            <a class="lens-action">Listen on Spotify</a>
             <button class="lens-action">Copy coordinate</button>
             <button class="lens-action">Copy dig command</button>
           </div>
@@ -50,7 +50,7 @@ function card() {
     </div>
     <div class="fluncle-lens-actions">
       <a class="fluncle-lens-action">Open in Fluncle</a>
-      <a class="fluncle-lens-action">Open in Spotify</a>
+      <a class="fluncle-lens-action">Listen on Spotify</a>
       <button class="fluncle-lens-action">Copy coordinate</button>
       <button class="fluncle-lens-action">Copy web URL</button>
     </div>

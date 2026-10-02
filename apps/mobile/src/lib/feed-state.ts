@@ -23,7 +23,7 @@ export function resolveFeedState(q: {
 
 export const feedCopy = {
   empty: {
-    body: "When Fluncle finds the next banger, it lands here first.",
+    body: "When I find the next banger, it lands here first.",
     title: "Nothing logged yet",
   },
   error: {

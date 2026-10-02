@@ -55,8 +55,8 @@ export const submitPausedCopy = {
 
 export const submitOutcomeCopy: Record<SubmitOutcome, string> = {
   already_logged: "Already in the log, good ear. Great minds and all that.",
-  failed: "That one didn't make it back to me. Give it another go in a moment.",
+  failed: "That track didn't make it back to me. Give it another go in a moment.",
   offline: "Couldn't reach the Galaxy just then. Check your connection and try again.",
   rate_limited:
-    "Easy, fam. That's a fair few in a short stretch. Give it an hour, then send the next one.",
+    "Easy, fam. That's a fair few tracks in a short stretch. Give it an hour, then send the next track.",
 };

@@ -131,7 +131,7 @@ export function FindingsLinkHub({ galaxiesLive = false }: { galaxiesLive?: boole
         </Link>
         <Dot />
         <Link className={linkClassName} to="/log">
-          Logs
+          Log
         </Link>
         <Dot />
         <Link className={linkClassName} to="/mixtapes">
