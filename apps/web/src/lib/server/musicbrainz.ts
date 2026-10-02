@@ -69,12 +69,12 @@ function mbRequest<T>(path: string, context?: MbRequestContext): Effect.Effect<M
         const response = await fetch(url, { headers: { "User-Agent": MB_USER_AGENT }, signal });
 
         if (!response.ok) {
-          return { response };
+          return { read: false as const, response };
         }
 
         readingBody = true;
 
-        return { data: (await response.json()) as T, response };
+        return { data: (await response.json()) as T, read: true as const, response };
       },
     }).pipe(
       Effect.timeoutOrElse({
@@ -94,7 +94,7 @@ function mbRequest<T>(path: string, context?: MbRequestContext): Effect.Effect<M
       });
     }
 
-    if (!("data" in exchange)) {
+    if (!exchange.read) {
       return yield* new MusicbrainzRejected({
         status: response.status,
         statusText: response.statusText,
