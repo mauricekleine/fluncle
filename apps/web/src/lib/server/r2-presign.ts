@@ -1,6 +1,45 @@
 import { AwsClient } from "aws4fetch";
+import { Data, Duration, Effect } from "effect";
+import { runServerEffect } from "./effect/runtime";
 
 import { readEnvs } from "./env";
+
+class R2OperationFailed extends Data.TaggedError("R2OperationFailed")<{
+  cause: unknown;
+}> {}
+
+function r2Operation<A>(operation: (signal: AbortSignal) => Promise<A>) {
+  return Effect.tryPromise({
+    catch: (cause) => new R2OperationFailed({ cause }),
+    try: operation,
+  });
+}
+
+function runR2Effect<A>(effect: Effect.Effect<A, R2OperationFailed>): Promise<A> {
+  return runServerEffect(effect.pipe(Effect.mapError((error) => error.cause)));
+}
+
+function r2Exchange<A>(
+  client: AwsClient,
+  url: string,
+  init: RequestInit,
+  read: (response: Response) => Promise<A>,
+  timeout: Duration.Input = Duration.seconds(60),
+): Promise<{ body: A; response: Response }> {
+  return runR2Effect(
+    r2Operation(async (signal) => {
+      const response = await client.fetch(url, { ...init, signal });
+
+      return { body: await read(response), response };
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: timeout,
+        orElse: () =>
+          Effect.fail(new R2OperationFailed({ cause: new Error("R2 request timed out") })),
+      }),
+    ),
+  );
+}
 
 export const PRESIGN_TTL_SECONDS = 60 * 60;
 
@@ -40,20 +79,27 @@ export async function presignUploads(
 
   const endpoint = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
 
-  return Promise.all(
-    targets.map(async (target) => {
-      const encodedKey = target.key.split("/").map(encodeURIComponent).join("/");
-      const url = new URL(`${endpoint}/${bucket}/${encodedKey}`);
-      url.searchParams.set("X-Amz-Expires", String(PRESIGN_TTL_SECONDS));
+  return runR2Effect(
+    Effect.forEach(
+      targets,
+      (target) =>
+        Effect.gen(function* () {
+          const encodedKey = target.key.split("/").map(encodeURIComponent).join("/");
+          const url = new URL(`${endpoint}/${bucket}/${encodedKey}`);
+          url.searchParams.set("X-Amz-Expires", String(PRESIGN_TTL_SECONDS));
 
-      const signed = await client.sign(url.toString(), {
-        aws: { allHeaders: true, signQuery: true },
-        headers: { "content-type": target.contentType },
-        method: "PUT",
-      });
+          const signed = yield* r2Operation(() =>
+            client.sign(url.toString(), {
+              aws: { allHeaders: true, signQuery: true },
+              headers: { "content-type": target.contentType },
+              method: "PUT",
+            }),
+          );
 
-      return { contentType: target.contentType, key: target.key, url: signed.url };
-    }),
+          return { contentType: target.contentType, key: target.key, url: signed.url };
+        }),
+      { concurrency: "unbounded" },
+    ),
   );
 }
 
@@ -112,21 +158,28 @@ export async function presignMultipartParts(
   const { client, endpoint } = await r2Client();
   const base = `${endpoint}/${bucket}/${encodeKey(key)}`;
 
-  return Promise.all(
-    Array.from({ length: partCount }, async (_unused, index) => {
-      const partNumber = index + 1;
-      const url = new URL(base);
-      url.searchParams.set("partNumber", String(partNumber));
-      url.searchParams.set("uploadId", uploadId);
-      url.searchParams.set("X-Amz-Expires", String(MULTIPART_PRESIGN_TTL_SECONDS));
+  return runR2Effect(
+    Effect.forEach(
+      Array.from({ length: partCount }),
+      (_unused, index) =>
+        Effect.gen(function* () {
+          const partNumber = index + 1;
+          const url = new URL(base);
+          url.searchParams.set("partNumber", String(partNumber));
+          url.searchParams.set("uploadId", uploadId);
+          url.searchParams.set("X-Amz-Expires", String(MULTIPART_PRESIGN_TTL_SECONDS));
 
-      const signed = await client.sign(url.toString(), {
-        aws: { signQuery: true },
-        method: "PUT",
-      });
+          const signed = yield* r2Operation(() =>
+            client.sign(url.toString(), {
+              aws: { signQuery: true },
+              method: "PUT",
+            }),
+          );
 
-      return { partNumber, url: signed.url };
-    }),
+          return { partNumber, url: signed.url };
+        }),
+      { concurrency: "unbounded" },
+    ),
   );
 }
 
@@ -141,7 +194,9 @@ export async function presignMultipartAction(
   url.searchParams.set("uploadId", uploadId);
   url.searchParams.set("X-Amz-Expires", String(MULTIPART_PRESIGN_TTL_SECONDS));
 
-  const signed = await client.sign(url.toString(), { aws: { signQuery: true }, method });
+  const signed = await runR2Effect(
+    r2Operation(() => client.sign(url.toString(), { aws: { signQuery: true }, method })),
+  );
 
   return signed.url;
 }
@@ -159,19 +214,21 @@ export async function presignMultipartUpload(
   const { client, endpoint } = await r2Client();
   const base = `${endpoint}/${bucket}/${encodeKey(key)}`;
 
-  const created = await client.fetch(`${base}?uploads`, {
-    headers: { "content-type": contentType },
-    method: "POST",
-  });
+  const { body: createdBody, response: created } = await r2Exchange(
+    client,
+    `${base}?uploads`,
+    { headers: { "content-type": contentType }, method: "POST" },
+    (response) => (response.ok ? response.text() : response.text().catch(() => "")),
+  );
 
   if (!created.ok) {
-    const detail = (await created.text().catch(() => "")).slice(0, 300);
+    const detail = createdBody.slice(0, 300);
     throw new Error(
       `R2 CreateMultipartUpload failed (${created.status} ${created.statusText})${detail ? `: ${detail}` : ""}`,
     );
   }
 
-  const uploadId = parseUploadId(await created.text());
+  const uploadId = parseUploadId(createdBody);
   const [parts, completeUrl, abortUrl] = await Promise.all([
     presignMultipartParts(bucket, key, uploadId, partCount),
     presignMultipartAction(bucket, key, uploadId, "POST"),
@@ -182,6 +239,7 @@ export async function presignMultipartUpload(
 }
 
 const COPY_OBJECT_MAX_BYTES = 5 * 1024 * 1024 * 1024;
+const COPY_OBJECT_TIMEOUT = Duration.minutes(15);
 
 export async function copyObject(srcKey: string, destKey: string): Promise<void> {
   const { client, endpoint } = await r2Client();
@@ -189,7 +247,12 @@ export async function copyObject(srcKey: string, destKey: string): Promise<void>
   const srcUrl = `${endpoint}/${VIDEOS_BUCKET}/${encodeKey(srcKey)}`;
   const destUrl = `${endpoint}/${VIDEOS_BUCKET}/${encodeKey(destKey)}`;
 
-  const head = await client.fetch(srcUrl, { method: "HEAD" });
+  const { response: head } = await r2Exchange(
+    client,
+    srcUrl,
+    { method: "HEAD" },
+    async () => undefined,
+  );
 
   if (!head.ok) {
     throw new Error(
@@ -205,12 +268,14 @@ export async function copyObject(srcKey: string, destKey: string): Promise<void>
     );
   }
 
-  const copied = await client.fetch(destUrl, {
-    headers: { "x-amz-copy-source": source },
-    method: "PUT",
-  });
-
-  const body = (await copied.text().catch(() => "")).slice(0, 500);
+  const { body: copiedBody, response: copied } = await r2Exchange(
+    client,
+    destUrl,
+    { headers: { "x-amz-copy-source": source }, method: "PUT" },
+    (response) => response.text().catch(() => ""),
+    COPY_OBJECT_TIMEOUT,
+  );
+  const body = copiedBody.slice(0, 500);
 
   if (!copied.ok || body.includes("<Error>") || !body.includes("<CopyObjectResult")) {
     throw new Error(
@@ -222,10 +287,18 @@ export async function copyObject(srcKey: string, destKey: string): Promise<void>
 export async function deleteObject(key: string): Promise<void> {
   const { client, endpoint } = await r2Client();
   const url = `${endpoint}/${VIDEOS_BUCKET}/${encodeKey(key)}`;
-  const deleted = await client.fetch(url, { method: "DELETE" });
+  const { body: deletedBody, response: deleted } = await r2Exchange(
+    client,
+    url,
+    { method: "DELETE" },
+    (response) =>
+      response.ok || response.status === 404
+        ? Promise.resolve("")
+        : response.text().catch(() => ""),
+  );
 
   if (!deleted.ok && deleted.status !== 404) {
-    const body = (await deleted.text().catch(() => "")).slice(0, 300);
+    const body = deletedBody.slice(0, 300);
     throw new Error(
       `R2 DeleteObject failed (${deleted.status} ${deleted.statusText})${body ? `: ${body}` : ""}`,
     );

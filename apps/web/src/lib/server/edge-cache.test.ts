@@ -710,6 +710,40 @@ describe("cache purge requests", () => {
     });
   });
 
+  it("bounds global purges and logs failures without rejecting the caller", async () => {
+    vi.useFakeTimers();
+    env.CF_CACHE_PURGE_ZONE_ID = "test-zone";
+    env.CF_CACHE_PURGE_TOKEN = "test-token";
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let signal: AbortSignal | null | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        signal = init.signal;
+        return new Promise<Response>(() => {});
+      }),
+    );
+
+    try {
+      const pending = purgePathsNow(["/log/004.7.2I"]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(pending).resolves.toBeUndefined();
+      await Promise.all(takeWaitUntilPromises());
+      expect(signal?.aborted).toBe(true);
+      expect(logged.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual([
+        expect.objectContaining({
+          cause: expect.stringContaining("timeout"),
+          event: "edge-cache.purge-error",
+        }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+      logged.mockRestore();
+    }
+  });
+
   it("purges a finding's encoded page and the log index", async () => {
     env.CF_CACHE_PURGE_ZONE_ID = "test-zone";
     env.CF_CACHE_PURGE_TOKEN = "test-token";

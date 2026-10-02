@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as workers from "../../test/cloudflare-workers-stub";
 import { siteUrl } from "@/lib/fluncle-links";
 import {
   buildFindingIndexNowUrls,
   buildIndexNowPayload,
   INDEXNOW_KEY,
+  submitFindingToIndexNow,
 } from "@/lib/server/indexnow";
 
 describe("buildIndexNowPayload", () => {
@@ -71,5 +73,67 @@ describe("buildFindingIndexNowUrls", () => {
     ]);
 
     expect(urls.filter((url) => url === `${siteUrl}/artist/dimension`)).toHaveLength(1);
+  });
+});
+
+describe("IndexNow submission lifecycle", () => {
+  afterEach(async () => {
+    await Promise.all(workers.takeWaitUntilPromises());
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("submits in the background and bounds a hung request", async () => {
+    vi.useFakeTimers();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    let signal: AbortSignal | null | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        signal = init.signal;
+        return new Promise<Response>(() => {});
+      }),
+    );
+
+    expect(submitFindingToIndexNow("004.7.2I")).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(0);
+    const tasks = workers.takeWaitUntilPromises();
+    expect(tasks).toHaveLength(1);
+    expect(signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await Promise.all(tasks);
+
+    expect(signal?.aborted).toBe(true);
+    expect(logged.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual([
+      expect.objectContaining({
+        cause: expect.stringContaining("timeout"),
+        event: "indexnow.submit-failed",
+      }),
+    ]);
+  });
+
+  it("logs a rejected submission even when waitUntil is unavailable", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(workers, "waitUntil").mockImplementation(() => {
+      throw new Error("no request context");
+    });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("offline");
+      }),
+    );
+
+    expect(submitFindingToIndexNow("004.7.2I")).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(logged.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual([
+      expect.objectContaining({
+        cause: expect.stringContaining("offline"),
+        event: "indexnow.submit-failed",
+      }),
+    ]);
   });
 });
