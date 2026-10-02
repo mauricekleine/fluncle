@@ -1,3 +1,5 @@
+import { Data, Effect } from "effect";
+import { runServerEffect } from "./effect/runtime";
 import { readOptionalEnv } from "./env";
 import { getSetting, setSetting } from "./settings";
 
@@ -132,6 +134,75 @@ export type SonarHealth = {
   validation: "last_attempt_failed" | "valid";
 };
 
+class SonarTimeout extends Data.TaggedError("SonarTimeout")<{}> {}
+
+class SonarHttpFailed extends Data.TaggedError("SonarHttpFailed")<{
+  status: number;
+}> {}
+
+class SonarParseFailed extends Data.TaggedError("SonarParseFailed")<{
+  cause: unknown;
+}> {}
+
+class SonarUnreachable extends Data.TaggedError("SonarUnreachable")<{
+  cause: unknown;
+}> {}
+
+function sonarRequest<T>(
+  baseUrl: string,
+  path: string,
+  init: () => RequestInit,
+  parse: (payload: unknown) => T | null,
+): Effect.Effect<T | null> {
+  return Effect.suspend(() => {
+    let parsing = true;
+
+    return Effect.tryPromise({
+      catch: (cause) =>
+        cause instanceof SonarHttpFailed || cause instanceof SonarParseFailed
+          ? cause
+          : parsing
+            ? new SonarParseFailed({ cause })
+            : new SonarUnreachable({ cause }),
+      try: async (signal) => {
+        const url = new URL(path, baseUrl);
+        const requestInit = init();
+        parsing = false;
+        const response = await fetch(url, { ...requestInit, signal });
+
+        if (!response.ok) {
+          throw new SonarHttpFailed({ status: response.status });
+        }
+
+        parsing = true;
+        const result = parse(await response.json());
+
+        if (result === null) {
+          throw new SonarParseFailed({ cause: "Invalid Sonar response" });
+        }
+
+        return result;
+      },
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: SONAR_TIMEOUT_MS,
+        orElse: () => Effect.fail(new SonarTimeout()),
+      }),
+      Effect.catch((error) =>
+        Effect.logWarning("sonar.request-failed").pipe(
+          Effect.annotateLogs({
+            error,
+            failure: error._tag,
+            path,
+            ...(error instanceof SonarHttpFailed ? { status: error.status } : {}),
+          }),
+          Effect.as(null),
+        ),
+      ),
+    );
+  });
+}
+
 export async function readSonarHealth(): Promise<SonarHealth | null> {
   const baseUrl = await readOptionalEnv("SONAR_BASE_URL");
   const secret = await readOptionalEnv("SONAR_SECRET");
@@ -140,20 +211,14 @@ export async function readSonarHealth(): Promise<SonarHealth | null> {
     return null;
   }
 
-  try {
-    const response = await fetch(new URL("/health", baseUrl), {
-      headers: { "x-sonar-secret": secret },
-      signal: AbortSignal.timeout(SONAR_TIMEOUT_MS),
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    return parseHealth(await response.json());
-  } catch {
-    return null;
-  }
+  return runServerEffect(
+    sonarRequest(
+      baseUrl,
+      "/health",
+      () => ({ headers: { "x-sonar-secret": secret } }),
+      parseHealth,
+    ),
+  );
 }
 
 function parseHealth(payload: unknown): SonarHealth | null {
@@ -228,34 +293,27 @@ export async function searchSonar(request: SonarSearchRequest): Promise<SonarMat
     return null;
   }
 
-  try {
-    const response = await fetch(new URL("/search", baseUrl), {
-      body: JSON.stringify({
-        exclude_ids: request.excludeIds ?? [],
-        filter: request.filter,
-        index: request.index,
-        probes: request.probes,
-        top_k: request.topK,
+  return runServerEffect(
+    sonarRequest(
+      baseUrl,
+      "/search",
+      () => ({
+        body: JSON.stringify({
+          exclude_ids: request.excludeIds ?? [],
+          filter: request.filter,
+          index: request.index,
+          probes: request.probes,
+          top_k: request.topK,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+          "x-sonar-secret": secret,
+        },
+        method: "POST",
       }),
-      headers: {
-        "Content-Type": "application/json",
-        "x-sonar-secret": secret,
-      },
-      method: "POST",
-
-      signal: AbortSignal.timeout(SONAR_TIMEOUT_MS),
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const payload = (await response.json()) as unknown;
-
-    return parseMatches(payload);
-  } catch {
-    return null;
-  }
+      parseMatches,
+    ),
+  );
 }
 
 function parseMatches(payload: unknown): SonarMatch[] | null {

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureCostEvents } from "./costs";
 import { parseFilterReply, translateQuery } from "./search-llm";
 
 const readOptionalEnv = vi.hoisted(() => vi.fn<(name: string) => Promise<string | undefined>>());
@@ -14,11 +15,14 @@ beforeEach(() => {
   readOptionalEnv.mockImplementation(async (name) =>
     name === "OPENROUTER_API_KEY" ? "test-key" : undefined,
   );
+  vi.mocked(captureCostEvents).mockReset();
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
 });
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -144,5 +148,81 @@ describe("translateQuery — and every way it is allowed to fail", () => {
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
 
     expect(init?.signal).toBeInstanceOf(AbortSignal);
+  });
+});
+
+describe("filter translation deadlines and diagnostics", () => {
+  it.each(["headers", "body"])(
+    "returns null when %s exceed the deadline without recording cost",
+    async (phase) => {
+      vi.useFakeTimers();
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const payload = await reply('{"artist":"Netsky"}').json();
+      const delay = <T>(value: T) =>
+        new Promise<T>((resolve) => setTimeout(() => resolve(value), 3001));
+      const response = {
+        json: () => (phase === "body" ? delay(payload) : Promise.resolve(payload)),
+        ok: true,
+      };
+      fetchMock.mockImplementation(() =>
+        phase === "headers" ? delay(response) : Promise.resolve(response),
+      );
+
+      const result = translateQuery("Netsky");
+      await vi.advanceTimersByTimeAsync(3001);
+
+      await expect(result).resolves.toBeNull();
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+      expect(init?.signal?.aborted).toBe(true);
+      expect(captureCostEvents).not.toHaveBeenCalled();
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('"failure":"SearchLlmTimeout"'));
+    },
+  );
+
+  it.each([
+    { failure: "SearchLlmHttpFailed", response: new Response(null, { status: 503 }) },
+    { failure: "SearchLlmParseFailed", response: new Response("invalid JSON") },
+    { failure: "SearchLlmParseFailed", response: reply("garbage") },
+    { failure: "SearchLlmUnreachable", response: new TypeError("offline") },
+  ])("returns null and diagnoses $failure", async ({ failure, response }) => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock.mockImplementation(() =>
+      response instanceof Error ? Promise.reject(response) : Promise.resolve(response),
+    );
+
+    await expect(translateQuery("anything")).resolves.toBeNull();
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining(`"failure":"${failure}"`));
+  });
+
+  it("records consumed tokens even when the filter reply is invalid", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock.mockResolvedValue(reply("garbage"));
+
+    await expect(translateQuery("anything")).resolves.toBeNull();
+    expect(captureCostEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows cost recording to finish after the outbound deadline", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValue(reply('{"artist":"Netsky"}'));
+    vi.mocked(captureCostEvents).mockImplementation(
+      () => new Promise((resolve) => setTimeout(resolve, 3500)),
+    );
+
+    const result = translateQuery("Netsky");
+    await vi.advanceTimersByTimeAsync(3500);
+
+    await expect(result).resolves.toEqual({ artist: "Netsky" });
+  });
+
+  it("returns null and diagnoses a cost recording failure", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock.mockResolvedValue(reply('{"artist":"Netsky"}'));
+    vi.mocked(captureCostEvents).mockRejectedValue(new Error("database unavailable"));
+
+    await expect(translateQuery("Netsky")).resolves.toBeNull();
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('"failure":"SearchLlmCostFailed"'),
+    );
   });
 });

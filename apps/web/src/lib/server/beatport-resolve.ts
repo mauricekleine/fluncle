@@ -1,5 +1,6 @@
+import { Data, Effect } from "effect";
 import { beatportSearchUrl } from "../beatport";
-import { logEvent } from "./log";
+import { runServerEffect } from "./effect/runtime";
 import { readOptionalEnv } from "./env";
 
 const FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/v2/scrape";
@@ -15,34 +16,65 @@ export type BeatportResolveOutcome =
 
 type BeatportSearchTrack = { isrc?: null | string; track_id?: number | string };
 
-async function scrapeRawHtml(url: string, apiKey: string): Promise<null | string> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FIRECRAWL_TIMEOUT_MS);
+class BeatportTimeout extends Data.TaggedError("BeatportTimeout")<{}> {}
 
-  try {
-    const response = await fetch(FIRECRAWL_SCRAPE_URL, {
-      body: JSON.stringify({ formats: ["rawHtml"], url }),
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      method: "POST",
-      signal: controller.signal,
-    });
+class BeatportHttpError extends Data.TaggedError("BeatportHttpError")<{ status: number }> {}
 
-    if (!response.ok) {
-      logEvent("warn", "beatport.scrape-failed", { status: response.status });
+class BeatportParseError extends Data.TaggedError("BeatportParseError")<{ cause: unknown }> {}
 
-      return null;
-    }
+class BeatportNetworkError extends Data.TaggedError("BeatportNetworkError")<{ cause: unknown }> {}
 
-    const payload = (await response.json()) as { data?: { rawHtml?: string } };
+function scrapeRawHtml(url: string, apiKey: string): Promise<null | string> {
+  let readingBody = false;
 
-    return payload.data?.rawHtml ?? null;
-  } catch (err) {
-    logEvent("warn", "beatport.scrape-error", { error: err });
+  return runServerEffect(
+    Effect.tryPromise({
+      catch: (cause) =>
+        cause instanceof BeatportHttpError || cause instanceof BeatportParseError
+          ? cause
+          : readingBody
+            ? new BeatportParseError({ cause })
+            : new BeatportNetworkError({ cause }),
+      try: async (signal) => {
+        const response = await fetch(FIRECRAWL_SCRAPE_URL, {
+          body: JSON.stringify({ formats: ["rawHtml"], url }),
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          method: "POST",
+          signal,
+        });
 
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+        if (!response.ok) {
+          throw new BeatportHttpError({ status: response.status });
+        }
+
+        readingBody = true;
+        const payload = (await response.json()) as { data?: { rawHtml?: unknown } } | null;
+
+        if (typeof payload?.data?.rawHtml !== "string") {
+          throw new BeatportParseError({ cause: "missing rawHtml" });
+        }
+
+        return payload.data.rawHtml;
+      },
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: FIRECRAWL_TIMEOUT_MS,
+        orElse: () => Effect.fail(new BeatportTimeout()),
+      }),
+      Effect.catch((error) =>
+        Effect.logWarning(
+          error._tag === "BeatportHttpError" ? "beatport.scrape-failed" : "beatport.scrape-error",
+        ).pipe(
+          Effect.annotateLogs(
+            error._tag === "BeatportHttpError"
+              ? { failure: error._tag, status: error.status }
+              : { error: "cause" in error ? error.cause : error, failure: error._tag },
+          ),
+          Effect.as(null),
+        ),
+      ),
+    ),
+  );
 }
 
 export function parseSearchTracks(html: string): BeatportSearchTrack[] | null {
@@ -153,6 +185,15 @@ export async function resolveBeatportUrl(input: {
   const picked = pickBeatportUrl(html, isrc);
 
   if (!picked.ok) {
+    await runServerEffect(
+      Effect.logWarning("beatport.scrape-error").pipe(
+        Effect.annotateLogs({
+          error: new BeatportParseError({ cause: "beatport search page shape not recognised" }),
+          failure: "BeatportParseError",
+        }),
+      ),
+    );
+
     return { configured: true, error: "beatport search page shape not recognised", ok: false };
   }
 

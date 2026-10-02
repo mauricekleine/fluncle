@@ -1,3 +1,5 @@
+import { Data, Effect } from "effect";
+import { runServerEffect } from "./effect/runtime";
 import { type FetchImpl, readOptionalEnv } from "./env";
 import { getDb, typedRows } from "./db";
 import {
@@ -19,8 +21,6 @@ type SimpleAnalyticsPage = {
   value?: string;
   visitors?: number;
 };
-
-type SimpleAnalyticsResponse = { pages?: SimpleAnalyticsPage[] };
 
 type SimpleAnalyticsReferrer = {
   pageviews?: number;
@@ -130,29 +130,80 @@ export function summarizeDemand(pages: SimpleAnalyticsPage[]): {
   return { artists, labels };
 }
 
-async function fetchDemandPages(
+class DemandTimeout extends Data.TaggedError("DemandTimeout")<{
+  message: string;
+}> {}
+
+class DemandHttpFailed extends Data.TaggedError("DemandHttpFailed")<{
+  message: string;
+  status: number;
+}> {}
+
+class DemandParseFailed extends Data.TaggedError("DemandParseFailed")<{
+  cause: unknown;
+}> {}
+
+class DemandUnreachable extends Data.TaggedError("DemandUnreachable")<{
+  cause: unknown;
+}> {}
+
+function fetchAnalytics<T>(
   key: string,
   window: { end: string; start: string },
   fetchImpl: FetchImpl,
-): Promise<SimpleAnalyticsPage[]> {
+  field: "pages" | "referrers",
+): Promise<T[]> {
   const url =
     `https://simpleanalytics.com/${SA_HOSTNAME}.json` +
-    `?version=5&fields=pages&start=${window.start}&end=${window.end}&limit=${DEMAND_PAGE_LIMIT}`;
+    `?version=5&fields=${field}&start=${window.start}&end=${window.end}&limit=${DEMAND_PAGE_LIMIT}`;
+  const operation = field === "pages" ? "read" : "referrers read";
 
-  const response = await fetchImpl(url, {
-    headers: { "Api-Key": key },
-    signal: AbortSignal.timeout(SA_TIMEOUT_MS),
-  });
+  return runServerEffect(
+    Effect.suspend(() => {
+      let readingBody = false;
 
-  if (!response.ok) {
-    throw new Error(
-      `Simple Analytics read failed (${response.status}): ${(await response.text()).slice(0, 200)}`,
-    );
-  }
+      return Effect.tryPromise({
+        catch: (cause) =>
+          cause instanceof DemandHttpFailed
+            ? cause
+            : readingBody
+              ? new DemandParseFailed({ cause })
+              : new DemandUnreachable({ cause }),
+        try: async (signal) => {
+          const response = await fetchImpl(url, { headers: { "Api-Key": key }, signal });
+          readingBody = true;
 
-  const body = (await response.json()) as SimpleAnalyticsResponse;
+          if (!response.ok) {
+            throw new DemandHttpFailed({
+              message: `Simple Analytics ${operation} failed (${response.status}): ${(await response.text()).slice(0, 200)}`,
+              status: response.status,
+            });
+          }
 
-  return Array.isArray(body.pages) ? body.pages : [];
+          const body = (await response.json()) as { pages?: T[]; referrers?: T[] };
+          const entries = body[field];
+
+          return Array.isArray(entries) ? entries : [];
+        },
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: SA_TIMEOUT_MS,
+          orElse: () =>
+            Effect.fail(new DemandTimeout({ message: `Simple Analytics ${operation} timed out` })),
+        }),
+        Effect.tapError((error) =>
+          Effect.logWarning("demand.request-failed").pipe(
+            Effect.annotateLogs({
+              error,
+              failure: error._tag,
+              field,
+              ...(error instanceof DemandHttpFailed ? { status: error.status } : {}),
+            }),
+          ),
+        ),
+      );
+    }),
+  );
 }
 
 function placeholders(count: number): string {
@@ -184,7 +235,7 @@ export async function recordDemand(
     };
   }
 
-  const pages = await fetchDemandPages(key, window, fetchImpl);
+  const pages = await fetchAnalytics<SimpleAnalyticsPage>(key, window, fetchImpl, "pages");
   const { artists: artistDemandBySlug, labels: labelDemandBySlug } = summarizeDemand(pages);
 
   const db = await getDb();
@@ -476,23 +527,13 @@ export async function readSocialReferrers(
     return { arrivals: [], configured: false, total: 0, window };
   }
 
-  const url =
-    `https://simpleanalytics.com/${SA_HOSTNAME}.json` +
-    `?version=5&fields=referrers&start=${window.start}&end=${window.end}&limit=${DEMAND_PAGE_LIMIT}`;
-
-  const response = await fetchImpl(url, {
-    headers: { "Api-Key": key },
-    signal: AbortSignal.timeout(SA_TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `Simple Analytics referrers read failed (${response.status}): ${(await response.text()).slice(0, 200)}`,
-    );
-  }
-
-  const body = (await response.json()) as { referrers?: SimpleAnalyticsReferrer[] };
-  const arrivals = summarizeReferrers(Array.isArray(body.referrers) ? body.referrers : []);
+  const referrers = await fetchAnalytics<SimpleAnalyticsReferrer>(
+    key,
+    window,
+    fetchImpl,
+    "referrers",
+  );
+  const arrivals = summarizeReferrers(referrers);
   const total = arrivals.reduce((sum, arrival) => sum + arrival.pageviews, 0);
 
   return { arrivals, configured: true, total, window };

@@ -1,8 +1,15 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { beatportSearchUrl } from "../beatport";
-import { parseSearchTracks, parseTrackLinks, pickBeatportUrl } from "./beatport-resolve";
+import {
+  parseSearchTracks,
+  parseTrackLinks,
+  pickBeatportUrl,
+  resolveBeatportUrl,
+} from "./beatport-resolve";
+
+vi.mock("./env", () => ({ readOptionalEnv: vi.fn(async () => "test-key") }));
 
 function fixture(name: string): string {
   return readFileSync(join(import.meta.dirname, "__fixtures__", "beatport", name), "utf8");
@@ -135,4 +142,122 @@ describe("pickBeatportUrl", () => {
 
     expect(pickBeatportUrl(html, "CA5KR2489434")).toEqual({ ok: true, url: null });
   });
+});
+
+describe("resolveBeatportUrl request failures", () => {
+  const input = { artists: ["Rizzle"], isrc: "CA5KR2489434", title: "Pluto" };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("resolves a scraped result at the Promise boundary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ data: { rawHtml: PLUTO } })),
+    );
+
+    await expect(resolveBeatportUrl(input)).resolves.toEqual({
+      configured: true,
+      ok: true,
+      url: "https://www.beatport.com/track/pluto/19385810",
+    });
+  });
+
+  it.each([
+    {
+      event: "beatport.scrape-failed",
+      failure: "BeatportHttpError",
+      response: new Response(null, { status: 503 }),
+    },
+    {
+      event: "beatport.scrape-error",
+      failure: "BeatportParseError",
+      response: new Response("invalid JSON"),
+    },
+    {
+      event: "beatport.scrape-error",
+      failure: "BeatportParseError",
+      response: Response.json({ data: {} }),
+    },
+    {
+      event: "beatport.scrape-error",
+      failure: "BeatportNetworkError",
+      response: new TypeError("network down"),
+    },
+  ])("keeps the scrape failure and diagnoses $failure", async ({ event, failure, response }) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        if (response instanceof Error) {
+          throw response;
+        }
+
+        return response;
+      }),
+    );
+
+    await expect(resolveBeatportUrl(input)).resolves.toEqual({
+      configured: true,
+      error: "beatport search scrape failed",
+      ok: false,
+    });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`"event":"${event}"`));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`"failure":"${failure}"`));
+  });
+
+  it("keeps the page-shape failure distinct from a clean miss", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ data: { rawHtml: "<html></html>" } })),
+    );
+
+    await expect(resolveBeatportUrl(input)).resolves.toEqual({
+      configured: true,
+      error: "beatport search page shape not recognised",
+      ok: false,
+    });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('"failure":"BeatportParseError"'));
+  });
+
+  it.each(["request", "body"])(
+    "aborts a stalled %s within the complete deadline",
+    async (phase) => {
+      vi.useFakeTimers();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      let signal: AbortSignal | null | undefined;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: RequestInfo | URL, init: RequestInit) => {
+          signal = init.signal;
+
+          if (phase === "request") {
+            return new Promise<Response>(() => {});
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 10_000));
+
+          return {
+            json: () => new Promise(() => {}),
+            ok: true,
+          } as unknown as Response;
+        }),
+      );
+      const pending = resolveBeatportUrl(input);
+
+      await vi.advanceTimersByTimeAsync(45_000);
+
+      await expect(pending).resolves.toEqual({
+        configured: true,
+        error: "beatport search scrape failed",
+        ok: false,
+      });
+      expect(signal?.aborted).toBe(true);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('"failure":"BeatportTimeout"'));
+    },
+  );
 });

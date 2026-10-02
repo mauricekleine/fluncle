@@ -1,3 +1,5 @@
+import { Data, Effect } from "effect";
+import { runServerEffect } from "./effect/runtime";
 import { getDb } from "./db";
 
 const STALE_MS = 12 * 60 * 60 * 1000;
@@ -45,50 +47,85 @@ function parseRow(row: Record<string, unknown>): StoredRates | null {
   }
 }
 
-async function fetchEurRates(): Promise<FxRatesDTO | null> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+class FxTimeout extends Data.TaggedError("FxTimeout") {}
 
-  try {
-    const response = await fetch(FRANKFURTER_URL, { signal: controller.signal });
+class FxHttpFailed extends Data.TaggedError("FxHttpFailed")<{ status: number }> {}
 
-    if (!response.ok) {
-      return null;
-    }
+class FxParseFailed extends Data.TaggedError("FxParseFailed")<{ cause: unknown }> {}
 
-    const body = (await response.json()) as unknown;
+class FxUnreachable extends Data.TaggedError("FxUnreachable")<{ cause: unknown }> {}
 
-    if (!Array.isArray(body) || body.length === 0) {
-      return null;
-    }
+function fetchEurRates(): Promise<FxRatesDTO | null> {
+  let readingBody = false;
 
-    const rates: Record<string, number> = {};
-    let ratesDate = "";
+  return runServerEffect(
+    Effect.tryPromise({
+      catch: (cause) =>
+        cause instanceof FxHttpFailed || cause instanceof FxParseFailed
+          ? cause
+          : readingBody
+            ? new FxParseFailed({ cause })
+            : new FxUnreachable({ cause }),
+      try: async (signal) => {
+        const response = await fetch(FRANKFURTER_URL, { signal });
 
-    for (const entry of body) {
-      const quote = (entry as { quote?: unknown }).quote;
-      const rate = (entry as { rate?: unknown }).rate;
-      const date = (entry as { date?: unknown }).date;
+        if (!response.ok) {
+          throw new FxHttpFailed({ status: response.status });
+        }
 
-      if (typeof quote === "string" && typeof rate === "number" && Number.isFinite(rate)) {
-        rates[quote] = rate;
-      }
+        readingBody = true;
+        const body = (await response.json()) as unknown;
 
-      if (typeof date === "string") {
-        ratesDate = date;
-      }
-    }
+        if (!Array.isArray(body) || body.length === 0) {
+          throw new FxParseFailed({ cause: "Expected exchange rates" });
+        }
 
-    if (Object.keys(rates).length === 0 || !ratesDate) {
-      return null;
-    }
+        const rates: Record<string, number> = {};
+        let ratesDate = "";
 
-    return { rates, ratesDate };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
+        for (const entry of body) {
+          if (typeof entry !== "object" || entry === null) {
+            throw new FxParseFailed({ cause: "Invalid exchange rate" });
+          }
+
+          const { date, quote, rate } = entry as {
+            date?: unknown;
+            quote?: unknown;
+            rate?: unknown;
+          };
+
+          if (typeof quote === "string" && typeof rate === "number" && Number.isFinite(rate)) {
+            rates[quote] = rate;
+          }
+
+          if (typeof date === "string") {
+            ratesDate = date;
+          }
+        }
+
+        if (Object.keys(rates).length === 0 || !ratesDate) {
+          throw new FxParseFailed({ cause: "Missing exchange rates or date" });
+        }
+
+        return { rates, ratesDate };
+      },
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: FETCH_TIMEOUT_MS,
+        orElse: () => Effect.fail(new FxTimeout()),
+      }),
+      Effect.catch((error) =>
+        Effect.logWarning("fx.request-failed").pipe(
+          Effect.annotateLogs({
+            error,
+            failure: error._tag,
+            ...(error instanceof FxHttpFailed ? { status: error.status } : {}),
+          }),
+          Effect.as(null),
+        ),
+      ),
+    ),
+  );
 }
 
 export async function getEurRates(): Promise<FxRatesDTO | null> {
