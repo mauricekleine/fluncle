@@ -1,3 +1,4 @@
+import { type InStatement } from "@libsql/client";
 import { createClient } from "@libsql/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -140,13 +141,23 @@ describe("database performance runner bootstrap", () => {
       batches.push({
         mode,
         sql: statements.map((statement) =>
-          typeof statement === "string" ? statement : statement.sql,
+          typeof statement === "string"
+            ? statement
+            : Array.isArray(statement)
+              ? statement[0]
+              : statement.sql,
         ),
       });
       return originalBatch(statements, mode);
     });
-    vi.spyOn(client, "execute").mockImplementation(async (statement) => {
-      executions.push(typeof statement === "string" ? statement : statement.sql);
+    vi.spyOn(client, "execute").mockImplementation(async (statement: InStatement) => {
+      executions.push(
+        typeof statement === "string"
+          ? statement
+          : Array.isArray(statement)
+            ? statement[0]
+            : statement.sql,
+      );
       return originalExecute(statement);
     });
 

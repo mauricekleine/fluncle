@@ -1229,7 +1229,18 @@ function readLocalPage(
       `SELECT ${columns} FROM ${quoteDeviceDbIdentifier(table)} AS source_row
        WHERE 1 = 1${keyset.sql} ORDER BY ${order} LIMIT ?`,
     )
-    .all(...keyset.args, limit) as DeviceRow[];
+    .all(
+      ...keyset.args.map((value) => {
+        if (value instanceof ArrayBuffer) {
+          return new Uint8Array(value);
+        }
+        if (ArrayBuffer.isView(value)) {
+          return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+        }
+        return value;
+      }),
+      limit,
+    ) as DeviceRow[];
 }
 
 function stageRowStatement(
@@ -2339,7 +2350,7 @@ export async function main(runtime: DeviceMirrorRuntime = {}): Promise<MirrorSum
         gateState: "locked" as const,
         ok: false,
         produced: null,
-        reason: "lock_held",
+        reason: "lock_held" as const,
         validation: "locked" as const,
       };
       console.log(JSON.stringify(locked));

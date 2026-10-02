@@ -17,6 +17,7 @@ import { simulateMixedLoad, simulateRequestWideMixedLoad } from "./mixed-load";
 import { analyzeExplainPlan } from "./plan";
 import {
   type ConvergenceObservation,
+  type ContractContext,
   type ContractExecution,
   type PerformanceContract,
   type PerformanceResult,
@@ -827,7 +828,7 @@ performanceRegistry.register(
 );
 
 const ARTIST_NAME_BEFORE = {
-  args: ARTIST_LINK_TRACK_IDS,
+  args: [...ARTIST_LINK_TRACK_IDS],
   sql: `select perf_tracks.id as track_id, perf_artists.id as artist_id,
                cast(credit.key as integer) + 1 as position, perf_tracks.is_catalogue
           from perf_tracks
@@ -837,7 +838,7 @@ const ARTIST_NAME_BEFORE = {
 } satisfies PerformanceStatement;
 
 const ARTIST_NAME_AFTER = {
-  args: ARTIST_LINK_TRACK_IDS,
+  args: [...ARTIST_LINK_TRACK_IDS],
   sql: ARTIST_NAME_BEFORE.sql.replace(
     "join perf_artists on",
     "cross join perf_artists indexed by perf_artists_name_nocase_idx on",
@@ -1509,8 +1510,8 @@ for (const contract of releaseStatements) {
       description: contract.description,
       id: contract.id,
       iterations: 12,
-      plan: { policy, statement: contract.statement },
-      statement: contract.statement,
+      plan: { policy, statement: { ...contract.statement, args: [...contract.statement.args] } },
+      statement: { ...contract.statement, args: [...contract.statement.args] },
       validate(execution) {
         const failures: string[] = [];
         if (contract.id === "release.front-door-band") {

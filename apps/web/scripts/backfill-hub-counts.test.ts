@@ -38,8 +38,12 @@ async function counts(
   return { certified: Number(row?.certified ?? -1), renderable: Number(row?.renderable ?? -1) };
 }
 
-function statementSql(statement: InStatement): string {
-  return typeof statement === "string" ? statement : statement.sql;
+function statementSql(statement: Parameters<Client["batch"]>[0][number]): string {
+  return typeof statement === "string"
+    ? statement
+    : Array.isArray(statement)
+      ? statement[0]
+      : statement.sql;
 }
 
 function isMarkerClaim(statement: InStatement): boolean {
@@ -122,7 +126,7 @@ beforeEach(async () => {
 describe("backfillHubCounts", () => {
   it("materializes each archive aggregate once in one atomic hosted-compatible batch", async () => {
     const originalBatch = db.batch.bind(db);
-    const batches: InStatement[][] = [];
+    const batches: Parameters<Client["batch"]>[0][] = [];
     vi.spyOn(db, "batch").mockImplementation(async (statements, mode) => {
       batches.push([...statements]);
 
@@ -222,7 +226,7 @@ describe("backfillHubCounts", () => {
     await backfillHubCounts(db);
     const originalExecute = db.execute.bind(db);
     let claimWrites = 0;
-    vi.spyOn(db, "execute").mockImplementation(async (statement) => {
+    vi.spyOn(db, "execute").mockImplementation(async (statement: InStatement) => {
       if (isMarkerClaim(statement)) {
         claimWrites += 1;
         if (claimWrites === 1) {
@@ -243,7 +247,7 @@ describe("backfillHubCounts", () => {
   it("recognizes an after-commit ambiguous claim by reading back its own token", async () => {
     const originalExecute = db.execute.bind(db);
     let claimWrites = 0;
-    vi.spyOn(db, "execute").mockImplementation(async (statement) => {
+    vi.spyOn(db, "execute").mockImplementation(async (statement: InStatement) => {
       if (isMarkerClaim(statement)) {
         claimWrites += 1;
         if (claimWrites === 1) {
@@ -267,7 +271,7 @@ describe("backfillHubCounts", () => {
     async (ambiguity) => {
       const originalExecute = db.execute.bind(db);
       let completionWrites = 0;
-      vi.spyOn(db, "execute").mockImplementation(async (statement) => {
+      vi.spyOn(db, "execute").mockImplementation(async (statement: InStatement) => {
         if (isMarkerCompletion(statement)) {
           completionWrites += 1;
           if (completionWrites === 1) {
@@ -306,7 +310,7 @@ describe("backfillHubCounts", () => {
     const originalExecute = db.execute.bind(db);
     const batch = vi.spyOn(db, "batch");
     let claimWrites = 0;
-    vi.spyOn(db, "execute").mockImplementation(async (statement) => {
+    vi.spyOn(db, "execute").mockImplementation(async (statement: InStatement) => {
       if (isMarkerClaim(statement)) {
         claimWrites += 1;
         throw new Error("claim failed before commit");
@@ -336,9 +340,9 @@ describe("backfillHubCounts", () => {
     let firstStageSuffix: string | undefined;
     let secondStageSuffix: string | undefined;
 
-    vi.spyOn(db, "execute").mockImplementation(async (statement) => {
+    vi.spyOn(db, "execute").mockImplementation(async (statement: InStatement) => {
       if (isMarkerClaim(statement) && typeof statement !== "string") {
-        const token = statement.args?.[1];
+        const token = Array.isArray(statement.args) ? statement.args[1] : undefined;
         if (typeof token === "string" && !claimedTokens.includes(token)) {
           claimedTokens.push(token);
         }
@@ -489,7 +493,7 @@ describe("backfillHubCounts", () => {
       sql: `delete from settings where key = ?`,
     });
     const originalBatch = db.batch.bind(db);
-    const batches: InStatement[][] = [];
+    const batches: Parameters<Client["batch"]>[0][] = [];
     vi.spyOn(db, "batch").mockImplementation(async (statements, mode) => {
       batches.push([...statements]);
 

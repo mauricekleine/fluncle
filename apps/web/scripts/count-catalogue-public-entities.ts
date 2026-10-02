@@ -31,13 +31,13 @@ async function countEntity(client: Client, linkSql: string, floor: number): Prom
           )`,
   });
 
-  const row = result.rows[0] ?? {};
+  const row = result.rows[0];
 
   return {
-    indexableCertified: asCount(row["indexable_certified"]),
-    indexableFree: asCount(row["indexable_free"]),
-    reachableCertified: asCount(row["reachable_certified"]),
-    reachableFree: asCount(row["reachable_free"]),
+    indexableCertified: asCount(row?.["indexable_certified"]),
+    indexableFree: asCount(row?.["indexable_free"]),
+    reachableCertified: asCount(row?.["reachable_certified"]),
+    reachableFree: asCount(row?.["reachable_free"]),
   };
 }
 

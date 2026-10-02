@@ -107,7 +107,7 @@ describe("production migration planning", () => {
 
 describe("production migration ledger inspection", () => {
   it("treats an absent ledger table as no applied migration without querying the table", async () => {
-    const execute = vi.fn(async () => ({ rows: [] }));
+    const execute = vi.fn(async (_statement: unknown) => ({ rows: [] }));
 
     await expect(readLastAppliedMigrationWhen({ execute } as never)).resolves.toBeNull();
     expect(execute).toHaveBeenCalledOnce();

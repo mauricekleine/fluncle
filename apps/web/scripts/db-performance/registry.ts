@@ -408,12 +408,23 @@ function criterionCategoriesForContract(
 }
 
 function emptyCriteria(): Record<PerformanceCriterionCategory, PerformanceCriterionReport> {
-  return Object.fromEntries(
-    PERFORMANCE_CRITERION_CATEGORIES.map((category) => [
-      category,
-      { addressed: false, contractIds: [], passed: null, warnings: [] },
-    ]),
-  ) as Record<PerformanceCriterionCategory, PerformanceCriterionReport>;
+  const empty = (): PerformanceCriterionReport => ({
+    addressed: false,
+    contractIds: [],
+    passed: null,
+    warnings: [],
+  });
+  return {
+    "device-derivation": empty(),
+    mutation: empty(),
+    projection: empty(),
+    queue: empty(),
+    resources: empty(),
+    "route-db": empty(),
+    "route-e2e": empty(),
+    "sonar-refresh": empty(),
+    "writer-admission": empty(),
+  };
 }
 
 function buildCriteria(

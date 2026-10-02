@@ -39,8 +39,8 @@ export async function installDiscoveryEventProbe(page: Page): Promise<{
   const events: ObservedDiscoveryEvent[] = [];
 
   await page.addInitScript(() => {
-    const recorded = ((window as Window & { __discoveryEvents?: unknown[] }).__discoveryEvents =
-      []);
+    const recorded: unknown[] = [];
+    (window as Window & { __discoveryEvents?: unknown[] }).__discoveryEvents = recorded;
 
     (
       window as Window & { sa_event?: (name: string, metadata?: Record<string, string>) => void }

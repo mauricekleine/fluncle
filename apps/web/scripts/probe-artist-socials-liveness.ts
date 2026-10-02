@@ -147,15 +147,16 @@ async function probe(row: Row): Promise<Verdict> {
 
 async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = Array.from({ length: items.length });
-  let idx = 0;
+  const entries = items.entries();
   await Promise.all(
     Array.from({ length: Math.min(n, items.length) }, async () => {
       for (;;) {
-        const i = idx++;
-        if (i >= items.length) {
+        const entry = entries.next();
+        if (entry.done) {
           return;
         }
-        out[i] = await fn(items[i]);
+        const [i, item] = entry.value;
+        out[i] = await fn(item);
       }
     }),
   );

@@ -72,7 +72,7 @@ describe("synthetic database performance fixture", () => {
     for await (const chunk of generateFixture("1x", { chunkSize: 7, counts: SMALL_COUNTS })) {
       chunks += 1;
       expect(chunk.statements.length).toBeLessThanOrEqual(7);
-      counts[chunk.table] += chunk.statements.length;
+      counts[chunk.table] = (counts[chunk.table] ?? 0) + chunk.statements.length;
 
       for (const statement of chunk.statements) {
         const publicValues = statement.args.filter(
@@ -425,8 +425,8 @@ describe("synthetic database performance fixture", () => {
         expect(batch).toHaveLength(1);
         const statement = batch[0];
         expect(typeof statement).not.toBe("string");
-        if (typeof statement !== "string" && statement !== undefined) {
-          statements.push({ args: [...statement.args], sql: statement.sql });
+        if (typeof statement !== "string" && statement !== undefined && !Array.isArray(statement)) {
+          statements.push({ args: Object.values(statement.args ?? []), sql: statement.sql });
         }
         return originalBatch(batch, mode);
       });

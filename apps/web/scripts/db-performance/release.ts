@@ -794,7 +794,15 @@ function validateDeviceResourceParity(
       rowCounts === null ||
       !sameCardinality(
         rowCounts,
-        Object.fromEntries(DEVICE_RESOURCE_PARITY_TABLES.map((table) => [table, expected[table]])),
+        Object.fromEntries(
+          DEVICE_RESOURCE_PARITY_TABLES.map((table) => {
+            const count = expected[table];
+            if (count === undefined) {
+              throw new Error(`missing device parity count for ${table}`);
+            }
+            return [table, count];
+          }),
+        ),
       ) ||
       !DEVICE_RESOURCE_PARITY_TABLES.every((table) => isPositiveFiniteNumber(rowCounts[table]))
     ) {
@@ -1166,11 +1174,12 @@ function validateExactLocalResourceEvidence(
     malformedReport(`profile ${profile} resource peak is malformed`);
   } else {
     const thresholds = PERFORMANCE_RESOURCE_WARNING_THRESHOLDS[profile];
-    const problems = resourceFields.flatMap((field) =>
-      peak[field] > thresholds[field]
-        ? [`${field} ${peak[field]} exceeds ${thresholds[field]}`]
-        : [],
-    );
+    const problems = resourceFields.flatMap((field) => {
+      const value = peak[field];
+      return value !== undefined && value > thresholds[field]
+        ? [`${field} ${value} exceeds ${thresholds[field]}`]
+        : [];
+    });
     const hardProblems =
       profile === "4x"
         ? problems.filter((problem) => !problem.startsWith("wallDurationMs "))
@@ -1221,9 +1230,10 @@ function validateFixtureCensus(options: {
     if (census.passed !== true) {
       errors.push(`profile ${profile} fixture census.passed is not true`);
     }
-    if (stringArray(census.mismatches) === null) {
+    const mismatches = stringArray(census.mismatches);
+    if (mismatches === null) {
       malformedReport(`profile ${profile} fixture census mismatches are malformed`);
-    } else if (census.mismatches.length > 0) {
+    } else if (mismatches.length > 0) {
       errors.push(`profile ${profile} fixture census reports mismatches`);
     }
   }
@@ -2543,7 +2553,10 @@ async function runRelease(
   }
 
   try {
-    for (const definition of execution === null ? [] : definitions) {
+    for (const definition of definitions) {
+      if (execution === null) {
+        break;
+      }
       sourceCheckpoints.push({
         commandId: definition.id,
         phase: "before-command",
@@ -2574,8 +2587,8 @@ async function runRelease(
         manifestArtifactPath(outputDirectory, stderrPath),
       ];
       for (const [filename, contents] of [
-        [commandArtifacts[0], child.stdout],
-        [commandArtifacts[1], stderrContents],
+        [manifestArtifactPath(outputDirectory, stdoutPath), child.stdout],
+        [manifestArtifactPath(outputDirectory, stderrPath), stderrContents],
       ] as const) {
         artifactFilenames.add(filename);
         artifacts.set(filename, buildArtifactEvidence(filename, contents));

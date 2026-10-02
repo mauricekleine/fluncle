@@ -18,7 +18,7 @@ const ENTRIES: MigrationJournalEntry[] = [
   { idx: 0, tag: "0000_expansion", when: 100 },
   { idx: 1, tag: "0001_contraction", when: 200 },
 ];
-const MIGRATIONS: MigrationMeta[] = [
+const MIGRATIONS: [MigrationMeta, MigrationMeta] = [
   {
     bps: true,
     folderMillis: 100,
