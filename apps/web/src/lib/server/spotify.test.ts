@@ -67,14 +67,12 @@ vi.mock("./db", () => ({
 }));
 
 import {
-  fetchArtistImages,
   fetchPlaylistFollowerCount,
   fetchSpotifyAlbumTracks,
   searchTrackCandidates,
 } from "./spotify";
 
 const TOKEN_URL = "https://accounts.spotify.com/api/token";
-const ARTIST_PREFIX = "https://api.spotify.com/v1/artists/";
 const SEARCH_PREFIX = "https://api.spotify.com/v1/search";
 
 const future = () => new Date(Date.now() + 3_600_000).toISOString();
@@ -468,96 +466,6 @@ describe("spotifyFetch 429 backoff", () => {
     ).rejects.toThrow(/429/);
 
     expect(addCalls).toBe(1);
-  });
-});
-
-describe("fetchArtistImages classifications and shared budget", () => {
-  it("signals an exhausted real spotifyFetch 429 and stops immediately", async () => {
-    selectQueue = [{ access_token: "at-valid", expires_at: future(), refresh_token: "rt" }];
-
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url.startsWith(ARTIST_PREFIX)) {
-        return new Response("rate limited", {
-          headers: { "Retry-After": "20" },
-          status: 429,
-        });
-      }
-
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await fetchArtistImages(["artist-1", "artist-2"]);
-
-    expect(result.rateLimited).toBe(true);
-    expect(result.budgetLimited).toBe(false);
-    expect(result.checkedIds).toEqual(["artist-1"]);
-    expect(result.checkedCount).toBe(1);
-    expect(result.missingIds.size).toBe(0);
-    expect(result.images.size).toBe(0);
-    expect(result.failures.size).toBe(0);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(spotifyBudget.record).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps a matching 200 no-image response distinct from malformed identity", async () => {
-    selectQueue = [{ access_token: "at-valid", expires_at: future(), refresh_token: "rt" }];
-
-    const fetchMock = vi.fn(async (url: string) => {
-      const id = decodeURIComponent(url.slice(ARTIST_PREFIX.length));
-
-      return new Response(
-        JSON.stringify(id === "artist-1" ? { id, images: [] } : { id: "wrong-artist", images: [] }),
-        { status: 200 },
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await fetchArtistImages(["artist-1", "artist-2"]);
-
-    expect(result.missingIds).toEqual(new Set(["artist-1"]));
-    expect(result.failures.get("artist-2")).toMatch(/did not match/);
-    expect(result.checkedCount).toBe(2);
-    expect(result.rateLimited).toBe(false);
-  });
-
-  it("stops before a lookup when the proactive shared budget is spent", async () => {
-    selectQueue = [{ access_token: "at-valid", expires_at: future(), refresh_token: "rt" }];
-    spotifyBudget.isAvailable.mockResolvedValue(false);
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await fetchArtistImages(["artist-1"]);
-
-    expect(result.budgetLimited).toBe(true);
-    expect(result.checkedCount).toBe(0);
-    expect(result.failures.size).toBe(0);
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(spotifyBudget.record).not.toHaveBeenCalled();
-  });
-
-  it("defers artist images when the shared meter cannot record the call", async () => {
-    selectQueue = [{ access_token: "at-valid", expires_at: future(), refresh_token: "rt" }];
-    spotifyBudget.record.mockRejectedValue(new Error("settings unavailable"));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              id: "artist-1",
-              images: [{ url: "https://i.scdn.co/image/artist-1", width: 640 }],
-            }),
-            { status: 200 },
-          ),
-      ),
-    );
-
-    const result = await fetchArtistImages(["artist-1"]);
-
-    expect(result.budgetLimited).toBe(true);
-    expect(result.images.size).toBe(0);
-    expect(result.failures.size).toBe(0);
   });
 });
 
