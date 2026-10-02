@@ -162,6 +162,51 @@ describe("copyObject / deleteObject request shapes", () => {
     expect(put.headers.get("x-amz-copy-source")).toBe(`/${VIDEOS_BUCKET}/recordings/rec-1/set.mp4`);
   });
 
+  it.each([
+    { delaySeconds: 120, expected: "copied" },
+    { delaySeconds: 960, expected: "R2 request timed out" },
+  ])(
+    "gives a multi-GB copy a bounded deadline ($delaySeconds seconds)",
+    async ({ delaySeconds, expected }) => {
+      vi.useFakeTimers();
+      let copySignal: AbortSignal | undefined;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const request = input as Request;
+        if (request.method === "HEAD") {
+          return new Response(null, {
+            headers: { "content-length": String(4 * 1024 * 1024 * 1024) },
+            status: 200,
+          });
+        }
+        copySignal = request.signal;
+        return new Promise<Response>((resolve, reject) => {
+          const timer = setTimeout(
+            () => resolve(new Response("<CopyObjectResult/>", { status: 200 })),
+            delaySeconds * 1000,
+          );
+          request.signal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new Error("aborted"));
+          });
+        });
+      });
+
+      const pending = copyObject("recordings/rec-1/set.mp4", "020.F.1A/set.mp4");
+      const outcome = pending.then(
+        () => "copied",
+        (error: Error) => error.message,
+      );
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(copySignal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(14 * 60_000);
+      expect(await outcome).toBe(expected);
+      if (expected === "R2 request timed out") {
+        expect(copySignal?.aborted).toBe(true);
+      }
+    },
+  );
+
   it("treats a <Error> body as failure even on a 200", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const request = input as Request;

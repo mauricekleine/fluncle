@@ -24,6 +24,7 @@ function r2Exchange<A>(
   url: string,
   init: RequestInit,
   read: (response: Response) => Promise<A>,
+  timeout: Duration.Input = Duration.seconds(60),
 ): Promise<{ body: A; response: Response }> {
   return runR2Effect(
     r2Operation(async (signal) => {
@@ -32,7 +33,7 @@ function r2Exchange<A>(
       return { body: await read(response), response };
     }).pipe(
       Effect.timeoutOrElse({
-        duration: Duration.seconds(60),
+        duration: timeout,
         orElse: () =>
           Effect.fail(new R2OperationFailed({ cause: new Error("R2 request timed out") })),
       }),
@@ -238,6 +239,7 @@ export async function presignMultipartUpload(
 }
 
 const COPY_OBJECT_MAX_BYTES = 5 * 1024 * 1024 * 1024;
+const COPY_OBJECT_TIMEOUT = Duration.minutes(15);
 
 export async function copyObject(srcKey: string, destKey: string): Promise<void> {
   const { client, endpoint } = await r2Client();
@@ -271,6 +273,7 @@ export async function copyObject(srcKey: string, destKey: string): Promise<void>
     destUrl,
     { headers: { "x-amz-copy-source": source }, method: "PUT" },
     (response) => response.text().catch(() => ""),
+    COPY_OBJECT_TIMEOUT,
   );
   const body = copiedBody.slice(0, 500);
 
