@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stepOutsideFridayWindow } from "@/test/outside-friday-window";
 
 import { createIntegrationDb } from "./integration-db";
 
@@ -74,6 +75,7 @@ const metadata = {
 };
 
 beforeEach(async () => {
+  stepOutsideFridayWindow();
   vi.stubEnv("ADMIN_SESSION_SECRET", "anchor-phase-test-secret");
   vi.stubEnv("FLUNCLE_AGENT_TOKEN", "anchor-phase-agent-token");
   directory = await mkdtemp(join(tmpdir(), "fluncle-anchor-phase-"));
