@@ -41,7 +41,7 @@ describe("track_duplicate_keys writer inventory", () => {
       }
     }
 
-    expect(inserts.sort()).toEqual(["crawl.ts", "label-releases.ts", "publish.ts"]);
+    expect(inserts.sort()).toEqual(["crawl.ts", "publish.ts"]);
 
     expect(
       inserts

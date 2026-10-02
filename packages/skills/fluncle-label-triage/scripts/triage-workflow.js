@@ -28,12 +28,6 @@ const RULE_ITEM = {
         "How many censused recordings this MBID is the FIRST credited artist on. Zero means the rule can never fire — do not propose it.",
       type: "number",
     },
-    tapBridge: {
-      description:
-        "Does the artist's MB entity carry a Spotify url-rel? yes = the freshness tap can enforce a block too; no = the rule is tap-blind (the crawler still enforces it); unknown = not checked.",
-      enum: ["yes", "no", "unknown"],
-      type: "string",
-    },
     verdict: { enum: ["allow", "block"], type: "string" },
   },
   required: ["artistMbid", "artistName", "verdict", "evidence", "firstCreditCount"],
@@ -238,7 +232,7 @@ Run ${EVIDENCE_COMMAND.replace("--json", "--census --json")} once per label. \`m
 - Report the totals in \`censusSummary\`: releases read, recordings counted, pages fetched (all in the census object), in-lane vs off-lane first credits, and what a rule set would take vs drop.
 
 ## Output
-One entry per label via the structured schema. \`rules\` is empty unless you are proposing exceptions, and every rule carries its own \`evidence\` + \`firstCreditCount\`. Check each proposed artist's MB entity for a Spotify url-rel (\`?inc=url-rels\`) and set \`tapBridge\` — \`no\` means the rule is tap-blind (the crawler still enforces it; the freshness tap cannot), which the operator wants to see. Do not write any files.`;
+One entry per label via the structured schema. \`rules\` is empty unless you are proposing exceptions, and every rule carries its own \`evidence\` + \`firstCreditCount\`. Do not write any files.`;
 
 phase("Research");
 const results = await parallel(

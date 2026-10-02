@@ -2941,40 +2941,6 @@ JSON field reference:
       }
     });
 
-  const labelReleasesBudget = catalogue
-    .command("label-releases-budget")
-    .description("Read or set the label releases tap daily Spotify call budget");
-  labelReleasesBudget.option("--json", "Print JSON", false).action(async (options: JsonOptions) => {
-    const { labelReleasesBudgetCommand } = await import("./commands/admin-catalogue");
-    const state = await labelReleasesBudgetCommand();
-    if (options.json) {
-      printJson({ ...state, ok: true });
-      return;
-    }
-    console.log(
-      `LABEL RELEASES BUDGET — ${state.callsSpent}/${state.dailyBudget} tap calls today · ${state.spotifyDailyCalls} Spotify calls total`,
-    );
-  });
-  labelReleasesBudget
-    .command("set")
-    .requiredOption("--calls <count>", "Daily tap Spotify call budget")
-    .option("--json", "Print JSON", false)
-    .action(async (options: JsonOptions & { calls: string }) => {
-      const { setLabelReleasesBudgetCommand } = await import("./commands/admin-catalogue");
-      const calls = Number(options.calls);
-      if (!Number.isSafeInteger(calls) || calls < 0 || calls > 1_000_000) {
-        throw new Error("--calls must be an integer from 0 to 1000000");
-      }
-      const state = await setLabelReleasesBudgetCommand(calls);
-      if (options.json) {
-        printJson({ ...state, ok: true });
-        return;
-      }
-      console.log(
-        `LABEL RELEASES BUDGET — ${state.callsSpent}/${state.dailyBudget} tap calls today · ${state.spotifyDailyCalls} Spotify calls total`,
-      );
-    });
-
   const spotifyBudget = catalogue
     .command("spotify-consumer-budget")
     .description("Read or set Spotify daily call budgets by consumer");

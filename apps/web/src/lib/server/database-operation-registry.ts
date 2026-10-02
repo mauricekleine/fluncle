@@ -210,9 +210,6 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
     "The keyset pages of scoring inputs are plain reads taken one at a time with no lease, since reads leave the primary's write capacity alone, scoring runs locally, and only the replace-the-list write and the alert acknowledgement are admitted, each as its own short phase.",
     1,
   ),
-  "catalogue.label-releases": wholeLifetime(
-    "Spotify budget checks and release writes form an interleaved resumable loop.",
-  ),
   "catalogue.rank": phased(
     `${SCRIPTS}/rank-sweep.ts`,
     "Each admitted phase advances one due-work repair step, then attempts one guarded rank page; repair-only phases then drain the last page's source markers.",
@@ -415,12 +412,6 @@ export const DATABASE_MUTATION_POLICIES = {
       "The write replaces the stored list with the complete posted set by stable unit key, refuses a partial or collapsed run, and leaves dismissals untouched; the acknowledgement only stamps units still unannounced.",
     reconciliation:
       "Read the stored outlier list and its pending alerts before posting the same scored set again.",
-  },
-  "catalogue.label-releases": {
-    evidenceSource: "apps/web/src/lib/server/label-releases.ts",
-    kind: "replay-safe-idempotent",
-    rationale: "Track minting uses the stable track ID with on-conflict do-nothing.",
-    reconciliation: "Read the track ID before repeating the bounded release item.",
   },
   "catalogue.rank": {
     evidenceSource: "apps/web/src/lib/server/catalogue.ts",
@@ -698,7 +689,6 @@ export const TRIGGER_MUTATION_POLICY_IDS = {
   "catalogue.isrc-recovery.resolve": "catalogue.isrc-recovery",
   "catalogue.label-outliers.acknowledge": "catalogue.label-outliers",
   "catalogue.label-outliers.record": "catalogue.label-outliers",
-  "catalogue.label-releases": "catalogue.label-releases",
   "catalogue.rank": "catalogue.rank",
   "catalogue.reconcile-hub-counts": "catalogue.reconcile-hub-counts",
   "catalogue.verify-captures.queue": "due-work.queue-maintenance",
@@ -2236,28 +2226,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
       ),
     ],
     wrapperSource: `${SCRIPTS}/label-outliers-sweep.sh`,
-  }),
-  defineOperation({
-    accessClass: "write",
-    cadence: calendar("*-*-* 03..08:00/15:00 UTC", "90", false),
-    directory: "label-releases-timer",
-    heavy: false,
-    mutationTarget: "primary",
-    operationId: "catalogue.label-releases",
-    service: "fluncle-label-releases.service",
-    telemetryUnit: "label-releases",
-    timer: "fluncle-label-releases.timer",
-    triggers: [
-      endpoint(
-        "catalogue.label-releases",
-        "write",
-        "POST",
-        "/api/v1/admin/backfill/label-releases",
-        `${SCRIPTS}/label-releases-sweep.ts`,
-        { mutationTarget: "primary" },
-      ),
-    ],
-    wrapperSource: `${SCRIPTS}/label-releases-sweep.sh`,
   }),
   defineOperation({
     accessClass: "write",

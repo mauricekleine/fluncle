@@ -44,7 +44,7 @@ describe("public projection producer policy", () => {
         "label-merge",
       ]),
       both: new Set(["publish-track"]),
-      public_aggregates: new Set(["crawl-track-mint", "label-release-track-mint"]),
+      public_aggregates: new Set(["crawl-track-mint"]),
     };
     const staticPolicies = PUBLIC_PROJECTION_PRODUCER_POLICIES.filter(
       (policy) => policy.kind === "static",

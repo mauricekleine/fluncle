@@ -89,8 +89,6 @@ fluncle admin telemetry read --unit fluncle-<name> --since 72h --missing
 
 Choose a lookback at least 3× that unit's cadence. A unit absent from a shorter window may still be healthy.
 
-The false positive this rule exists to prevent, measured: `fluncle-label-releases` showed 1 run, 7 hours old, while the rest of the fleet was minutes old. Its registry cadence is `86400000` ms. It was perfectly healthy. A silence rule without cadence produces exactly that, and a reader that cries wolf gets ignored.
-
 ### 5. The blind — a worklist, not an error
 
 ```bash

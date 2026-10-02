@@ -766,7 +766,7 @@ async function admitSpotifyConsumer(consumer: SpotifyConsumer): Promise<void> {
   if (holdUntil) {
     throw new SpotifyDeferredError("quota_hold", holdUntil);
   }
-  if (consumer === "label_tap" || consumer === "cosmetic") {
+  if (consumer === "cosmetic") {
     return;
   }
   try {

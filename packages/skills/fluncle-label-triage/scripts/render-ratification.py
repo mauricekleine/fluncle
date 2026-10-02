@@ -8,9 +8,8 @@ operator's own working material.
     render-ratification.py [--triage-file label-triage.json] [--out label-triage.html]
 
 The page leads with the ARTIST-RULE PROPOSALS, because those are the new judgment: each one is a
-first-credit exception that changes what the next crawl takes, and each carries its evidence, its
-census first-credit count, and whether the freshness tap can see it (a TAP-BLIND rule is enforced
-by the crawler alone). Then the plain buckets, judgment calls first. Reads nothing but the file.
+first-credit exception that changes what the next crawl takes, and each carries its
+census first-credit count and evidence. Then the plain buckets, judgment calls first. Reads nothing but the file.
 """
 
 from __future__ import annotations
@@ -62,12 +61,6 @@ def rule_rows(rules: list[dict]) -> str:
     body = []
     for rule in rules:
         verdict = rule.get("verdict", "")
-        bridge = rule.get("tapBridge", "unknown")
-        bridge_tag = (
-            '<span class="tag blind">tap-blind</span>'
-            if bridge == "no"
-            else f'<span class="tag">tap {esc(bridge)}</span>'
-        )
         count = rule.get("firstCreditCount")
         inert = (
             ' <span class="tag blind">inert — will be dropped</span>'
@@ -78,12 +71,12 @@ def rule_rows(rules: list[dict]) -> str:
             f"<tr><td><span class='tag {esc(verdict)}'>{esc(verdict)}</span></td>"
             f"<td><strong>{esc(rule.get('artistName'))}</strong><br>"
             f"<span class='meta'>{esc(rule.get('artistMbid'))}</span></td>"
-            f"<td>{esc(count)}{inert}</td><td>{bridge_tag}</td>"
+            f"<td>{esc(count)}{inert}</td>"
             f"<td>{esc(rule.get('evidence'))}</td></tr>"
         )
 
     return (
-        "<table><tr><th></th><th>Artist</th><th>First credits</th><th>Tap</th>"
+        "<table><tr><th></th><th>Artist</th><th>First credits</th>"
         "<th>Evidence</th></tr>" + "".join(body) + "</table>"
     )
 

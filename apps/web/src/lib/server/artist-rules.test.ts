@@ -155,7 +155,7 @@ describe("label artist rules", () => {
     expect(rule?.artistSpotifyId).toBe("spotify-local");
   });
 
-  it("stores a tap-blind null bridge when both MB and the local graph miss", async () => {
+  it("stores a null Spotify ID when both MB and the local graph miss", async () => {
     await seedLabel("lbl_null");
     mbMiss();
 
@@ -166,7 +166,7 @@ describe("label artist rules", () => {
     expect(rule?.artistSpotifyId).toBeNull();
   });
 
-  it("keeps a supplied-name rule tap-blind when the MB client errors", async () => {
+  it("keeps a supplied-name rule with a null Spotify ID when the MB client errors", async () => {
     await seedLabel("lbl_error");
     mocks.mbFetch.mockRejectedValueOnce(new Error("MusicBrainz unavailable"));
 

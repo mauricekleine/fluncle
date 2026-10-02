@@ -54,8 +54,7 @@ rules = json.load(sys.stdin)
 lines = []
 for r in rules:
     scope = f\"{r['label_name']} [{r['label_seed_state']}]\" if r['label_id'] else 'GLOBAL'
-    bridge = 'tap-bridged' if r['artist_spotify_id'] else 'TAP-BLIND'
-    lines.append(f\"{r['verdict']:8} | {scope} | {r['artist_name']} ({r['artist_mbid']}) | {bridge} | source={r['source']}\")
+    lines.append(f\"{r['verdict']:8} | {scope} | {r['artist_name']} ({r['artist_mbid']}) | source={r['source']}\")
 open('calib-rules.txt', 'w').write('\n'.join(lines) + ('\n' if lines else ''))
 json.dump(rules, open('calib-rules.json', 'w'), indent=0)
 g = sum(1 for r in rules if not r['label_id'])

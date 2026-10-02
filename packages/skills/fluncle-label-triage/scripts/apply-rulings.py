@@ -360,8 +360,7 @@ def run_apply(api: Api, args) -> int:
         got = {(r["artistMbid"], r["verdict"]) for r in live_rules}
         print(f"  rules round-trip: GET {code}, {len(live_rules)} on the server")
         for rule in live_rules:
-            bridge = "tap-bridged" if rule.get("artistSpotifyId") else "TAP-BLIND"
-            print(f"    {rule['verdict']:5} {rule['artistName']} ({rule['artistMbid']}) {bridge}")
+            print(f"    {rule['verdict']:5} {rule['artistName']} ({rule['artistMbid']})")
         after = label_scope_stamp(api, label_id, entry["seedState"] or "undecided")
         print(f"  scopeChangedAt: {before} -> {after}")
 

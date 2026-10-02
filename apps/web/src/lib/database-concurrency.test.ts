@@ -48,7 +48,8 @@ function trackedSourcePaths(): string[] {
   return output
     .split("\0")
     .filter((file) => file.length > 0 && isSourceFile(file))
-    .map((file) => resolve(REPO_ROOT, file));
+    .map((file) => resolve(REPO_ROOT, file))
+    .filter((file) => existsSync(file));
 }
 
 function lineOf(source: string, offset: number): number {

@@ -1255,24 +1255,7 @@ export const SURFACES: readonly Surface[] = [
     title: "Track crawler",
     weights: { status: "hidden" },
   },
-  {
-    exposedContent: [
-      "tap day-one fresh releases for the operator's enabled seed labels → uncertified catalogue rows",
-    ],
-    kind: "cron",
-    name: "cron.label-releases",
-    operatorNotes:
-      "every 15 minutes from 03:00 through 08:45 UTC, run by a Hermes host systemd timer (docs/agents/hermes/label-releases-timer/). The FRESHNESS TAP (D8): MusicBrainz WALKS the graph (cron.crawl) but lags a release ~2 weeks; Spotify has it day one, so this mints METADATA-ONLY catalogue rows (a `tracks` row with no `findings` row) for each ENABLED seed label's fresh releases with their real dates — closing the /fresh lag cliff. The WORKER does all of it (`backfill_label_releases`, agent tier): it searches the official Spotify API (`label:\"<name>\" tag:new`), reads each hit as a SINGLE `GET /albums/{id}` then `GET /tracks/{id}` (the batch endpoints are 403 at our tier), and mints. The box sweep is a thin HTTP TRIGGER that POSTs bounded passes with the agent token — no vendor token, no CLI dependency (a pinned box CLI missing a flag broke an earlier run). The gate, both required: artist-grounding (an album's Spotify artist already in `artists.spotify_artist_id` — the PRIMARY anchor that stops cross-genre homonym junk) AND an EXACT fold-match of the seed name in the ℗/© copyright; an album with no release_date is dropped outright (/fresh could never show it). BUDGET: the tap shares the official app's per-app window with the user-facing paths, so it paces itself against the shared call meter and stops at a FRACTION of the window (its own ceiling) — user write paths get the window, the tap takes only slack. Hitting that ceiling ends the pass cleanly and the durable per-label cadence stamps resume it next tick. It certifies nothing, publishes nothing, never widens the graph (no new labels, no artist hops). Deduped against the MB crawl from both directions (Spotify id/uri/ISRC + same-album title fold). No vendor spend and zero LLM tokens. Source: docs/agents/hermes/scripts/label-releases-sweep.*. See docs/catalogue-crawler.md.",
-    probeConfig: {
-      cadenceMs: 24 * 60 * MINUTE_MS,
-      cronName: "fluncle-label-releases",
-      kind: "cron",
-      schedule: { time: "03:00", tz: "UTC" },
-    },
-    statusDescription: "taps day-one releases from the enabled labels",
-    title: "Freshness tap",
-    weights: { status: "hidden" },
-  },
+
   {
     exposedContent: [
       "checks pipeline yield against measured backlog and alerts the operator on sustained stalls",

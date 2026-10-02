@@ -24,7 +24,7 @@ The leg is batched rather than one long session because that seam is load-bearin
 
 ## The cursor
 
-A `triage_checked_at` stamp on `labels`, patterned on the `label_releases_checked_at` / `label_releases_attempted_at` freshness-tap convention already on that table — sweep bookkeeping, written at agent tier, driving an oldest-first rotation. Never-seen labels first, then anything past a **30-day** staleness window.
+A `triage_checked_at` stamp on `labels` drives an oldest-first rotation. Never-seen labels come first, then anything past a **30-day** staleness window.
 
 **A timestamp, not a hold flag.** The skill refuses a hold list for a reason ([SKILL.md](../../packages/skills/fluncle-label-triage/SKILL.md)): a hold is a snapshot of a judgment that drifts silently. Re-triage is self-correcting and measurably so — 21 of 39 carried-over labels resolved on the second round without anyone remembering them, 11 of which an earlier verify pass had explicitly refuted. A cursor keeps that; a boolean would have frozen all 11.
 

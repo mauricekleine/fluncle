@@ -447,7 +447,7 @@ describe("the crawl plausibility hold", () => {
     expect(await holdRow()).toBeUndefined();
   });
 
-  it("treats a release as already stored when the freshness tap stored one of its recordings first", async () => {
+  it("treats a release as already stored when a legacy Spotify row stores one of its recordings first", async () => {
     releaseBody.isrcs = { "rec-sounds-of-silence": ["USXX16900001"] };
     await seedLabel("2009");
     await seedTapTrack("sp_tapfirst", "USXX16900001", LABEL_ID);

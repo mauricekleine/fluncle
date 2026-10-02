@@ -576,82 +576,6 @@ export const backfillDeezer = oc
     }),
   );
 
-export const backfillLabelReleases = oc
-  .route({
-    method: "POST",
-    operationId: "backfillLabelReleases",
-    path: "/admin/backfill/label-releases",
-    summary: "Tap Spotify's fresh releases for enabled seed labels into catalogue rows (bounded)",
-    tags: ["Admin"],
-  })
-  .input(
-    z.object({
-      dryRun: z.boolean().default(false),
-      limit: z.coerce.number().int().min(1).max(200).default(5),
-    }),
-  )
-  .output(
-    z.object({
-      albumsMatched: z.number(),
-
-      albumsSeen: z.number(),
-
-      blockedReason: z
-        .enum([
-          "spotify_breaker",
-          "spotify_budget",
-          "spotify_budget_spent",
-          "spotify_quota",
-          "spotify_throttle",
-        ])
-        .nullable(),
-
-      budgetPaused: z.boolean(),
-
-      configured: z.boolean(),
-
-      dryRun: z.boolean(),
-
-      failedFetches: z.number(),
-
-      failedLabels: z.array(z.string()),
-
-      fetchCeilingHit: z.boolean(),
-
-      labelSlugs: z.array(z.string()),
-
-      labelsDue: z.number(),
-
-      labelsProbed: z.number(),
-
-      neverChecked: z.number(),
-
-      newRows: z.number(),
-
-      newTrackIds: z.array(z.string()),
-
-      ok: z.literal(true),
-
-      quotaExceeded: z.boolean(),
-
-      rateLimited: z.boolean(),
-
-      retryAfterMs: z.number(),
-
-      skippedKnown: z.number(),
-
-      skippedUndated: z.number(),
-
-      skippedUngrounded: z.number(),
-
-      tapDailyBudget: z.number().int(),
-
-      tapDailyCallsSpent: z.number().int(),
-
-      tracksSkippedArtistRule: z.number().optional(),
-    }),
-  );
-
 const LabelImagesBackfillFailedSchema = z
   .object({
     error: z.string(),
@@ -945,7 +869,6 @@ export const adminBackfillsContract = {
   backfill_discogs_facts: backfillDiscogsFacts,
   backfill_label_images: backfillLabelImages,
   backfill_label_lineage: backfillLabelLineage,
-  backfill_label_releases: backfillLabelReleases,
   backfill_lastfm: backfillLastfm,
   backfill_recording_mbids: backfillRecordingMbids,
 };
