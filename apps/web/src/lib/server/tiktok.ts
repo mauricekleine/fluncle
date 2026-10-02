@@ -1,6 +1,14 @@
+import { Effect } from "effect";
 import { getDb, typedRow } from "./db";
 import { type FetchImpl, readOptionalEnv } from "./env";
 import { ApiError } from "./api-error";
+import {
+  oauthPromise,
+  oauthRequest,
+  oauthTokenRequest,
+  refreshOAuthToken,
+  runOAuthEffect,
+} from "./oauth-token-refresh";
 
 const tiktokAuthorizeUrl = "https://www.tiktok.com/v2/auth/authorize/";
 const tiktokTokenUrl = "https://open.tiktokapis.com/v2/oauth/token/";
@@ -111,35 +119,36 @@ export async function buildTikTokAuthUrl(state: string): Promise<string> {
   return `${tiktokAuthorizeUrl}?${params.toString()}`;
 }
 
+const requestTikTokTokenEffect = Effect.fnUntraced(function* (
+  params: Record<string, string>,
+  fetchImpl: FetchImpl = fetch,
+) {
+  const { clientKey, clientSecret } = yield* oauthPromise(readTikTokCreds);
+  return yield* oauthTokenRequest<TikTokTokenResponse>(
+    tiktokTokenUrl,
+    {
+      body: new URLSearchParams({
+        client_key: clientKey,
+        client_secret: clientSecret,
+        ...params,
+      }),
+      headers: {
+        "Cache-Control": "no-cache",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      method: "POST",
+    },
+    "tiktok_token_failed",
+    "TikTok token request",
+    fetchImpl,
+  );
+});
+
 export async function requestTikTokToken(
   params: Record<string, string>,
   fetchImpl: FetchImpl = fetch,
 ): Promise<TikTokTokenResponse> {
-  const { clientKey, clientSecret } = await readTikTokCreds();
-  const response = await fetchImpl(tiktokTokenUrl, {
-    body: new URLSearchParams({
-      client_key: clientKey,
-      client_secret: clientSecret,
-      ...params,
-    }),
-    headers: {
-      "Cache-Control": "no-cache",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    method: "POST",
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-
-    throw new ApiError(
-      "tiktok_token_failed",
-      `TikTok token request failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`,
-      400,
-    );
-  }
-
-  return (await response.json()) as TikTokTokenResponse;
+  return runOAuthEffect(requestTikTokTokenEffect(params, fetchImpl));
 }
 
 export async function exchangeCodeForTikTokToken(code: string): Promise<void> {
@@ -157,34 +166,41 @@ export async function exchangeCodeForTikTokToken(code: string): Promise<void> {
   await upsertTikTokAuth(data.access_token, data.refresh_token, data.expires_in, data.scope ?? "");
 }
 
-export async function getTikTokAccessToken(): Promise<string> {
+async function readTikTokAuthRow(): Promise<TikTokAuthRow | undefined> {
   const db = await getDb();
   const result = await db.execute({
     args: ["tiktok"],
     sql: `select access_token, refresh_token, expires_at from tiktok_auth where service = ? limit 1`,
   });
-  const auth = typedRow<TikTokAuthRow>(result.rows);
+  return typedRow<TikTokAuthRow>(result.rows);
+}
 
-  if (!auth) {
-    throw new ApiError("tiktok_not_authenticated", "TikTok is not authenticated", 400);
-  }
-
-  const expiresAt = new Date(auth.expires_at).getTime();
-  const refreshWindowMs = 60_000;
-
-  if (expiresAt - refreshWindowMs > Date.now()) {
-    return auth.access_token;
-  }
-
-  const data = await requestTikTokToken({
-    grant_type: "refresh_token",
-    refresh_token: auth.refresh_token,
+export async function getTikTokAccessToken(): Promise<string> {
+  return refreshOAuthToken({
+    clear: async () => {
+      const db = await getDb();
+      await db.execute({ args: ["tiktok"], sql: "delete from tiktok_auth where service = ?" });
+    },
+    notAuthenticated: new ApiError("tiktok_not_authenticated", "TikTok is not authenticated", 400),
+    read: readTikTokAuthRow,
+    reauthRequired: new ApiError(
+      "tiktok_reauth_required",
+      "TikTok needs reconnecting. Reconnect from the board.",
+      401,
+    ),
+    refresh: (auth) =>
+      requestTikTokTokenEffect({ grant_type: "refresh_token", refresh_token: auth.refresh_token }),
+    refreshWindowMs: 60_000,
+    write: async (data, auth) => {
+      await upsertTikTokAuth(
+        data.access_token,
+        data.refresh_token ?? auth.refresh_token,
+        data.expires_in,
+        data.scope ?? "",
+      );
+      return data.access_token;
+    },
   });
-
-  const refreshToken = data.refresh_token ?? auth.refresh_token;
-  await upsertTikTokAuth(data.access_token, refreshToken, data.expires_in, data.scope ?? "");
-
-  return data.access_token;
 }
 
 export async function hasTikTokAuth(): Promise<boolean> {
@@ -233,44 +249,51 @@ async function fetchTikTokVideoPage(
     body.cursor = cursor;
   }
 
-  const response = await fetchImpl(url, {
-    body: JSON.stringify(body),
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    method: "POST",
-  });
+  return runOAuthEffect(
+    oauthRequest(
+      url,
+      {
+        body: JSON.stringify(body),
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      },
+      async (response) => {
+        if (!response.ok) {
+          const text = await response.text();
 
-  if (!response.ok) {
-    const text = await response.text();
+          throw new ApiError(
+            "tiktok_video_list_failed",
+            `TikTok video/list failed: ${response.status} ${response.statusText}${text ? ` - ${text}` : ""}`,
+            400,
+          );
+        }
 
-    throw new ApiError(
-      "tiktok_video_list_failed",
-      `TikTok video/list failed: ${response.status} ${response.statusText}${text ? ` - ${text}` : ""}`,
-      400,
-    );
-  }
+        const json = (await response.json()) as TikTokVideoListResponse;
 
-  const json = (await response.json()) as TikTokVideoListResponse;
+        if (json.error?.code && json.error.code !== "ok") {
+          throw new ApiError(
+            "tiktok_video_list_failed",
+            `TikTok video/list error: ${json.error.code}${json.error.message ? ` - ${json.error.message}` : ""}`,
+            400,
+          );
+        }
 
-  if (json.error?.code && json.error.code !== "ok") {
-    throw new ApiError(
-      "tiktok_video_list_failed",
-      `TikTok video/list error: ${json.error.code}${json.error.message ? ` - ${json.error.message}` : ""}`,
-      400,
-    );
-  }
+        const videos = (json.data?.videos ?? [])
+          .map(toVideoMetrics)
+          .filter((video): video is TikTokVideoMetrics => video !== null);
 
-  const videos = (json.data?.videos ?? [])
-    .map(toVideoMetrics)
-    .filter((video): video is TikTokVideoMetrics => video !== null);
-
-  return {
-    cursor: typeof json.data?.cursor === "number" ? json.data.cursor : null,
-    hasMore: json.data?.has_more === true,
-    videos,
-  };
+        return {
+          cursor: typeof json.data?.cursor === "number" ? json.data.cursor : null,
+          hasMore: json.data?.has_more === true,
+          videos,
+        };
+      },
+      fetchImpl,
+    ),
+  );
 }
 
 export async function collectOwnTikTokVideos(

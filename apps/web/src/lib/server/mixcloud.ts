@@ -1,6 +1,7 @@
 import { getDb, typedRow } from "./db";
 import { readEnvs } from "./env";
 import { ApiError } from "./api-error";
+import { oauthTokenRequest, runOAuthEffect } from "./oauth-token-refresh";
 
 const mixcloudAuthorizeUrl = "https://www.mixcloud.com/oauth/authorize/";
 const mixcloudTokenUrl = "https://www.mixcloud.com/oauth/access_token/";
@@ -36,19 +37,14 @@ export async function exchangeCodeForMixcloudToken(
     redirect_uri: redirectUri,
   });
 
-  const response = await fetch(`${mixcloudTokenUrl}?${params.toString()}`);
-
-  if (!response.ok) {
-    const body = await response.text();
-
-    throw new ApiError(
+  const data = await runOAuthEffect(
+    oauthTokenRequest<MixcloudTokenResponse>(
+      `${mixcloudTokenUrl}?${params.toString()}`,
+      {},
       "mixcloud_token_failed",
-      `Mixcloud token request failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`,
-      400,
-    );
-  }
-
-  const data = (await response.json()) as MixcloudTokenResponse;
+      "Mixcloud token request",
+    ),
+  );
 
   if (!data.access_token) {
     throw new ApiError("mixcloud_token_failed", "Mixcloud returned no access token", 400);
