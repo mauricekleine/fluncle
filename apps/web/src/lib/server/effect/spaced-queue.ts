@@ -1,4 +1,4 @@
-import { Clock, Deferred, Effect } from "effect";
+import { Clock, Effect } from "effect";
 
 export type SpacedQueue = {
   readonly deferUntil: (atMs: number) => Effect.Effect<void>;
@@ -9,7 +9,7 @@ const CHAIN_WAIT_FACTOR = 40;
 
 export function makeSpacedQueue(intervalMs: () => number): SpacedQueue {
   let nextSlotAt = 0;
-  let tail: Effect.Effect<void> = Effect.void;
+  let tail: Promise<void> = Promise.resolve();
 
   const deferUntil = (atMs: number): Effect.Effect<void> =>
     Effect.sync(() => {
@@ -18,15 +18,17 @@ export function makeSpacedQueue(intervalMs: () => number): SpacedQueue {
 
   const run = <A, E, R>(call: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
     Effect.suspend(() => {
-      const done = Deferred.makeUnsafe<void>();
+      const { promise: done, resolve } = Promise.withResolvers<void>();
       const previous = tail;
-      tail = Deferred.await(done);
+      tail = done;
 
       return Effect.gen(function* () {
         const interval = intervalMs();
 
         if (interval > 0) {
-          yield* previous.pipe(Effect.timeoutOption(interval * CHAIN_WAIT_FACTOR));
+          yield* Effect.promise(() => previous).pipe(
+            Effect.timeoutOption(interval * CHAIN_WAIT_FACTOR),
+          );
         }
 
         const now = yield* Clock.currentTimeMillis;
@@ -38,7 +40,7 @@ export function makeSpacedQueue(intervalMs: () => number): SpacedQueue {
         }
 
         return yield* call;
-      }).pipe(Effect.ensuring(Deferred.succeed(done, undefined)));
+      }).pipe(Effect.ensuring(Effect.sync(resolve)));
     });
 
   return { deferUntil, run };
