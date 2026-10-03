@@ -505,7 +505,6 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
 
   test(
     "a gate-PASSING entity is authored exactly once and leaves no budget behind",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
       verdict("pass");
 
@@ -517,11 +516,11 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
       expect(describes()).toEqual([false]);
       expect(loadLedger().size).toBe(0);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a gate-REFUSING entity is authored at most three times, and the THIRD draft is stored",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
       verdict("reject");
 
@@ -534,11 +533,11 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
 
       expect(result.gateBypassed).toBe(true);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "the rewrites are TOLD what the gate refused (a blind retry never converges)",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
       verdict("reject");
       await tick("future-signal");
@@ -549,11 +548,11 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
       expect(second).toContain('banned identity word "signal"');
       expect(third).toContain("YOUR LAST DRAFT WAS REJECTED");
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a FOURTH authoring never happens on a later tick",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
       verdict("structural");
 
@@ -566,11 +565,11 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
 
       expect(authorings()).toBe(MAX_BIO_ATTEMPTS);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "an exhausted entity costs NOTHING — no draft fetch, no model call",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
       verdict("structural");
       await tick("future-signal");
@@ -582,11 +581,11 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
       expect(authorings()).toBe(MAX_BIO_ATTEMPTS);
       expect(describes().length).toBe(describesAfterBudget);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a partly-spent budget resumes where it left off across ticks",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
       verdict("reject");
 
@@ -600,6 +599,7 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
 
       expect(authorings()).toBe(MAX_BIO_ATTEMPTS - 1);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 });
 
@@ -613,7 +613,6 @@ describe("the transport/model failure never spends an attempt", () => {
 
   test(
     "a failing `claude -p` leaves the budget untouched, however many ticks it fails for",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
       verdict("pass");
       claudeVerdict("down");
@@ -625,11 +624,11 @@ describe("the transport/model failure never spends an attempt", () => {
       expect(authorings()).toBe(4);
       expect(loadLedger().size).toBe(0);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "…so the entity still gets its FULL budget once the model comes back",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
       verdict("reject");
       claudeVerdict("down");
@@ -647,11 +646,11 @@ describe("the transport/model failure never spends an attempt", () => {
       expect(result.outcome).toBe("authored");
       expect(result.gateBypassed).toBe(true);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a model failure on the LAST attempt does not exhaust the entity",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
       verdict("reject");
 
@@ -673,6 +672,7 @@ describe("the transport/model failure never spends an attempt", () => {
       expect(result.outcome).toBe("authored");
       expect(result.gateBypassed).toBe(true);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 });
 
@@ -686,17 +686,16 @@ describe("what the sweep's logs say to the /status strain detector", () => {
 
   test(
     "a clean authoring tick reads as ZERO strain",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
       verdict("pass");
 
       expect((await tickWithStrain("future-signal")).strain).toBe(0);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "rewriting and then LANDING reads as ZERO strain — it is a healthy tick",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
       verdict("reject");
 
@@ -705,27 +704,28 @@ describe("what the sweep's logs say to the /status strain detector", () => {
       expect(lines.join("\n")).toContain("FINAL-ATTEMPT ACCEPTANCE");
       expect(strain).toBe(0);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "EXHAUSTING an entity DOES read as strain — it is a permanent write-off",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
       verdict("structural");
 
       expect((await tickWithStrain("future-signal")).strain).toBeGreaterThan(0);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a transport/model failure DOES read as strain — nothing else is watching it now",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
       verdict("pass");
       claudeVerdict("down");
 
       expect((await tickWithStrain("future-signal")).strain).toBeGreaterThan(0);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test("the per-tick exhausted RECAP is silent — it would otherwise nag forever", () => {
@@ -737,7 +737,6 @@ describe("what the sweep's logs say to the /status strain detector", () => {
 
   test(
     "a DRY RUN spends no budget — the operator pre-flight is not an attempt",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
       verdict("pass");
 
@@ -748,6 +747,7 @@ describe("what the sweep's logs say to the /status strain detector", () => {
 
       expect(() => readFileSync(attemptLedgerPath(), "utf8")).toThrow();
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 });
 
@@ -824,7 +824,6 @@ describe("the recurring phased orchestrator", () => {
 
   test(
     "batches queue and draft reads before authoring, then batches delivery",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const timeline = join(CONTROL, "phase-timeline");
       const runner = join(RIG, "phase-runner");
@@ -877,5 +876,6 @@ exit "$status"
         produced: 1,
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 });

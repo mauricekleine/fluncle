@@ -211,7 +211,7 @@ class LocalTargetClient implements DeviceTargetClient {
           return { affectedRows: 0, columns: query.columnNames, rows };
         }
 
-        const result = this.database.run(statement.sql, ...args);
+        const result = this.database.run(statement.sql, args);
         return { affectedRows: result.changes, columns: [], rows: [] };
       }),
     );
@@ -945,29 +945,32 @@ describe("embedded source replica", () => {
     process.env.FLUNCLE_ADMISSION_RUNNER_PID = "inherited";
     process.env.TURSO_AUTH_TOKEN = "test";
     process.env.TURSO_DATABASE_URL = "libsql://source.invalid";
-    globalThis.fetch = async () =>
-      new Response(
-        JSON.stringify({
-          results: [
-            {
-              response: {
-                result: {
-                  step_errors: [null, null, null, null],
-                  step_results: [
-                    {},
-                    { cols: [{ name: "value" }], rows: [[{ type: "integer", value: "1" }]] },
-                    {},
-                    null,
-                  ],
+    globalThis.fetch = Object.assign(
+      async () =>
+        new Response(
+          JSON.stringify({
+            results: [
+              {
+                response: {
+                  result: {
+                    step_errors: [null, null, null, null],
+                    step_results: [
+                      {},
+                      { cols: [{ name: "value" }], rows: [[{ type: "integer", value: "1" }]] },
+                      {},
+                      null,
+                    ],
+                  },
+                  type: "batch",
                 },
-                type: "batch",
+                type: "ok",
               },
-              type: "ok",
-            },
-          ],
-        }),
-        { status: 200 },
-      );
+            ],
+          }),
+          { status: 200 },
+        ),
+      { preconnect: previousFetch.preconnect },
+    );
 
     try {
       const sync = await syncSourceReplicaAdmitted(path, false, () => ({

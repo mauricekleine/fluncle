@@ -316,8 +316,12 @@ async function collect(
   timeoutMs = PROCESS_TIMEOUT_MS,
 ): Promise<ProcessResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const stdout = new Response(process.stdout).text();
-  const stderr = new Response(process.stderr).text();
+  const stdout = new Response(
+    typeof process.stdout === "number" ? undefined : process.stdout,
+  ).text();
+  const stderr = new Response(
+    typeof process.stderr === "number" ? undefined : process.stderr,
+  ).text();
   const completed = Promise.all([process.exited, stdout, stderr]);
   try {
     const outcome = await Promise.race([

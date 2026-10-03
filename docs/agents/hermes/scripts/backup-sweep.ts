@@ -395,7 +395,11 @@ export async function signedPut(
 
   const res =
     onDisk === null
-      ? await fetch(url, { body: inHand, headers: sent, method: "PUT" })
+      ? await fetch(url, {
+          body: inHand === null ? undefined : new Uint8Array(inHand).buffer,
+          headers: sent,
+          method: "PUT",
+        })
       : await fetch(url, { body: Bun.file(onDisk.path), headers: sent, method: "PUT" });
 
   if (!res.ok) {

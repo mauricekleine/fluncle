@@ -255,7 +255,7 @@ function write(path: string, body: string) {
 }
 
 function stubEnv(tick: Tick, home: string, stub: string): Record<string, string> {
-  const binAndKey = tick.legacyEnvNames
+  const binAndKey: Record<string, string> = tick.legacyEnvNames
     ? { BOX_API_KEY: "stub-key", BOX_BIN: join(stub, "boat") }
     : { BOAT_API_KEY: "stub-key", BOAT_BIN: join(stub, "boat") };
   const timeoutExit = tick.timeoutExitCode;
@@ -412,7 +412,6 @@ function lastJsonLine(stdout: string): Record<string, unknown> {
 describe("await_box_ready", () => {
   test(
     "a box that restores and then answers renders, and is never condemned",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         nowSequence: [4070908800, 4070908800, 4070908800, 4070908801, 4070908802, 4070908802],
@@ -439,12 +438,12 @@ describe("await_box_ready", () => {
       expect("queue_depth" in lastJsonLine(tick.stdout)).toBe(false);
       expect("expected_interval_ms" in lastJsonLine(tick.stdout)).toBe(false);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   for (const restoringCode of ["box_restoring", "boat_restoring", "sandbox_restoring"]) {
     test(
       `a box restoring with ${restoringCode} is waited out, not condemned`,
-      { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
       () => {
         const tick = runTick({
           nowSequence: [4070908800, 4070908800, 4070908800, 4070908801, 4070908802, 4070908802],
@@ -458,12 +457,12 @@ describe("await_box_ready", () => {
         expect(tick.log).not.toContain("condemned");
         expect(tick.state).toBe("rendering");
       },
+      { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     );
   }
 
   test(
     "an error that is not a restore ends the wait immediately",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         nowSequence: [4070908800, 4070908800, 4070908800, 4070908801],
@@ -477,11 +476,11 @@ describe("await_box_ready", () => {
       expect(tick.log).toContain(`condemned box ${BOX_ID}`);
       expect(tick.state).toBe("idle");
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a box that never stops restoring times out from elapsed time and reaches the condemn path",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         nowSequence: [4070908800, 4070908800, 4070908800, 4070908800, 4070908802],
@@ -503,11 +502,11 @@ describe("await_box_ready", () => {
         produced: 0,
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a box that answers straight away never logs a duration across a clock boundary",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         nowSequence: [4070908800, 4070908800, 4070908800, 4070908801],
@@ -518,13 +517,13 @@ describe("await_box_ready", () => {
       expect(tick.log).not.toContain("ready after");
       expect(tick.state).toBe("rendering");
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 });
 
 describe("the CLI contract", () => {
   test(
     "every CLI call carries --no-update, so the checksum-pinned binary stays pinned",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({ restoringCalls: 0 });
 
@@ -532,22 +531,22 @@ describe("the CLI contract", () => {
       expect(tick.calls.length).toBeGreaterThan(0);
       expect(tick.calls.every((call) => call.startsWith("--no-update "))).toBe(true);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "the API key goes in on stdin, never on the command line",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({ restoringCalls: 0 });
 
       expect(tick.calls).toContain("--no-update login --key-stdin --json");
       expect(tick.calls.join("\n")).not.toContain("stub-key");
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "the pre-rename BOX_BIN and BOX_API_KEY names still drive a full tick",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({ legacyEnvNames: true, restoringCalls: 0 });
 
@@ -555,6 +554,7 @@ describe("the CLI contract", () => {
       expect(tick.state).toBe("rendering");
       expect(tick.stdout).toContain(`started render of ${QUEUE_HEAD} on ${BOX_ID}`);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 });
 
@@ -564,7 +564,6 @@ describe("the reap rail", () => {
 
   test(
     "a condemned box that still exists STOPPED is not gone, and stays in the ledger",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         listHasOrphan: true,
@@ -583,11 +582,11 @@ describe("the reap rail", () => {
 
       expect(tick.calls.join("\n")).not.toContain("delete");
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a condemned box the platform no longer lists at all IS gone, and leaves the ledger",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         listHasOrphan: false,
@@ -600,11 +599,11 @@ describe("the reap rail", () => {
       expect(tick.orphans).not.toContain(ORPHAN_ID);
       expect(tick.calls).not.toContain(`--no-update extend ${ORPHAN_ID} --ttl 60`);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a condemned box still standing past the alert window alerts once and is never deleted",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const filed = nowSeconds() - ORPHAN_ALERT_AFTER_S - 60;
       const tick = runTick({
@@ -625,11 +624,11 @@ describe("the reap rail", () => {
       expect(tick.calls).toContain(`--no-update extend ${ORPHAN_ID} --ttl 60`);
       expect(tick.calls.join("\n")).not.toContain("delete");
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "an already-alerted orphan is watched without a second page",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const filed = nowSeconds() - ORPHAN_ALERT_AFTER_S - 60;
       const tick = runTick({
@@ -643,13 +642,13 @@ describe("the reap rail", () => {
       expect(tick.curlCalls).toEqual([]);
       expect(tick.orphans).toContain(ORPHAN_ID);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 });
 
 describe("the bounded resume", () => {
   test(
     "a resume that outlives its budget holds the sandbox id instead of reprovisioning",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({ listHasBox: true, restoringCalls: 0, timeoutExitCode: 124 });
 
@@ -662,11 +661,11 @@ describe("the bounded resume", () => {
       expect(tick.log).not.toContain("reprovisioning");
       expect(tick.calls.join("\n")).not.toContain("--no-update new");
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a second held resume reports failure while retaining the box",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({ restoringCalls: 0, resumeExitCode: 1, resumeHolds: 1 });
 
@@ -682,6 +681,7 @@ describe("the bounded resume", () => {
         reason: "render_resume_hold",
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   for (const [initialHolds, limit] of [
@@ -690,7 +690,6 @@ describe("the bounded resume", () => {
   ] as const) {
     test(
       `resume hold limit ${limit ?? 3} alerts once and condemns the box`,
-      { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
       () => {
         const tick = runTick({
           restoringCalls: 0,
@@ -715,21 +714,25 @@ describe("the bounded resume", () => {
           reason: "render_resume_hold",
         });
       },
+      { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     );
   }
 
-  test("a successful resume clears previous holds", { timeout: PROCESS_FIXTURE_TIMEOUT_MS }, () => {
-    const tick = runTick({ restoringCalls: 0, resumeHolds: 2 });
+  test(
+    "a successful resume clears previous holds",
+    () => {
+      const tick = runTick({ restoringCalls: 0, resumeHolds: 2 });
 
-    expect(tick.exitCode).toBe(0);
-    expect(tick.resumeHolds).toBe("");
-    expect(tick.state).toBe("rendering");
-    expect(lastJsonLine(tick.stdout)).toMatchObject({ errors: 0, ok: true, produced: 1 });
-  });
+      expect(tick.exitCode).toBe(0);
+      expect(tick.resumeHolds).toBe("");
+      expect(tick.state).toBe("rendering");
+      expect(lastJsonLine(tick.stdout)).toMatchObject({ errors: 0, ok: true, produced: 1 });
+    },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+  );
 
   test(
     "a failed resume on a sandbox boat.dev no longer lists reprovisions",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({ listHasBox: false, restoringCalls: 0, resumeExitCode: 1 });
 
@@ -739,13 +742,13 @@ describe("the bounded resume", () => {
       expect(tick.exitCode).toBe(1);
       expect(tick.stdout).toContain("render-conductor: provision failed");
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 });
 
 describe("--preflight", () => {
   test(
     "reports the CLI, the carry-over answer and the pick, and touches nothing",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({ args: ["--preflight"], restoringCalls: 0 });
 
@@ -765,11 +768,11 @@ describe("--preflight", () => {
       expect(tick.state).toBe("idle");
       expect(tick.boxIdFile).toBe(BOX_ID);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "says so when the recorded sandbox did not survive the cutover",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({ args: ["--preflight"], listHasBox: false, restoringCalls: 0 });
 
@@ -778,20 +781,24 @@ describe("--preflight", () => {
       expect(tick.boxIdFile).toBe(BOX_ID);
       expect(tick.state).toBe("idle");
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
-  test("an unknown argument is refused", { timeout: PROCESS_FIXTURE_TIMEOUT_MS }, () => {
-    const tick = runTick({ args: ["--wat"], restoringCalls: 0 });
+  test(
+    "an unknown argument is refused",
+    () => {
+      const tick = runTick({ args: ["--wat"], restoringCalls: 0 });
 
-    expect(tick.exitCode).toBe(2);
-    expect(tick.calls).toEqual([]);
-  });
+      expect(tick.exitCode).toBe(2);
+      expect(tick.calls).toEqual([]);
+    },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+  );
 });
 
 describe("queue read", () => {
   test(
     "a genuinely empty queue is a healthy idle tick",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         queueResponse: '{"ok":true,"tracks":[]}',
@@ -808,11 +815,11 @@ describe("queue read", () => {
         produced: 0,
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a failed queue read is a run error, not an empty queue",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         queueExitCode: 7,
@@ -830,11 +837,11 @@ describe("queue read", () => {
         ok: false,
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "the Worker's typed due-work deferral is a paused tick, not a failure",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         queueExitCode: 1,
@@ -868,11 +875,11 @@ describe("queue read", () => {
         throttled: true,
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a generic Worker fault in the CLI payload stays a queue-read failure",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         queueExitCode: 1,
@@ -884,11 +891,11 @@ describe("queue read", () => {
       expect(tick.stdout).toContain("render-conductor: queue read failed");
       expect(lastJsonLine(tick.stdout)).toMatchObject({ errors: 1, ok: false });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a successful error wrapper is a malformed response, not an empty queue",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         queueResponse: '{"ok":false,"error":"rate limited"}',
@@ -903,13 +910,13 @@ describe("queue read", () => {
         ok: false,
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 });
 
 describe("render state counters", () => {
   test(
     "a shipped completion counts the inspected finding and successful completion",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         doneResult: "EXIT=0 @ 2099-01-01T00:00:00Z DURATION=5",
@@ -926,11 +933,11 @@ describe("render state counters", () => {
         produced: 1,
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a failed completion stays in failed and does not become a run error",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         doneResult: "EXIT=7 @ 2099-01-01T00:00:00Z DURATION=5",
@@ -946,6 +953,7 @@ describe("render state counters", () => {
         produced: 0,
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 });
 
@@ -955,7 +963,6 @@ describe("the done-marker probe and the liveness verdict", () => {
 
   test(
     "MARKER-PRESENT parks the box and takes the completion path",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         doneResult: "EXIT=0 @ 2099-01-01T00:00:00Z DURATION=5",
@@ -973,11 +980,11 @@ describe("the done-marker probe and the liveness verdict", () => {
 
       expect(tick.calls.filter((call) => call.includes("conductor-run.done"))).toEqual([]);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "MARKER-ABSENT with a live claude process is a single-flight hold",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         boxNow: ALIVE_AT,
@@ -997,11 +1004,11 @@ describe("the done-marker probe and the liveness verdict", () => {
       expect(tick.calls).not.toContain(`--no-update stop ${BOX_ID}`);
       expect(tick.curlCalls).toEqual([]);
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "MARKER-ABSENT with no claude process and a silent log is force-parked in one tick",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         boxNow: ALIVE_AT,
@@ -1033,11 +1040,11 @@ describe("the done-marker probe and the liveness verdict", () => {
         reason: "render_died",
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a render past MAX_RENDER is force-parked with an honest ledger row and a page",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         boxNow: ALIVE_AT,
@@ -1058,11 +1065,11 @@ describe("the done-marker probe and the liveness verdict", () => {
       expect(tick.exitCode).toBe(1);
       expect(lastJsonLine(tick.stdout)).toMatchObject({ ok: false, reason: "render_stuck" });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a probe that answers neither word is a counted transport failure, never 'in flight'",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         initialState: "rendering",
@@ -1082,11 +1089,11 @@ describe("the done-marker probe and the liveness verdict", () => {
         reason: "render_probe_transport",
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "three consecutive transport failures treat the box as wedged and force-park it",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         initialState: "rendering",
@@ -1107,13 +1114,13 @@ describe("the done-marker probe and the liveness verdict", () => {
         reason: "render_box_wedged",
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 });
 
 describe("the wake-time preconditions", () => {
   test(
     "a cache download failure wipes the cache, retries once, and starts the render",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({ restoringCalls: 0, runFreshen: true });
 
@@ -1124,11 +1131,11 @@ describe("the wake-time preconditions", () => {
       expect(tick.state).toBe("rendering");
       expect(lastJsonLine(tick.stdout)).toMatchObject({ errors: 0, produced: 1 });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "two failed installs park the box with disk space and install errors in the log",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({ bunInstallFailsTwice: true, restoringCalls: 0, runFreshen: true });
 
@@ -1146,11 +1153,11 @@ describe("the wake-time preconditions", () => {
         reason: "render_deps_install_failed",
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a failed dependency install parks the box and refuses to render into it",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         freshenOut: "[freshen] deps-failed\nerror: lockfile had changes",
@@ -1170,11 +1177,11 @@ describe("the wake-time preconditions", () => {
         reason: "render_deps_install_failed",
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a launcher refusal parks the box, pages, and is never a condemn",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         restoringCalls: 0,
@@ -1192,11 +1199,11 @@ describe("the wake-time preconditions", () => {
         reason: "render_launch_refused",
       });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 
   test(
     "a named launcher fault on the marker is reported, and never poisons the finding",
-    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
       const tick = runTick({
         doneResult: "EXIT=deps-missing @ 2099-01-01T00:00:00Z DURATION=0",
@@ -1210,6 +1217,7 @@ describe("the wake-time preconditions", () => {
       expect(tick.curlCalls.join("\n")).toContain("the render launcher refused");
       expect(lastJsonLine(tick.stdout)).toMatchObject({ failed: 1 });
     },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
 });
 
@@ -1243,28 +1251,36 @@ describe("the provision parser", () => {
     }
   }
 
-  test("prefers the ready line's id", { timeout: PROCESS_FIXTURE_TIMEOUT_MS }, () => {
-    expect(
-      parseId(
-        [
-          '{"event":"created","id":"bx_8pqt6dup","ttlSeconds":3600}',
-          '{"event":"state","id":"bx_8pqt6dup","state":"provisioning"}',
-          '{"event":"ready","id":"bx_8pqt6dup","state":"ready","ip":"203.0.113.10"}',
-        ].join("\n"),
-      ),
-    ).toBe("bx_8pqt6dup");
-  });
+  test(
+    "prefers the ready line's id",
+    () => {
+      expect(
+        parseId(
+          [
+            '{"event":"created","id":"bx_8pqt6dup","ttlSeconds":3600}',
+            '{"event":"state","id":"bx_8pqt6dup","state":"provisioning"}',
+            '{"event":"ready","id":"bx_8pqt6dup","state":"ready","ip":"203.0.113.10"}',
+          ].join("\n"),
+        ),
+      ).toBe("bx_8pqt6dup");
+    },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+  );
 
-  test("refuses a run that ends in an error event", { timeout: PROCESS_FIXTURE_TIMEOUT_MS }, () => {
-    expect(
-      parseId(
-        [
-          '{"event":"created","id":"bx_8pqt6dup","ttlSeconds":3600}',
-          '{"event":"error","error":"backend could not provision (409)","code":"resume_failed","status":409}',
-        ].join("\n"),
-      ),
-    ).toBe("");
-  });
+  test(
+    "refuses a run that ends in an error event",
+    () => {
+      expect(
+        parseId(
+          [
+            '{"event":"created","id":"bx_8pqt6dup","ttlSeconds":3600}',
+            '{"event":"error","error":"backend could not provision (409)","code":"resume_failed","status":409}',
+          ].join("\n"),
+        ),
+      ).toBe("");
+    },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+  );
 });
 
 describe("the scripts themselves", () => {
