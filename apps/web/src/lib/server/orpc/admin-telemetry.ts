@@ -1,18 +1,15 @@
 import { insertRunEvent, readRunLedger } from "../run-events";
-import { adminAuth, operatorGuard } from "../orpc-auth";
+import { adminAuth } from "../orpc-auth";
 import { type Implementer, toFault } from "./_shared";
 
 export function adminTelemetryHandlers(os: Implementer) {
-  const readRunLedgerHandler = os.read_run_ledger
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
-      try {
-        return await readRunLedger(input);
-      } catch (error) {
-        throw toFault(error);
-      }
-    });
+  const readRunLedgerHandler = os.read_run_ledger.use(adminAuth).handler(async ({ input }) => {
+    try {
+      return await readRunLedger(input);
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
 
   const recordRunHandler = os.record_run.use(adminAuth).handler(async ({ input }) => {
     try {

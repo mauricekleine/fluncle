@@ -288,7 +288,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   purge_video: "operator",
   rank_artists: "admin",
   rank_catalogue: "admin",
-  read_run_ledger: "operator",
+  read_run_ledger: "admin",
   reconcile_hub_counts: "admin",
   reconcile_operation_receipts: "operator",
   record_anchor_failure: "admin",
