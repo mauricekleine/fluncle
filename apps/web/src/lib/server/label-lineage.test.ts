@@ -196,6 +196,49 @@ describe("resolveLabelLineage", () => {
     expect(after.rows[0]?.["n"]).toBe(before.rows[0]?.["n"]);
   });
 
+  it("matches every parent MusicBrainz names in one read, keeping the first archived parent in MusicBrainz order", async () => {
+    await seedLabel({
+      lineageState: "resolved",
+      mbLabelId: "mb-owner-b",
+      name: "Owner B",
+      slug: "owner-b",
+    });
+    const ownerA = await seedLabel({
+      lineageState: "resolved",
+      mbLabelId: "mb-owner-a",
+      name: "Owner A",
+      slug: "owner-a",
+    });
+    await seedLabel({ mbLabelId: "mb-sub", name: "Sub Label", slug: "sub-label" });
+
+    mbFetch.mockImplementation(async (url: string) => {
+      if (url.includes("mb-sub")) {
+        return lineageResponse({
+          begin: "2015",
+          parentMbids: [
+            { id: "mb-missing" },
+            { id: "mb-owner-a" },
+            { id: "mb-owner-b", type: "imprint" },
+            { id: "mb-owner-a" },
+            { id: "mb-also-missing" },
+          ],
+        });
+      }
+
+      return { data: {}, rateLimited: false };
+    });
+
+    executeCalls.length = 0;
+    const result = await resolveLabelLineage(10, false);
+
+    expect(result.resolved).toEqual(["sub-label"]);
+    expect(result.unmatchedParents).toBe(2);
+    expect((await labelRow("sub-label"))?.["parent_label_id"]).toBe(ownerA);
+    expect(executeCalls.filter((call) => call.sql.includes("where mb_label_id in"))).toHaveLength(
+      1,
+    );
+  });
+
   it("resolves the MBID by exact-fold search when the label has none, then walks its lineage", async () => {
     await seedLabel({ name: "Exact Name", slug: "exact-name" });
 

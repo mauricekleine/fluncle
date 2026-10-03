@@ -138,14 +138,25 @@ async function listPendingLabels(
   return typedRows<LabelWorkRow>(result.rows);
 }
 
-async function findLabelIdByMbid(mbid: string): Promise<string | undefined> {
+async function findLabelIdsByMbid(mbids: readonly string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(mbids)];
+
+  if (unique.length === 0) {
+    return new Map();
+  }
+
   const db = await getDb();
   const result = await db.execute({
-    args: [mbid],
-    sql: `select id from labels where mb_label_id = ? limit 1`,
+    args: unique,
+    sql: `select id, mb_label_id from labels where mb_label_id in (${unique.map(() => "?").join(", ")})`,
   });
 
-  return typedRows<{ id: string }>(result.rows)[0]?.id;
+  return new Map(
+    typedRows<{ id: string; mb_label_id: string }>(result.rows).map((row) => [
+      row.mb_label_id,
+      row.id,
+    ]),
+  );
 }
 
 async function markResolved(
@@ -226,8 +237,10 @@ async function resolveOneLabel(row: LabelWorkRow): Promise<ResolveOutcome> {
     let parentLabelId: string | null = null;
     let unmatchedParents = 0;
 
+    const knownParents = await findLabelIdsByMbid(lineage.parentMbids);
+
     for (const parentMbid of lineage.parentMbids) {
-      const existingId = await findLabelIdByMbid(parentMbid);
+      const existingId = knownParents.get(parentMbid);
 
       if (existingId && !parentLabelId) {
         parentLabelId = existingId;
