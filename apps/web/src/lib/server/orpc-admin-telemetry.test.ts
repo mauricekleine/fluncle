@@ -265,14 +265,16 @@ describe(`read_run_ledger — GET ${RUN_EVENT_PATH}`, () => {
     );
   });
 
-  it("403s the box agent and 401s an anonymous reader", async () => {
+  it("serves the box agent and 401s an anonymous reader", async () => {
     const { handleOrpc } = await import("./orpc");
-    const agentResponse = await handleOrpc(req(RUN_EVENT_PATH, "GET", AGENT_TOKEN));
     const anonymousResponse = await handleOrpc(req(RUN_EVENT_PATH, "GET", undefined));
 
-    expect(agentResponse?.status).toBe(403);
     expect(anonymousResponse?.status).toBe(401);
     expect(execute).not.toHaveBeenCalled();
+
+    const agentResponse = await handleOrpc(req(RUN_EVENT_PATH, "GET", AGENT_TOKEN));
+
+    expect(agentResponse?.status).toBe(200);
   });
 
   it("400s an invalid derived-ok filter before querying the ledger", async () => {

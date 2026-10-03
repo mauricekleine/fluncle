@@ -14,7 +14,7 @@ One op, one command:
 fluncle admin telemetry read --unit fluncle-enrich --since 24h --json
 ```
 
-Flags: `--unit`, `--since <iso|age>`, `--until <iso>`, `--ok true|false`, `--liar`, `--blind`, `--missing-field <name>`, `--missing`, `--limit` (1–100), `--cursor`, `--json`. Relative `--since` ages use a positive integer plus lowercase `m`, `h`, `d`, or `w`, such as `90m`, `24h`, or `2w`, up to `3650d`. Absolute bounds require an ISO-8601 instant with `T` and an explicit `Z` or offset. Operator tier. Never reach around it with raw SQL — the CLI needs no database credential and cannot drift from the schema.
+Flags: `--unit`, `--since <iso|age>`, `--until <iso>`, `--ok true|false`, `--liar`, `--blind`, `--missing-field <name>`, `--missing`, `--limit` (1–100), `--cursor`, `--json`. Relative `--since` ages use a positive integer plus lowercase `m`, `h`, `d`, or `w`, such as `90m`, `24h`, or `2w`, up to `3650d`. Absolute bounds require an ISO-8601 instant with `T` and an explicit `Z` or offset. Agent tier: the box and Soliton agent tokens read it as well as the operator. Never reach around it with raw SQL — the CLI needs no database credential and cannot drift from the schema.
 
 In JSON, top-level `.ok` acknowledges the request. It says nothing about run health. The derived run verdict is `.rows[].ok`.
 
