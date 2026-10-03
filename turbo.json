@@ -31,6 +31,19 @@
     },
     "typecheck": {
       "dependsOn": ["^build"]
+    },
+    "@fluncle/tooling#typecheck": {
+      "cache": false,
+      "dependsOn": []
+    },
+    "@fluncle/web#typecheck": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docs/agents/hermes/scripts/**"]
+    },
+    "@fluncle/web#test": {
+      "dependsOn": ["^build"],
+      "env": ["FLUNCLE_VITEST_COVERAGE"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docs/agents/hermes/scripts/**"]
     }
   },
   "ui": "tui"

@@ -5,7 +5,18 @@
     "lib": ["DOM", "DOM.Iterable", "ES2022"],
     "moduleResolution": "Bundler",
     "strict": true,
-    "types": ["node", "react", "react-dom"]
+    "types": ["node", "react", "react-dom"],
+    "allowImportingTsExtensions": true
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "remotion.config.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "remotion.config.ts",
+    "*.ts",
+    "*.mts",
+    "*.cts",
+    "scripts/**/*.ts",
+    "scripts/**/*.mts",
+    "scripts/**/*.cts"
+  ]
 }

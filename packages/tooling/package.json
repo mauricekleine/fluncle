@@ -1,0 +1,18 @@
+{
+  "name": "@fluncle/tooling",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit --project ../../scripts/tsconfig.json && tsc --noEmit --project ../../docs/agents/hermes/scripts/tsconfig.json && tsc --noEmit --project ../skills/tsconfig.json && node ../../scripts/quality/typecheck-coverage.mjs"
+  },
+  "devDependencies": {
+    "@fluncle/contracts": "workspace:*",
+    "@fluncle/test-support": "workspace:*",
+    "@fluncle/web": "workspace:*",
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}

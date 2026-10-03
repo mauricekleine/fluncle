@@ -38,7 +38,7 @@ function uploads(file: string): Upload[] {
 }
 
 describe("retained browser evidence", () => {
-  test.each(SHIPPED_EVIDENCE)(
+  test.each([...SHIPPED_EVIDENCE])(
     "%s is retained for selected shipped-main runs and never empty",
     (path) => {
       const file = "quality-checks.yml";
