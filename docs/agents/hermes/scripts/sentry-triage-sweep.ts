@@ -36,7 +36,7 @@ export type CompactIssue = {
   value: string;
 };
 
-type FetchDeps = { fetchFn: typeof fetch };
+type FetchDeps = { fetchFn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> };
 const defaultFetchDeps = (): FetchDeps => ({ fetchFn: fetch });
 
 export function parseMarkerIds(text: string, marker: string): string[] {

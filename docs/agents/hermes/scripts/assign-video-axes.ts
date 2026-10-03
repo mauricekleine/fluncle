@@ -62,7 +62,7 @@ export function assignGrain(entries: LedgerEntry[]): string {
     lastSeen.set(fam, Number.POSITIVE_INFINITY);
   }
   for (let i = 0; i < entries.length; i++) {
-    const g = normStr(entries[i].grain);
+    const g = normStr(entries[i]?.grain);
     if (g && lastSeen.has(g) && lastSeen.get(g) === Number.POSITIVE_INFINITY) {
       lastSeen.set(g, i);
     }
@@ -71,7 +71,7 @@ export function assignGrain(entries: LedgerEntry[]): string {
   const eligible = universe.filter((fam) => !recent.has(fam));
   const pool = eligible.length > 0 ? eligible : universe;
 
-  let best = pool[0];
+  let best = pool[0] ?? BAKED_GRAIN_FAMILIES[0];
   let bestSeen = lastSeen.get(best) ?? Number.POSITIVE_INFINITY;
   for (const fam of pool) {
     const seen = lastSeen.get(fam) ?? Number.POSITIVE_INFINITY;

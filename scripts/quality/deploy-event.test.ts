@@ -97,9 +97,11 @@ describe("post-deploy event handling", () => {
     const served = ["c".repeat(40), DESCENDANT];
     const result = await pollForDeployment({
       deadlineSeconds: 60,
-      fetchImpl: async () => Response.json({ sha: served.shift() }),
+      fetchImpl: Object.assign(async () => Response.json({ sha: served.shift() }), {
+        preconnect: fetch.preconnect,
+      }),
       intervalSeconds: 15,
-      isAncestor: (target, candidate) => target === SHA && candidate === DESCENDANT,
+      isAncestor: (target: string, candidate: string) => target === SHA && candidate === DESCENDANT,
       now: () => clock,
       sleep: async (milliseconds) => {
         clock += milliseconds;
@@ -115,7 +117,9 @@ describe("post-deploy event handling", () => {
     try {
       await pollForDeployment({
         deadlineSeconds: 30,
-        fetchImpl: async () => Response.json({ sha: "c".repeat(40) }),
+        fetchImpl: Object.assign(async () => Response.json({ sha: "c".repeat(40) }), {
+          preconnect: fetch.preconnect,
+        }),
         intervalSeconds: 15,
         isAncestor: () => false,
         now: () => clock,
@@ -135,7 +139,9 @@ describe("post-deploy event handling", () => {
     try {
       await pollForDeployment({
         deadlineSeconds: 1200,
-        fetchImpl: async () => Response.json({ sha: "c".repeat(40) }),
+        fetchImpl: Object.assign(async () => Response.json({ sha: "c".repeat(40) }), {
+          preconnect: fetch.preconnect,
+        }),
         isAncestor: () => false,
         onMiss: () => {
           throw new Error("post-deploy probe failed");

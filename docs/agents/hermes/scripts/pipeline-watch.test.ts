@@ -635,14 +635,7 @@ describe("watchdog regression replays", () => {
       state: "healthy" as const,
     };
     const corrupt = { embed: { healthyChecks: "many", openedAt: "yesterday", sentAt: null } };
-    const planned = planIncidents(
-      corrupt as unknown as Record<
-        string,
-        { healthyChecks: number; openedAt: number; sentAt: number[] }
-      >,
-      [healthy],
-      start,
-    );
+    const planned = planIncidents(corrupt, [healthy], start);
     expect(planned.alerts).toEqual([]);
     expect(planned.next).toEqual({});
     expect(parseIncidentState({ crawl: null, embed: { sentAt: "bad" } })).toEqual({});

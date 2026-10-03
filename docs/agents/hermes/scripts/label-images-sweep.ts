@@ -32,14 +32,14 @@ type SweepEnvironment = {
 export type LabelImagesSweepEffects = {
   createFetcher?: (
     token: string,
-    options: { fetch?: typeof globalThis.fetch },
+    options: { fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> },
   ) => {
     fetchLabelCandidates: (
       work: DiscogsLabelWork[],
     ) => Promise<DiscogsBatchResult<DiscogsLabelCandidate>>;
   };
   env?: SweepEnvironment;
-  fetch?: typeof globalThis.fetch;
+  fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
 function addPass(summary: ReturnType<typeof emptySummary>, pass: LabelImagesPass): void {

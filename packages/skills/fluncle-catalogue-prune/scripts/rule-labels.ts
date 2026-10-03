@@ -8,8 +8,9 @@ const CONFIRM = args.includes("--confirm");
 const OUT = process.env.PRUNE_OUT_DIR ?? ".";
 function listArg(flag: string): string[] {
   const i = args.indexOf(flag);
-  return i >= 0 && args[i + 1]
-    ? args[i + 1]
+  const value = i >= 0 ? args[i + 1] : undefined;
+  return value
+    ? value
         .split("|")
         .map((s) => s.trim())
         .filter(Boolean)

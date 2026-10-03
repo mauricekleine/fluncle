@@ -99,7 +99,7 @@ describe("deriveDeviceDatabase", () => {
     const artifact = new Database(first, { readonly: true });
     expect(
       artifact
-        .query("SELECT id FROM labels ORDER BY id")
+        .query<{ id: string }, []>("SELECT id FROM labels ORDER BY id")
         .all()
         .map((row) => row.id),
     ).toEqual(["label-child", "label-parent"]);

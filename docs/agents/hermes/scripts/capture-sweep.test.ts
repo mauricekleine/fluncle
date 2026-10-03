@@ -2681,7 +2681,7 @@ describe("the metadata gate — artist, title and length, and nothing else", () 
     expect(
       metadataIdentityMatch(
         { channel: "Some Uploader", durationSec: 180, id: "m", title: "NC-17" },
-        { artists: ["Netsky"], durationMs: 180_000, title: "NC-17" },
+        { artists: ["Netsky"], title: "NC-17" },
       ),
     ).toBeNull();
   });
@@ -3118,9 +3118,11 @@ describe("the batched capture commit", () => {
       outcome === "done"
         ? {
             attemptedAt: "2026-01-01T00:00:00.000Z",
+            bodyBase64: "AQ==",
             bytes: 1,
             captureVerification: "unverified",
             capturedAt: "2026-01-01T00:00:00.000Z",
+            contentType: "audio/webm",
             kind: "capture",
             outcome: "done",
             sourceAudioKey: `catalogue/${trackId}/x.webm`,
@@ -4270,7 +4272,7 @@ describe("the consensus check — independent uploads agreeing where the preview
     const journalPath = join(journalDir, `${"c".repeat(64)}.json`);
 
     const run = await withLog(() =>
-      runJournaledCaptureProvider({
+      runJournaledCaptureProvider<Awaited<ReturnType<typeof findVerifiedUpload>>>({
         completion: (accepted) => captureProviderCompletion(accepted, memory),
         finding,
         kind: "capture",

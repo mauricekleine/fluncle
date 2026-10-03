@@ -35,7 +35,7 @@ function jsxExpressionContainer(
   return undefined;
 }
 
-function removalRange(sourceCode: SourceCode, comment: Comment): readonly [number, number] {
+function removalRange(sourceCode: SourceCode, comment: Comment): [number, number] {
   const container = jsxExpressionContainer(sourceCode, comment);
   if (container) {
     return [container.start, container.end];

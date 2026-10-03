@@ -321,8 +321,8 @@ function fft(re: Float64Array, im: Float64Array): void {
     j ^= bit;
 
     if (i < j) {
-      [re[i], re[j]] = [re[j], re[i]];
-      [im[i], im[j]] = [im[j], im[i]];
+      [re[i], re[j]] = [re[j] ?? 0, re[i] ?? 0];
+      [im[i], im[j]] = [im[j] ?? 0, im[i] ?? 0];
     }
   }
 
@@ -336,10 +336,10 @@ function fft(re: Float64Array, im: Float64Array): void {
       let ci = 0;
 
       for (let k = 0; k < len >> 1; k++) {
-        const ar = re[i + k];
-        const ai = im[i + k];
-        const br = re[i + k + (len >> 1)] * cr - im[i + k + (len >> 1)] * ci;
-        const bi = re[i + k + (len >> 1)] * ci + im[i + k + (len >> 1)] * cr;
+        const ar = re[i + k] ?? 0;
+        const ai = im[i + k] ?? 0;
+        const br = (re[i + k + (len >> 1)] ?? 0) * cr - (im[i + k + (len >> 1)] ?? 0) * ci;
+        const bi = (re[i + k + (len >> 1)] ?? 0) * ci + (im[i + k + (len >> 1)] ?? 0) * cr;
         re[i + k] = ar + br;
         im[i + k] = ai + bi;
         re[i + k + (len >> 1)] = ar - br;
@@ -401,9 +401,9 @@ function pearson(a: number[], b: number[]): number {
   let db = 0;
 
   for (let i = 0; i < n; i++) {
-    num += (a[i] - ma) * (b[i] - mb);
-    da += (a[i] - ma) ** 2;
-    db += (b[i] - mb) ** 2;
+    num += ((a[i] ?? 0) - ma) * ((b[i] ?? 0) - mb);
+    da += ((a[i] ?? 0) - ma) ** 2;
+    db += ((b[i] ?? 0) - mb) ** 2;
   }
 
   return num / (Math.sqrt(da * db) || 1);
@@ -434,20 +434,20 @@ function spectral(samples: Float32Array): Spectral {
     const im = new Float64Array(N);
 
     for (let i = 0; i < N; i++) {
-      re[i] = (samples[start + i] ?? 0) * hann[i];
+      re[i] = (samples[start + i] ?? 0) * (hann[i] ?? 0);
     }
 
     fft(re, im);
 
     for (let b = 1; b < N / 2; b++) {
-      avgMag[b] += Math.hypot(re[b], im[b]);
+      avgMag[b] = (avgMag[b] ?? 0) + Math.hypot(re[b] ?? 0, im[b] ?? 0);
     }
 
     frames++;
   }
 
   for (let b = 0; b < avgMag.length; b++) {
-    avgMag[b] /= frames || 1;
+    avgMag[b] = (avgMag[b] ?? 0) / (frames || 1);
   }
 
   let total = 0;
@@ -458,7 +458,7 @@ function spectral(samples: Float32Array): Spectral {
 
   for (let b = 1; b < avgMag.length; b++) {
     const freq = (b * SAMPLE_RATE) / N;
-    const m = avgMag[b];
+    const m = avgMag[b] ?? 0;
     total += m;
     centroidNum += freq * m;
 
@@ -551,7 +551,7 @@ function framePeaks(
   const im = new Float64Array(N);
 
   for (let i = 0; i < N; i++) {
-    re[i] = (samples[start + i] ?? 0) * KEY_HANN[i];
+    re[i] = (samples[start + i] ?? 0) * (KEY_HANN[i] ?? 0);
   }
 
   fft(re, im);
@@ -561,7 +561,7 @@ function framePeaks(
   let maxMag = 0;
 
   for (let b = 1; b < half; b++) {
-    const m = Math.hypot(re[b], im[b]);
+    const m = Math.hypot(re[b] ?? 0, im[b] ?? 0);
     mag[b] = m;
 
     if (m > maxMag) {
@@ -581,7 +581,7 @@ function framePeaks(
   const hiBin = Math.min(half - 2, Math.ceil(opts.maxHz / binHz));
 
   for (let b = loBin; b <= hiBin; b++) {
-    const m = mag[b];
+    const m = mag[b] ?? 0;
 
     if (m < threshold || m < (mag[b - 1] ?? 0) || m < (mag[b + 1] ?? 0)) {
       continue;
@@ -644,7 +644,7 @@ function segmentChroma(
 
         const midi = 69 + 12 * Math.log2(f0 / 440) - tuning;
         const pc = ((Math.round(midi) % 12) + 12) % 12;
-        frame[pc] += amp * opts.harmonicDecay ** (h - 1);
+        frame[pc] = (frame[pc] ?? 0) + amp * opts.harmonicDecay ** (h - 1);
       }
     }
 
@@ -656,7 +656,7 @@ function segmentChroma(
 
     if (sum > 0) {
       for (let i = 0; i < 12; i++) {
-        chroma[i] += (frame[i] ?? 0) / sum;
+        chroma[i] = (chroma[i] ?? 0) + (frame[i] ?? 0) / sum;
       }
     }
   }
@@ -751,7 +751,7 @@ export function estimateKey(
 
   for (const chroma of segments) {
     for (let i = 0; i < 12; i++) {
-      global[i] += chroma[i] ?? 0;
+      global[i] = (global[i] ?? 0) + (chroma[i] ?? 0);
     }
   }
 
@@ -898,9 +898,9 @@ function onsetEnvelope(
 
   for (let h = 1; h < hops; h++) {
     env[h] =
-      Math.max(0, bass[h] - bass[h - 1]) +
-      Math.max(0, mid[h] - mid[h - 1]) +
-      Math.max(0, high[h] - high[h - 1]);
+      Math.max(0, (bass[h] ?? 0) - (bass[h - 1] ?? 0)) +
+      Math.max(0, (mid[h] ?? 0) - (mid[h - 1] ?? 0)) +
+      Math.max(0, (high[h] ?? 0) - (high[h - 1] ?? 0));
   }
 
   return { bass, env, hopSamples, hops };
@@ -911,7 +911,7 @@ function onsetRateOf(samples: Float32Array): number {
   let envMean = 0;
 
   for (let h = 0; h < hops; h++) {
-    envMean += env[h];
+    envMean += env[h] ?? 0;
   }
 
   envMean /= Math.max(1, hops);
@@ -920,12 +920,60 @@ function onsetRateOf(samples: Float32Array): number {
   let onsets = 0;
 
   for (let h = 1; h < env.length - 1; h++) {
-    if (env[h] > onsetThreshold && env[h] >= env[h - 1] && env[h] >= env[h + 1]) {
+    if (
+      (env[h] ?? 0) > onsetThreshold &&
+      (env[h] ?? 0) >= (env[h - 1] ?? 0) &&
+      (env[h] ?? 0) >= (env[h + 1] ?? 0)
+    ) {
       onsets++;
     }
   }
 
   return Number((onsets / Math.max(1e-6, (hops * ONSET_HOP_MS) / 1000)).toFixed(2));
+}
+
+function strongestOnsetWindowStart(env: Float32Array, bass: Float32Array, winHops: number): number {
+  const hops = env.length;
+  if (hops <= winHops) {
+    return 0;
+  }
+  let winStart = 0;
+
+  let envMax = 1e-9;
+  let bassMax = 1e-9;
+
+  for (let h = 0; h < hops; h++) {
+    if ((env[h] ?? 0) > envMax) {
+      envMax = env[h] ?? 0;
+    }
+
+    if ((bass[h] ?? 0) > bassMax) {
+      bassMax = bass[h] ?? 0;
+    }
+  }
+
+  let onsetRun = 0;
+  let bassRun = 0;
+
+  for (let h = 0; h < winHops; h++) {
+    onsetRun += (env[h] ?? 0) / envMax;
+    bassRun += (bass[h] ?? 0) / bassMax;
+  }
+
+  let bestWindowScore = onsetRun + 2 * bassRun;
+
+  for (let h = winHops; h < hops; h++) {
+    onsetRun += ((env[h] ?? 0) - (env[h - winHops] ?? 0)) / envMax;
+    bassRun += ((bass[h] ?? 0) - (bass[h - winHops] ?? 0)) / bassMax;
+    const score = onsetRun + 2 * bassRun;
+
+    if (score > bestWindowScore) {
+      bestWindowScore = score;
+      winStart = h - winHops + 1;
+    }
+  }
+
+  return winStart;
 }
 
 export function estimateBpm(samples: Float32Array): {
@@ -938,48 +986,12 @@ export function estimateBpm(samples: Float32Array): {
   const { bass, env, hopSamples, hops } = onsetEnvelope(samples, BPM_HOP_MS);
 
   const winHops = Math.min(hops, Math.round((BPM_WINDOW_S * 1000) / BPM_HOP_MS));
-  let winStart = 0;
-
-  if (hops > winHops) {
-    let envMax = 1e-9;
-    let bassMax = 1e-9;
-
-    for (let h = 0; h < hops; h++) {
-      if (env[h] > envMax) {
-        envMax = env[h];
-      }
-
-      if (bass[h] > bassMax) {
-        bassMax = bass[h];
-      }
-    }
-
-    let onsetRun = 0;
-    let bassRun = 0;
-
-    for (let h = 0; h < winHops; h++) {
-      onsetRun += env[h] / envMax;
-      bassRun += bass[h] / bassMax;
-    }
-
-    let bestWindowScore = onsetRun + 2 * bassRun;
-
-    for (let h = winHops; h < hops; h++) {
-      onsetRun += (env[h] - env[h - winHops]) / envMax;
-      bassRun += (bass[h] - bass[h - winHops]) / bassMax;
-      const score = onsetRun + 2 * bassRun;
-
-      if (score > bestWindowScore) {
-        bestWindowScore = score;
-        winStart = h - winHops + 1;
-      }
-    }
-  }
+  const winStart = strongestOnsetWindowStart(env, bass, winHops);
 
   const smoothed = new Float32Array(hops);
 
   for (let h = 0; h < hops; h++) {
-    smoothed[h] = ((env[h - 1] ?? 0) + 2 * env[h] + (env[h + 1] ?? 0)) / 4;
+    smoothed[h] = ((env[h - 1] ?? 0) + 2 * (env[h] ?? 0) + (env[h + 1] ?? 0)) / 4;
   }
 
   const win = smoothed.subarray(winStart, winStart + winHops);
@@ -1001,13 +1013,13 @@ export function estimateBpm(samples: Float32Array): {
     let acc = 0;
 
     for (let i = lag; i < centered.length; i++) {
-      acc += centered[i] * centered[i - lag];
+      acc += (centered[i] ?? 0) * (centered[i - lag] ?? 0);
     }
 
     ac[lag] = acc / Math.max(1, centered.length - lag);
   }
 
-  const energy0 = ac[0];
+  const energy0 = ac[0] ?? 0;
 
   if (energy0 <= 0) {
     return { bpm: null, bpmConfidence: 0, onsetRate };
@@ -1020,9 +1032,9 @@ export function estimateBpm(samples: Float32Array): {
       return 0;
     }
 
-    const a = ac[i - 1];
-    const b = ac[i];
-    const c = ac[i + 1];
+    const a = ac[i - 1] ?? 0;
+    const b = ac[i] ?? 0;
+    const c = ac[i + 1] ?? 0;
     const f = x - i;
 
     return b + 0.5 * f * (c - a) + 0.5 * f * f * (a - 2 * b + c);
@@ -1162,6 +1174,10 @@ if (import.meta.main) {
     .sort((a, b) => b.tempo.bpmConfidence - a.tempo.bpmConfidence)
     .find((a) => a.tempo.bpm !== null);
   const bestKey = [...analyses].sort((a, b) => b.key.confidence - a.key.confidence)[0];
+
+  if (!primary || !bestKey) {
+    throw new Error("No decoded analysis is available");
+  }
 
   let outputBpm = bestBpm?.tempo.bpm ?? null;
   let bpmSource = bestBpm?.source ?? null;

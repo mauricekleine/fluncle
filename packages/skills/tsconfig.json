@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "types": ["bun", "node"]
+  },
+  "include": [
+    "**/*.ts",
+    "../../.agents/skills/fluncle-*/scripts/**/*.ts",
+    "**/*.mts",
+    "**/*.cts",
+    "../../.agents/skills/fluncle-*/scripts/**/*.mts",
+    "../../.agents/skills/fluncle-*/scripts/**/*.cts"
+  ]
+}

@@ -49,21 +49,24 @@ function beatTrack(bpm: number, seconds: number): Float32Array {
     for (let i = 0; i < 0.18 * SR && start + i < n; i++) {
       const t = i / SR;
       const f = 120 * Math.exp(-t * 25) + 45;
-      out[start + i] += 0.9 * Math.exp(-t * 18) * Math.sin(2 * Math.PI * f * t);
+      out[start + i] =
+        (out[start + i] ?? 0) + 0.9 * Math.exp(-t * 18) * Math.sin(2 * Math.PI * f * t);
     }
   };
   const addSnare = (t0: number) => {
     const start = Math.round(t0 * SR);
     for (let i = 0; i < 0.12 * SR && start + i < n; i++) {
       const nz = Math.sin(i * 12.9898) * 43_758.5453;
-      out[start + i] += 0.5 * Math.exp((-i / SR) * 30) * ((nz - Math.floor(nz)) * 2 - 1);
+      out[start + i] =
+        (out[start + i] ?? 0) + 0.5 * Math.exp((-i / SR) * 30) * ((nz - Math.floor(nz)) * 2 - 1);
     }
   };
   const addHat = (t0: number) => {
     const start = Math.round(t0 * SR);
     for (let i = 0; i < 0.03 * SR && start + i < n; i++) {
       const nz = Math.sin(i * 78.233 + 1) * 24_634.6345;
-      out[start + i] += 0.25 * Math.exp((-i / SR) * 120) * ((nz - Math.floor(nz)) * 2 - 1);
+      out[start + i] =
+        (out[start + i] ?? 0) + 0.25 * Math.exp((-i / SR) * 120) * ((nz - Math.floor(nz)) * 2 - 1);
     }
   };
 
@@ -112,5 +115,13 @@ describe.skipIf(!hasFfmpeg)("estimateBpm (tempo comb)", () => {
     expect(bpm).toBeNull();
 
     expect(bpmConfidence).toBeLessThan(0.15);
+  });
+});
+
+test("empty audio has no BPM and finite zero confidence", () => {
+  expect(estimateBpm(new Float32Array())).toEqual({
+    bpm: null,
+    bpmConfidence: 0,
+    onsetRate: 0,
   });
 });

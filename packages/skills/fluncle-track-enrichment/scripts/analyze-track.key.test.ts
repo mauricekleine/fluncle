@@ -58,7 +58,7 @@ function addTone(out: Float32Array, midi: number, t0: number, dur: number, amp: 
       s += (partials[h] ?? 0) * Math.sin(2 * Math.PI * f * (h + 1) * t);
     }
 
-    out[start + i] += amp * env * s;
+    out[start + i] = (out[start + i] ?? 0) + amp * env * s;
   }
 }
 
@@ -89,7 +89,8 @@ function addKick(out: Float32Array, t0: number): void {
   for (let i = 0; i < 0.18 * SR && start + i < out.length; i++) {
     const t = i / SR;
     const f = 120 * Math.exp(-t * 25) + 45;
-    out[start + i] += 0.9 * Math.exp(-t * 18) * Math.sin(2 * Math.PI * f * t);
+    out[start + i] =
+      (out[start + i] ?? 0) + 0.9 * Math.exp(-t * 18) * Math.sin(2 * Math.PI * f * t);
   }
 }
 
@@ -97,7 +98,8 @@ function addSnare(out: Float32Array, t0: number): void {
   const start = Math.round(t0 * SR);
   for (let i = 0; i < 0.12 * SR && start + i < out.length; i++) {
     const nz = Math.sin(i * 12.9898) * 43_758.5453;
-    out[start + i] += 0.5 * Math.exp((-i / SR) * 30) * ((nz - Math.floor(nz)) * 2 - 1);
+    out[start + i] =
+      (out[start + i] ?? 0) + 0.5 * Math.exp((-i / SR) * 30) * ((nz - Math.floor(nz)) * 2 - 1);
   }
 }
 
@@ -105,7 +107,8 @@ function addHat(out: Float32Array, t0: number): void {
   const start = Math.round(t0 * SR);
   for (let i = 0; i < 0.03 * SR && start + i < out.length; i++) {
     const nz = Math.sin(i * 78.233 + 1) * 24_634.6345;
-    out[start + i] += 0.22 * Math.exp((-i / SR) * 120) * ((nz - Math.floor(nz)) * 2 - 1);
+    out[start + i] =
+      (out[start + i] ?? 0) + 0.22 * Math.exp((-i / SR) * 120) * ((nz - Math.floor(nz)) * 2 - 1);
   }
 }
 

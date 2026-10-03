@@ -59,7 +59,6 @@ describe("patchedDependencies", () => {
     const shadcn = await Bun.build({
       entrypoints: [join(root, "node_modules", "shadcn", "dist", "index.js")],
       target: "bun",
-      write: false,
     });
     expect(shadcn.success, shadcn.logs.map((log) => log.message).join("\n")).toBe(true);
 

@@ -34,7 +34,7 @@ function extractFunction(source: string, functionName: string): string {
 }
 
 function runCeilingScenario(options: {
-  readonly env?: Readonly<Record<string, string>>;
+  readonly env?: Readonly<Record<string, string | undefined>>;
   readonly liveMemory?: string;
   readonly liveNanoCpus?: string;
   readonly path?: "rollback" | "swap";
@@ -103,7 +103,7 @@ run_container "fluncle-hermes:${options.path === "rollback" ? "old" : "new"}"
   }
 }
 
-function runScriptWithEnv(env: Readonly<Record<string, string>>) {
+function runScriptWithEnv(env: Readonly<Record<string, string | undefined>>) {
   return spawnSync("bash", [PIN_WATCH, "--fingerprint"], {
     encoding: "utf8",
     env: { ...process.env, ...env },

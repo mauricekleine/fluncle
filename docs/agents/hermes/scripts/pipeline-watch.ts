@@ -130,7 +130,7 @@ export function parseIncidentState(value: unknown): IncidentState {
     state[stage] = prior
       ? {
           announcedCause:
-            prior.sentAt.at(-1) && prior.sentAt.at(-1) > (sentAt.at(-1) ?? 0)
+            (prior.sentAt.at(-1) ?? 0) > (sentAt.at(-1) ?? 0)
               ? prior.announcedCause
               : announcedCause,
           cause: prior.openedAt > entry.openedAt ? prior.cause : cause,
@@ -150,13 +150,13 @@ export function parseIncidentState(value: unknown): IncidentState {
 }
 
 export function planIncidents(
-  state: IncidentState,
+  state: unknown,
   verdicts: StageVerdict[],
   nowMs: number,
 ): { alerts: Alert[]; next: IncidentState } {
   const next = parseIncidentState(state);
   const alerts: Alert[] = [];
-  const active = new Set<Stage>();
+  const active = new Set<string>();
   for (const verdict of verdicts) {
     const incident = verdict.state === "stalled" || verdict.state === "measurement_unavailable";
     const key = verdict.stage;

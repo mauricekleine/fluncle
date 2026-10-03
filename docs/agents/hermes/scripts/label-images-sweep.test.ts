@@ -8,8 +8,11 @@ const env = {
   FLUNCLE_API_TOKEN: "agent-test-token",
 };
 
-function workerFetch(responses: object[], bodies: unknown[]): typeof globalThis.fetch {
-  return (async (input: string | URL | Request, init?: RequestInit) => {
+function workerFetch(
+  responses: object[],
+  bodies: unknown[],
+): (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> {
+  return async (input: string | URL | Request, init?: RequestInit) => {
     const inputUrl =
       typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const url = new URL(inputUrl);
@@ -31,7 +34,7 @@ function workerFetch(responses: object[], bodies: unknown[]): typeof globalThis.
     }
 
     return Response.json(response);
-  }) as typeof globalThis.fetch;
+  };
 }
 
 describe("label image box-side Discogs split", () => {
@@ -195,7 +198,7 @@ describe("label image box-side Discogs split", () => {
   test("the Worker's typed due-work deferral pauses the pass without failing it", async () => {
     const summary = await runLabelImagesSweep({
       env,
-      fetch: (async () =>
+      fetch: async () =>
         new Response(
           JSON.stringify({
             code: "due_work_maintenance_pending",
@@ -203,7 +206,7 @@ describe("label image box-side Discogs split", () => {
             ok: false,
           }),
           { status: 503 },
-        )) as typeof globalThis.fetch,
+        ),
     });
 
     expect(summary).toMatchObject({
@@ -221,10 +224,10 @@ describe("label image box-side Discogs split", () => {
   test("a generic Worker 500 stays a failed pass", async () => {
     const summary = await runLabelImagesSweep({
       env,
-      fetch: (async () =>
+      fetch: async () =>
         new Response(JSON.stringify({ code: "error", message: "Internal error", ok: false }), {
           status: 500,
-        })) as typeof globalThis.fetch,
+        }),
     });
 
     expect(summary).toMatchObject({ errors: 1, ok: false });

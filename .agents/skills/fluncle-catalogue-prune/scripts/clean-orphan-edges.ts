@@ -14,7 +14,7 @@ import {
 
 export type OrphanByArtist = { artist_id: string; name: string; slug: string; edges: number };
 
-const text = (v: Value): string => (typeof v === "string" ? v : "");
+const text = (v: Value | undefined): string => (typeof v === "string" ? v : "");
 
 export async function countOrphanEdges(db: Client): Promise<number> {
   const result = await db.execute(ORPHAN_EDGE_COUNT_SQL);

@@ -290,6 +290,18 @@
         "typescript": "catalog:",
       },
     },
+    "packages/tooling": {
+      "name": "@fluncle/tooling",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@fluncle/contracts": "workspace:*",
+        "@fluncle/test-support": "workspace:*",
+        "@fluncle/web": "workspace:*",
+        "@types/bun": "catalog:",
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "packages/ui": {
       "name": "@fluncle/ui",
       "version": "0.1.0",
@@ -865,6 +877,8 @@
     "@fluncle/test-support": ["@fluncle/test-support@workspace:packages/test-support"],
 
     "@fluncle/tokens": ["@fluncle/tokens@workspace:packages/tokens"],
+
+    "@fluncle/tooling": ["@fluncle/tooling@workspace:packages/tooling"],
 
     "@fluncle/ui": ["@fluncle/ui@workspace:packages/ui"],
 
