@@ -6,7 +6,7 @@ still has placeholder sections.
 
 ## What to do
 
-1. **Read the deepsec skill.** After the repository root `bun install`, the file is at
+1. **Read the deepsec skill.** After `pnpm install`, the file is at
    `node_modules/deepsec/SKILL.md`. It maps every doc topic to a file
    under `node_modules/deepsec/dist/docs/`. Read `getting-started.md`,
    `configuration.md`, and `writing-matchers.md` (skim the rest).
@@ -48,8 +48,8 @@ still has placeholder sections.
 The user will run:
 
 ```bash
-bunx deepsec scan    --project-id fluncle
-bunx deepsec process --project-id fluncle
+pnpm deepsec scan    --project-id fluncle
+pnpm deepsec process --project-id fluncle
 ```
 
 You can delete this file once setup is complete.

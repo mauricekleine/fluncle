@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["bun", "node", "react"]
+  },
+  "include": ["*.ts", "*.mts", "*.cts", "scripts/**/*.ts", "scripts/**/*.mts", "scripts/**/*.cts"],
+  "exclude": ["raycast-env.d.ts", "node_modules", "dist"]
+}

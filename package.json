@@ -6,8 +6,7 @@
   "workspaces": {
     "packages": [
       "apps/*",
-      "packages/*",
-      ".deepsec"
+      "packages/*"
     ],
     "catalog": {
       "@effect/tsgo": "~0.47.2",

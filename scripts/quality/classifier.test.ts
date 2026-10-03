@@ -108,12 +108,10 @@ describe("dependency-closure classifier", () => {
     );
   });
 
-  test("tooling follows its web imports and the scanner participates in the full backstop", () => {
+  test("tooling follows its web imports", () => {
     expect(classifyPaths(["apps/web/scripts/derive-device-db.ts"]).packages).toContain(
       "@fluncle/tooling",
     );
-    expect(classifyPaths(["docs/search.md"]).packages).not.toContain("deepsec-workspace");
-    expect(classifyPaths([], { forceFull: true }).packages).toContain("deepsec-workspace");
   });
 
   test("label-triage scripts select Python without forcing the full matrix", () => {

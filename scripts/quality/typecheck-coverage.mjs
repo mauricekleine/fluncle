@@ -14,6 +14,11 @@ const EXCLUSIONS = [
     reason: "Vendored documentation examples, never built, imported, or executed by Fluncle.",
   },
   {
+    path: ".deepsec/deepsec.config.ts",
+    reason:
+      "Scanner configuration for the standalone pnpm project; its dependencies stay outside the root install.",
+  },
+  {
     path: "apps/raycast/raycast-env.d.ts",
     reason: "Raycast-generated declarations consumed by its source program when referenced.",
   },
