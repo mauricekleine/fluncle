@@ -198,6 +198,7 @@ const RETIRED_SERVICE_IDS = new Set([
   "cron.apple-releases",
   "cron.artist-follow",
   "cron.clip-drip",
+  "cron.label-releases",
   ...dormantSurfaces().map((surface) => surface.name),
 ]);
 
