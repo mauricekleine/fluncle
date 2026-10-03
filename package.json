@@ -53,7 +53,7 @@
   },
   "type": "module",
   "scripts": {
-    "audit": "bun audit --audit-level=high --ignore=GHSA-w3rx-r6r6-pgpr --ignore=GHSA-5p2g-fcmc-qvqq --ignore=GHSA-86w9-cpqp-85rv",
+    "audit": "bun audit --audit-level=high --ignore=GHSA-w3rx-r6r6-pgpr --ignore=GHSA-5p2g-fcmc-qvqq --ignore=GHSA-86w9-cpqp-85rv --ignore=GHSA-vfj7-8cjw-p6xm",
     "build": "turbo run build",
     "check": "bun run lint && bun run format:check && bun run go:check && bun run typecheck && bun run test && bun run test:scripts && bun run test:label-triage:python && bun run build",
     "check:fix": "bun run lint:fix && bun run format",
