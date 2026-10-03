@@ -317,7 +317,7 @@ export const listUnverifiedCaptures = oc
   })
   .input(
     z.object({
-      count: z.coerce.boolean().default(false),
+      count: z.enum(["true", "false"]).optional(),
       limit: z.coerce.number().int().min(1).max(200).default(50),
     }),
   )

@@ -49,23 +49,6 @@ export function probeFps(videoPath: string): number {
   return num / den;
 }
 
-export function probeDurationSec(videoPath: string): number {
-  const result = spawnSync("ffprobe", [
-    "-v",
-    "error",
-    "-show_entries",
-    "format=duration",
-    "-of",
-    "csv=p=0",
-    videoPath,
-  ]);
-  if (result.status !== 0 || !result.stdout) {
-    return 0;
-  }
-  const dur = Number.parseFloat(result.stdout.toString().trim());
-  return Number.isFinite(dur) && dur > 0 ? dur : 0;
-}
-
 export function extractGrayFrames(
   videoPath: string,
   opts: { width?: number; height?: number; probeFps?: boolean } = {},

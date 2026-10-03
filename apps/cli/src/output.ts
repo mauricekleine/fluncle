@@ -2,8 +2,6 @@ import { writeSync } from "node:fs";
 
 import { type ApiFailure } from "@fluncle/contracts";
 
-export type { ApiFailure as JsonFailure };
-
 const EAGAIN_WAIT = new Int32Array(new SharedArrayBuffer(4));
 
 export function writeStdoutSync(text: string): void {

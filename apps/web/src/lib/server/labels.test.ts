@@ -16,7 +16,7 @@ import {
   settlePublicProjectionTestState,
 } from "../../../scripts/lib/public-projection-test-state";
 import { createIntegrationDb } from "./integration-db";
-import { labelRuleCounts } from "../../routes/admin/-artist-rule-reads";
+import { labelRuleCounts } from "./artist-rule-reads";
 import { bestAlbumCoverUrl } from "../media";
 import { DUE_WORK_SOURCE_REPAIR_KIND } from "./due-work";
 import { fanOutDueWorkSourceRepairs } from "./due-work-source-repair";

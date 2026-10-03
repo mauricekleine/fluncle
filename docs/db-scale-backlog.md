@@ -205,7 +205,7 @@ The consumer half shipped in ONE PR because the rewrite alone is plan-neutral (a
 `tier=design · artists, artist_rules · T2`
 **STATUS: WATCH — small by construction today; re-measure when the rule set grows past the operator's hand-authored scale.**
 
-- loc: apps/web/src/routes/admin/-artist-rule-reads.ts (`searchRuleArtists`, `ruledLabelCounts`)
+- loc: apps/web/src/lib/server/artist-rule-reads.ts (`searchRuleArtists`, `ruledLabelCounts`)
 - shape: `searchRuleArtists` filters `artists` with a leading-wildcard `like '%…%'` (unsargable → full scan) on every settled keystroke in the `/admin/labels` rules dialog; it mirrors the `/admin/artists` board search that has always done this. `ruledLabelCounts` is a whole-table fold over `artist_rules` joined to `labels`, and it sits on the `/admin/labels` loader's critical path.
 - impact: LOW — `artist_rules` is operator-authored (≤100 rules per label, a handful of labels), and the typeahead is debounced, capped at 8 rows, and behind a dialog nobody opens in bulk. Both are `/admin`-only, so no public read pays for them.
 - fix (when it matters): an FTS5 or prefix-anchored path for the artist typeahead (shared with the board search, which has the same shape), and a maintained per-label rule count on `labels` if the fold ever shows up. Neither is worth a column today.

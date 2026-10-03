@@ -73,8 +73,10 @@ export const createLogbookEntry = oc
   })
   .input(
     z.looseObject({
+      body: z.unknown().optional(),
       promptVersion: z.number().int().min(0).optional(),
       sector: z.string(),
+      title: z.unknown().optional(),
     }),
   )
   .output(LogbookEntryEnvelope);
@@ -87,7 +89,13 @@ export const updateLogbookEntry = oc
     summary: "Create or overwrite a sector-day's logbook entry (operator)",
     tags: ["Admin"],
   })
-  .input(z.looseObject({ sector: z.string() }))
+  .input(
+    z.looseObject({
+      body: z.unknown().optional(),
+      sector: z.string(),
+      title: z.unknown().optional(),
+    }),
+  )
   .output(LogbookEntryEnvelope);
 
 export const adminLogbookContract = {

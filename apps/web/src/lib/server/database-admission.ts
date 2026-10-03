@@ -1166,18 +1166,6 @@ async function readAdmissionSettings(
   };
 }
 
-export async function isDatabaseAdmissionEnforcedFor(client: AdmissionClient): Promise<boolean> {
-  try {
-    const setting = await client.execute({
-      args: [DATABASE_ADMISSION_ENFORCED_KEY],
-      sql: `select value from settings where key = ? limit 1`,
-    });
-    return setting.rows[0]?.value === "true";
-  } catch {
-    return false;
-  }
-}
-
 function primaryLeaseStore(
   primary: AdmissionClient,
   tokenFloors: Readonly<Record<DatabaseAdmissionLane, number>> = ZERO_TOKEN_FLOORS,

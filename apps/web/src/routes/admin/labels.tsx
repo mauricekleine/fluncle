@@ -53,6 +53,7 @@ import { Input } from "@fluncle/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
 import { albumCoverAtSize } from "@/lib/media";
 import { findingsCount, formatDate } from "@/lib/format";
+import { isMbid } from "@/lib/identity-key";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listCrawlHolds } from "@/lib/server/crawl-plausibility";
 import {
@@ -64,7 +65,6 @@ import {
   listLabelsPage,
 } from "@/lib/server/labels";
 import { useDebounced } from "@/lib/use-debounced";
-import { isMbid } from "./-artist-rule-identity";
 import {
   type LabelRuleCounts,
   type RuleArtistMatch,
@@ -72,7 +72,7 @@ import {
   queuedReleaseCounts,
   ruledLabelCounts,
   searchRuleArtists,
-} from "./-artist-rule-reads";
+} from "@/lib/server/artist-rule-reads";
 
 const LABELS_KEY = ["admin", "labels"] as const;
 const ALIASES_KEY = [...LABELS_KEY, "aliases"] as const;

@@ -50,17 +50,6 @@ export function setSavedTracksUser(userId: string | undefined): void {
   signedInUser = userId;
 }
 
-export function savedTracksUser(): string | undefined {
-  return signedInUser;
-}
-
-export function resetSavedTracksSync(): void {
-  signedInUser = undefined;
-  session += 1;
-  csrf = undefined;
-  mergedUsers.clear();
-}
-
 function csrfToken(): Promise<string | undefined> {
   csrf ??= fetchCsrfToken({ onLapsedSession: "ignore" })
     .then((token) => token || undefined)

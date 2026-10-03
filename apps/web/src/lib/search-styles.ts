@@ -20,8 +20,6 @@ export const SEARCH_STYLES = [
   },
 ] as const satisfies readonly SearchStyle[];
 
-export type SearchStyleSlug = (typeof SEARCH_STYLES)[number]["slug"];
-
 export const STYLE_ANCHORS_MAX = 8;
 export const STYLE_ANCHORS_MIN = 3;
 

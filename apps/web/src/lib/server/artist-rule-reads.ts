@@ -1,6 +1,6 @@
-import { getDb, typedRows } from "@/lib/server/db";
-import { type ArtistRuleVerdict, type LabelArtistRuleVerdict } from "@/lib/server/artist-rules";
-import { isMbid } from "./-artist-rule-identity";
+import { isMbid } from "../identity-key";
+import { type ArtistRuleVerdict, type LabelArtistRuleVerdict } from "./artist-rules";
+import { getDb, typedRows } from "./db";
 
 export type LabelRuleCounts = { allow: number; block: number };
 

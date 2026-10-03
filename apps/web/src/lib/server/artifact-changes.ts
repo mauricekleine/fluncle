@@ -859,51 +859,6 @@ export function buildArtifactChangeInsertStatement(input: ArtifactChangeInput): 
   return buildPreparedArtifactChangeInsertStatement(validateArtifactChange(input));
 }
 
-export function buildSonarTrackArtifactChange(input: {
-  createdAt?: string;
-  operation: ArtifactOperation;
-  payload: unknown;
-  producer: string;
-  revision: number;
-  trackId: string;
-  vector?: ArrayBuffer | ArrayBufferView | null;
-}): InStatement {
-  return buildArtifactChangeInsertStatement({
-    ...artifactContract("sonar.track"),
-    createdAt: input.createdAt,
-    operation: input.operation,
-    payload: input.payload,
-    payloadBlob: input.vector,
-    producer: input.producer,
-    revision: input.revision,
-    subjectId: input.trackId,
-    subjectType: "track",
-  });
-}
-
-export function buildDeviceArtifactChange(input: {
-  createdAt?: string;
-  operation: ArtifactOperation;
-  payload: unknown;
-  producer: string;
-  revision: number;
-  stream: Exclude<ArtifactStream, "sonar.track">;
-  subjectId: string;
-}): InStatement {
-  const definition = ARTIFACT_STREAM_REGISTRY[input.stream];
-
-  return buildArtifactChangeInsertStatement({
-    ...artifactContract(input.stream),
-    createdAt: input.createdAt,
-    operation: input.operation,
-    payload: input.payload,
-    producer: input.producer,
-    revision: input.revision,
-    subjectId: input.subjectId,
-    subjectType: definition.subjectType,
-  });
-}
-
 function artifactRowBlob(row: ArtifactChangeRow): Uint8Array | null {
   return row.payload_blob === null ? null : bytesOf(row.payload_blob);
 }

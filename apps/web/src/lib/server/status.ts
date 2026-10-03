@@ -392,10 +392,6 @@ async function writeHealthSnapshot(
   });
 }
 
-export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[]): Promise<void> {
-  await recordHealthSnapshotFor(await getDb(), at, checks);
-}
-
 export async function recordHealthSnapshotFor(
   db: Client,
   at: string,
