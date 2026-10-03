@@ -163,7 +163,7 @@ export function adminCatalogueHandlers(os: Implementer) {
       try {
         const [tracks, queued] = await Promise.all([
           listUnverifiedCaptures(input.limit),
-          input.count ? countUnverifiedCaptures() : Promise.resolve(undefined),
+          input.count === "true" ? countUnverifiedCaptures() : Promise.resolve(undefined),
         ]);
 
         return {

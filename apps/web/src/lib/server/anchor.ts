@@ -79,8 +79,6 @@ export type AnchorVerification =
 
 export type AnchorGateVerification = Exclude<AnchorVerification, "operator" | "publish">;
 
-export type AnchorSource = AnchorReviewSource | "publish";
-
 type VerifiableCandidate = {
   artists: string[];
   durationMs?: null | number;

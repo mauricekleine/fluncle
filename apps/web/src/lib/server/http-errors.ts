@@ -24,14 +24,6 @@ export function requireParam(value: string | undefined, name: string): string {
   return value;
 }
 
-export async function parseJsonBody(request: Request): Promise<Response | { json: unknown }> {
-  try {
-    return { json: await request.json() };
-  } catch {
-    return jsonError(400, "invalid_request", "Malformed JSON body");
-  }
-}
-
 export function parseEditorialNote(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;

@@ -208,7 +208,13 @@ export const addArtistSocial = oc
     summary: "Add or replace an artist's social link by platform",
     tags: ["Admin"],
   })
-  .input(z.looseObject({ artistId: z.string() }))
+  .input(
+    z.looseObject({
+      artistId: z.string(),
+      platform: z.unknown().optional(),
+      url: z.unknown().optional(),
+    }),
+  )
   .output(ArtistSocialEnvelope);
 
 export const reviewArtistSocial = oc
@@ -252,7 +258,7 @@ export const updateArtistSocial = oc
     summary: "Correct + approve an artist social's URL inline (operator)",
     tags: ["Admin"],
   })
-  .input(z.looseObject({ socialId: z.string() }))
+  .input(z.looseObject({ socialId: z.string(), url: z.unknown().optional() }))
   .output(ArtistSocialEnvelope);
 
 const DescribeEntityBodySchema = z.looseObject({

@@ -332,7 +332,7 @@ export const DOMINANT_REGRESSION_INVENTORY = freezeInventory([
         "Database admission is default-off and shadow observation preserves the existing timer compatibility path until enforcement is armed.",
       source: {
         file: "apps/web/src/lib/server/database-admission.ts",
-        marker: "isDatabaseAdmissionEnforcedFor",
+        marker: "readAdmissionSettings",
       },
       test: {
         file: "apps/web/src/lib/server/database-admission-shadow.integration.test.ts",

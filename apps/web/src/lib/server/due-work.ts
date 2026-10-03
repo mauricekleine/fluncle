@@ -907,12 +907,9 @@ export async function hasDueScheduledWork(
   return result.rows.length > 0;
 }
 
-function reapStatement(workKind: string | undefined, now: string, limit: number): InStatement {
-  const kindClause = workKind === undefined ? "" : " and work_kind = ?";
-  const args = workKind === undefined ? [now, now, now, limit] : [now, now, workKind, now, limit];
-
+function reapStatement(workKind: string, now: string, limit: number): InStatement {
   return {
-    args,
+    args: [now, now, workKind, now, limit],
     sql: `update due_work
       set state = case when next_due_at <= ? then 'ready' else 'scheduled' end,
           claim_token = null,
@@ -922,22 +919,11 @@ function reapStatement(workKind: string | undefined, now: string, limit: number)
       where (work_kind, subject_type, subject_id) in (
         select work_kind, subject_type, subject_id
         from due_work
-        where state = 'leased'${kindClause} and claim_expires_at <= ?
+        where state = 'leased' and work_kind = ? and claim_expires_at <= ?
         order by claim_expires_at, work_kind, subject_id
         limit ?
       )`,
   };
-}
-
-export async function reapExpiredDueWorkLeases(
-  client: DueWorkClient,
-  options: { limit?: number; now?: () => Date; workKind?: string } = {},
-): Promise<number> {
-  const limit = options.limit ?? 100;
-  assertLimit(limit);
-  const now = nowIso(options.now);
-  const result = await client.execute(reapStatement(options.workKind, now, limit));
-  return result.rowsAffected;
 }
 
 export async function claimDueWork<WorkKind extends string>(

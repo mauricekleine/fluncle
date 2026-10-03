@@ -2,7 +2,6 @@ import { type Camelot, parseKey, toCamelot } from "../key-camelot";
 import { cosineSimilarity, readEmbeddingBlob } from "./embedding";
 
 export const MIX_WEIGHTS = { bpm: 0.15, key: 0.5, sonic: 0.35 } as const;
-export const MIX_WEIGHTS_VERSION = 1;
 
 export const BPM_BAND = { max: 185, min: 160 } as const;
 

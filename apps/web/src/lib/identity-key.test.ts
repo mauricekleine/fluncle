@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicalIdentityKey,
+  isMbid,
   normalizeDeezerKey,
   normalizeIsrcKey,
   normalizeMbidKey,
@@ -150,5 +151,18 @@ describe("the identifier keys", () => {
       "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
     );
     expect(normalizeMbidKey("nope")).toBeUndefined();
+  });
+});
+
+describe("isMbid", () => {
+  it("accepts a bare MusicBrainz id in either case, with surrounding space", () => {
+    expect(isMbid("9b2e6f3a-1c4d-4e5f-8a7b-0c1d2e3f4a5b")).toBe(true);
+    expect(isMbid("  9B2E6F3A-1C4D-4E5F-8A7B-0C1D2E3F4A5B ")).toBe(true);
+  });
+
+  it("refuses a prefixed id, a truncated id, and a name", () => {
+    expect(isMbid("mb_9b2e6f3a-1c4d-4e5f-8a7b-0c1d2e3f4a5b")).toBe(false);
+    expect(isMbid("9b2e6f3a-1c4d-4e5f-8a7b-0c1d2e3f4a5")).toBe(false);
+    expect(isMbid("Netsky")).toBe(false);
   });
 });

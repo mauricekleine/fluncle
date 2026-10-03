@@ -8,6 +8,10 @@ export function normalizeIsrcKey(raw: string): string | undefined {
   return ISRC_PATTERN.test(compact) ? compact : undefined;
 }
 
+export function isMbid(value: string): boolean {
+  return MBID_PATTERN.test(value.trim().toLowerCase());
+}
+
 export function normalizeMbidKey(raw: string): string | undefined {
   const compact = raw.trim().toLowerCase().replace(/^mb_/, "");
 

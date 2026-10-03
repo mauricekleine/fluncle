@@ -1145,7 +1145,7 @@
         "coordinates": [
           {
             "file": "apps/web/src/lib/server/due-work.ts",
-            "marker": "reapExpiredDueWorkLeases"
+            "marker": "reapStatement"
           }
         ],
         "query": "Lease reaper filters leased rows by expiry and orders claim_expires_at, work_kind, subject_id."
@@ -1158,7 +1158,7 @@
           "consumer": [
             {
               "file": "apps/web/src/lib/server/due-work.ts",
-              "marker": "reapExpiredDueWorkLeases"
+              "marker": "reapStatement"
             }
           ]
         }

@@ -86,7 +86,7 @@ import {
 } from "@/lib/server/artists";
 import { useDebounced } from "@/lib/use-debounced";
 import { cn } from "@/lib/utils";
-import { type ArtistRuleState, artistRuleStates } from "./-artist-rule-reads";
+import { type ArtistRuleState, artistRuleStates } from "@/lib/server/artist-rule-reads";
 
 const ARTISTS_PAGE_KEY = ["admin", "artists", "page"] as const;
 const ARTISTS_FRESH_KEY = ["admin", "artists", "fresh"] as const;
