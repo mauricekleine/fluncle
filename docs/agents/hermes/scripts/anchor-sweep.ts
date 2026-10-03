@@ -516,6 +516,7 @@ export type AnchorSummary = {
     | "database_admission"
     | "apify_disabled"
     | "apify_budget_spent"
+    | "free_rungs_only"
     | "awaiting_free_ask"
     | "awaiting_paid_result"
     | "no_capable_rung"
@@ -725,9 +726,9 @@ export function spotifySearchPaceMs(
   return elapsed >= minIntervalMs ? 0 : minIntervalMs - elapsed;
 }
 
-export function chunk<T>(items: T[], size: number): T[][] {
+export function chunk<T>(items: readonly T[], size: number): T[][] {
   if (size <= 0) {
-    return [items];
+    return [[...items]];
   }
 
   const out: T[][] = [];
@@ -1517,6 +1518,9 @@ async function runAnchorTickBatched(input: {
         recordFailure(summary);
         continue;
       }
+      if (outcome.status !== "done") {
+        continue;
+      }
       const verdict = outcome.verdict;
       apifyEnabled = verdict.apifyEnabled ?? apifyEnabled;
       spotifySearchEnabled = verdict.spotifySearchEnabled ?? spotifySearchEnabled;
@@ -1865,7 +1869,9 @@ async function fetchAnchorQueue(
   };
 }
 
-export async function readAnchorIsrcDue(fetcher?: typeof fetch): Promise<number> {
+export async function readAnchorIsrcDue(
+  fetcher?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+): Promise<number> {
   const path = "/api/v1/admin/tracks/work?kind=anchor&limit=1&count=false&paidMode=unasked";
   const response = fetcher
     ? await fetcher(`${API_BASE_URL}${path}`, {

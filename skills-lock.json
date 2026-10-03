@@ -25,7 +25,7 @@
     "fluncle-catalogue-prune": {
       "source": "./packages/skills/fluncle-catalogue-prune",
       "sourceType": "local",
-      "computedHash": "0833170e15fb4d1552fb86bde2ef68a8b2c5960c406ecc0f9d4a77c8083d903c"
+      "computedHash": "2ea098e9d4b5bc93b5c2a68cc15256d05ad91e94af4c5199253a80258878fd7d"
     },
     "fluncle-embed-batch": {
       "source": "./packages/skills/fluncle-embed-batch",
@@ -60,7 +60,7 @@
     "fluncle-maintenance": {
       "source": "./packages/skills/fluncle-maintenance",
       "sourceType": "local",
-      "computedHash": "aae9da18e4725f3a0a6e06a45c7c0c74626ee1af61551bd9849d8586e5b333bb"
+      "computedHash": "eda8c118e448fe4f76004f4258d4eb89099197100b213516212fd12f41261208"
     },
     "fluncle-mixtapes": {
       "source": "./packages/skills/fluncle-mixtapes",
@@ -100,7 +100,7 @@
     "fluncle-track-enrichment": {
       "source": "./packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "771fdca665e7cebd73cd274eb17c60202b4a16fc8bb14e5f0d3b0250f26bdac8"
+      "computedHash": "f13e626f2de5ddcf5428ecb52071226d31e6f70844ac6dd9e20372e54a7bc6cd"
     },
     "fluncle-video": {
       "source": "./packages/skills/fluncle-video",

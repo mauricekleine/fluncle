@@ -136,7 +136,7 @@ export type MusicbrainzFetchResult = {
 };
 
 export type MusicbrainzFetchOptions = {
-  fetch?: typeof globalThis.fetch;
+  fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   intervalMs?: number;
   onAttempt?: (attempt: { outcome: string; url: string }) => void;
   stateDir?: string;

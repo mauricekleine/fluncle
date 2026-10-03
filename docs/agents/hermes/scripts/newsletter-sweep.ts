@@ -378,7 +378,7 @@ const AUTHORED_SCHEMA = JSON.stringify({
 
 function extractJson(result: string): string {
   const fenced = result.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const body = fenced ? fenced[1] : result;
+  const body = fenced?.[1] ?? result;
   const start = body.indexOf("{");
   const end = body.lastIndexOf("}");
 

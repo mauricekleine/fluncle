@@ -65,7 +65,7 @@ export function dot(a: Vector, b: Vector): number {
   let sum = 0;
 
   for (let i = 0; i < a.length; i += 1) {
-    sum += a[i] * b[i];
+    sum += (a[i] ?? 0) * (b[i] ?? 0);
   }
 
   return sum;
@@ -84,16 +84,17 @@ export function l2normalize(v: Vector): Vector {
 }
 
 export function meanVector(vectors: Vector[]): Vector | null {
-  if (vectors.length === 0) {
+  const first = vectors[0];
+  if (!first) {
     return null;
   }
 
-  const dims = vectors[0].length;
+  const dims = first.length;
   const sum = Array.from({ length: dims }, () => 0);
 
   for (const vector of vectors) {
     for (let i = 0; i < dims; i += 1) {
-      sum[i] += vector[i] ?? 0;
+      sum[i] = (sum[i] ?? 0) + (vector[i] ?? 0);
     }
   }
 
@@ -263,15 +264,16 @@ export function planSplit(
   members: Finding[],
   childCentroids: Vector[],
 ): { newChild: Vector; parentChild: Vector } | null {
-  if (childCentroids.length !== 2) {
+  const [first, second] = childCentroids;
+  if (childCentroids.length !== 2 || !first || !second) {
     return null;
   }
 
   const galaxies: Galaxy[] = [
-    { centroid: childCentroids[0], id: "0" },
-    { centroid: childCentroids[1], id: "1" },
+    { centroid: first, id: "0" },
+    { centroid: second, id: "1" },
   ];
-  const sizes = [0, 0];
+  const sizes: [number, number] = [0, 0];
 
   for (const member of members) {
     const nearest = nearestGalaxyId(member.embedding, galaxies);
@@ -286,8 +288,8 @@ export function planSplit(
   const largerIsFirst = sizes[0] >= sizes[1];
 
   return {
-    newChild: largerIsFirst ? childCentroids[1] : childCentroids[0],
-    parentChild: largerIsFirst ? childCentroids[0] : childCentroids[1],
+    newChild: largerIsFirst ? second : first,
+    parentChild: largerIsFirst ? first : second,
   };
 }
 

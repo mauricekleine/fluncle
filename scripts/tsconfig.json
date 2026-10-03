@@ -1,0 +1,21 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "allowImportingTsExtensions": true,
+    "types": ["bun", "node"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.mts",
+    "**/*.cts",
+    "../.claude/hooks/**/*.ts",
+    "../tools/oxlint/no-comments/**/*.ts",
+    "../.claude/hooks/**/*.mts",
+    "../.claude/hooks/**/*.cts",
+    "../.codex/hooks/**/*.ts",
+    "../.codex/hooks/**/*.mts",
+    "../.codex/hooks/**/*.cts"
+  ]
+}

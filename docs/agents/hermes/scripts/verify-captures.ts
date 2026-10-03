@@ -418,7 +418,9 @@ export function fpcalcAvailable(bin: string = FPCALC_BIN): boolean {
   }
 }
 
-export function fpcalcMissingSummary(): VerifySummary & { reason: "fpcalc_missing" } {
+export function fpcalcMissingSummary(): Omit<VerifySummary, "reason"> & {
+  reason: "fpcalc_missing";
+} {
   return {
     checked: 0,
     error: null,

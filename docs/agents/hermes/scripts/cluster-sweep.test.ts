@@ -41,7 +41,7 @@ describe("vector primitives", () => {
 
   test("l2normalize yields a unit vector and never divides by zero", () => {
     const n = l2normalize([3, 4]);
-    expect(Math.hypot(n[0], n[1])).toBeCloseTo(1, 10);
+    expect(Math.hypot(...n)).toBeCloseTo(1, 10);
     expect(l2normalize([0, 0])).toEqual([0, 0]);
   });
 

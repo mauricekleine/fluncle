@@ -578,14 +578,15 @@ export function buildCaptureSearchLadder(
   const primaryQuery = buildSearchQuery(finding, 0);
   const fallbackQuery = normalizeSearchQuery(buildSearchQuery(finding, 1));
 
-  return [
+  const ladder: CaptureSearchRung[] = [
     { query: primaryQuery, source: "youtube" },
     { query: primaryQuery, source: "music" },
     ...(fallbackQuery && fallbackQuery !== primaryQuery
       ? [{ query: fallbackQuery, source: "music" as const }]
       : []),
     { query: primaryQuery, source: "soundcloud" },
-  ].slice(0, Math.max(1, queryVariants));
+  ];
+  return ladder.slice(0, Math.max(1, queryVariants));
 }
 
 export function buildCaptureSearchTarget(source: CaptureSearchSource, query: string): string[] {
@@ -1005,7 +1006,7 @@ async function r2Put(key: string, body: Uint8Array, contentType: string): Promis
       url,
     });
     const res = await fetch(url, {
-      body,
+      body: new Uint8Array(body).buffer,
       headers: { ...headers, "content-type": contentType },
       method: "PUT",
     });
@@ -1882,7 +1883,7 @@ function parsedCommitDisposition(
 }
 
 function reconcileReceipt(
-  progress: CaptureProgress,
+  progress: CaptureResultProgress,
   path: string,
   ports: CaptureProgressPorts,
 ): ReceiptDisposition {
@@ -2359,7 +2360,7 @@ class PendingCaptureCommitError extends Error {
 }
 
 class FailedCaptureCommitError extends Error {
-  constructor(disposition: "failed" | "rejected") {
+  constructor(disposition: "deferred" | "failed" | "rejected") {
     super(`capture reconciliation ${disposition}`);
   }
 }
@@ -3115,7 +3116,7 @@ async function captureFinding(
   };
 
   try {
-    const providerRun = await runJournaledCaptureProvider({
+    const providerRun = await runJournaledCaptureProvider<VerifiedUpload | null>({
       completion: (accepted) => captureProviderCompletion(accepted, memory),
       finding,
       kind: "capture",
@@ -3511,7 +3512,7 @@ async function proveTrackProvenance(
   };
 
   try {
-    const providerRun = await runJournaledCaptureProvider({
+    const providerRun = await runJournaledCaptureProvider<VerifiedUpload | null>({
       completion: (accepted) => captureProviderCompletion(accepted, memory),
       finding: row,
       kind: "youtube-provenance",
@@ -3611,7 +3612,7 @@ async function runProvenancePhase(
   meter: BotChallengeMeter,
   protectedTrackIds: Set<string> = new Set(),
 ): Promise<{ counts: ProvenanceCounts; ladder: ProvenanceLadderCounts }> {
-  const counts: ProvenanceCounts = {
+  const counts = {
     failed: 0,
     found: 0,
     none: 0,
@@ -3619,7 +3620,7 @@ async function runProvenancePhase(
     writesConfirmed: 0,
     writesFailed: 0,
     writesPending: 0,
-  };
+  } satisfies ProvenanceCounts;
   const ladder = createLadderCounts();
   const budget = splitProvenanceBudget(PROVENANCE_LIMIT, PROVENANCE_CATALOGUE_LIMIT);
 
@@ -4306,7 +4307,7 @@ async function main(): Promise<void> {
   }
 
   const currentProvenance = await runProvenancePhase(botChallenges, protectedTrackIds).catch(
-    (error: unknown) => {
+    (error: unknown): { counts: ProvenanceCounts; ladder: ProvenanceLadderCounts } => {
       log(`provenance phase failed: ${error instanceof Error ? error.message : String(error)}`);
 
       return { counts: { failed: 0, found: 0, none: 0 }, ladder: createLadderCounts() };
@@ -4324,11 +4325,13 @@ async function main(): Promise<void> {
     writesPending:
       (currentProvenance.counts.writesPending ?? 0) + (recoveredProvenance.writesPending ?? 0),
   };
-  const currentReverdict = await runReverdictPhase(protectedTrackIds).catch((error: unknown) => {
-    log(`re-verdict phase failed: ${error instanceof Error ? error.message : String(error)}`);
+  const currentReverdict = await runReverdictPhase(protectedTrackIds).catch(
+    (error: unknown): ReverdictCounts => {
+      log(`re-verdict phase failed: ${error instanceof Error ? error.message : String(error)}`);
 
-    return { asked: 0, failed: 0 };
-  });
+      return { asked: 0, failed: 0 };
+    },
+  );
   const reverdict = {
     asked: currentReverdict.asked + recoveredReverdict.asked,
     failed: currentReverdict.failed + recoveredReverdict.failed,

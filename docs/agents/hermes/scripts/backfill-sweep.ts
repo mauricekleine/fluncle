@@ -172,7 +172,7 @@ export type BackfillAdmissionMode = "inherited-lease" | "phased";
 export type BackfillDatabaseWindows = {
   cli: (args: string[]) => Promise<BackfillCliResult>;
   mode: BackfillAdmissionMode;
-  worker: typeof globalThis.fetch;
+  worker: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
 export class BackfillPhaseStop extends Error {}
@@ -215,11 +215,11 @@ type BackfillDiscogsFetcher = {
 export type BackfillSweepEffects = {
   createFetcher?: (
     token: string,
-    options: { fetch?: typeof globalThis.fetch },
+    options: { fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> },
   ) => BackfillDiscogsFetcher;
   budget?: BackfillBudget;
   env?: BackfillEnvironment;
-  fetch?: typeof globalThis.fetch;
+  fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   now?: () => number;
   windows?: BackfillDatabaseWindows;
 };
@@ -267,7 +267,7 @@ export function fluncleJson<T>(args: string[]): T {
 }
 
 export function inheritedLeaseWindows(
-  workerFetch?: typeof globalThis.fetch,
+  workerFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
 ): BackfillDatabaseWindows {
   return {
     cli: (args) => Promise.resolve(spawnFluncle(args)),
@@ -343,7 +343,7 @@ export function admittedWindows(signal?: AbortSignal): BackfillDatabaseWindows {
       }
 
       return new Response(envelope.body, { status: envelope.status });
-    }) as typeof globalThis.fetch,
+    }) as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
   };
 }
 

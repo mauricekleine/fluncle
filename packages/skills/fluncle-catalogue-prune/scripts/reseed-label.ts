@@ -30,8 +30,8 @@ export type FrontierLabelNode = {
   state: string;
 };
 
-const text = (v: Value): string => (typeof v === "string" ? v : "");
-const textOrNull = (v: Value): string | null => (typeof v === "string" ? v : null);
+const text = (v: Value | undefined): string => (typeof v === "string" ? v : "");
+const textOrNull = (v: Value | undefined): string | null => (typeof v === "string" ? v : null);
 
 export async function readLabelSeed(db: Client, slug: string): Promise<LabelSeedRow | undefined> {
   const result = await db.execute({

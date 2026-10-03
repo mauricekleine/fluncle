@@ -31,7 +31,11 @@ async function main(): Promise<void> {
     throw new Error("npm bundle build failed");
   }
 
-  const built = await result.outputs[0].text();
+  const bundle = result.outputs[0];
+  if (!bundle) {
+    throw new Error("npm bundle build produced no output");
+  }
+  const built = await bundle.text();
 
   const withNodeShebang = built.replace(/^#![^\n]*\n/, "#!/usr/bin/env node\n");
   const final = withNodeShebang.startsWith("#!")

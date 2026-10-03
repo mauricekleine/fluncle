@@ -135,7 +135,7 @@ export function fpcalcFingerprint(
     return null;
   }
 
-  return parseFpcalcJson(result.stdout ?? "");
+  return parseFpcalcJson(result.stdout?.toString() ?? "");
 }
 
 export async function fetchPreviewFingerprint(options: {
@@ -430,10 +430,10 @@ export function pickSearchReference(
     return { previewUrl: null, reason: "no-hit" };
   }
 
+  const durationMs = target.durationMs;
   const sorted = [...accepted].sort(
     (a, b) =>
-      Math.abs(a.durationSec - target.durationMs / 1000) -
-      Math.abs(b.durationSec - target.durationMs / 1000),
+      Math.abs(a.durationSec - durationMs / 1000) - Math.abs(b.durationSec - durationMs / 1000),
   );
   const [primary, ...rest] = sorted;
 

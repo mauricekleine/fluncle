@@ -1009,7 +1009,7 @@ describe("daily and weekly retry", () => {
         `daily-retry-runner\\.sh ${unit} (\\S+) (\\d{2}:\\d{2}) (\\d{2}:\\d{2})(?: --weekday (\\w{3}))? --`,
       ).exec(service);
       const schedule = DAILY_RETRY_SCHEDULES[unit];
-      expect(schedule, unit).toEqual({
+      expect(schedule as unknown, unit).toEqual({
         finalSlot: args?.[3],
         primarySlot: args?.[2],
         timeZone: args?.[1],

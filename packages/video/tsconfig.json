@@ -6,7 +6,18 @@
     "moduleResolution": "Bundler",
     "noUncheckedIndexedAccess": false,
     "strict": true,
-    "types": ["node", "react", "react-dom", "bun"]
+    "types": ["node", "react", "react-dom", "bun"],
+    "allowImportingTsExtensions": true
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "remotion.config.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "remotion.config.ts",
+    "*.ts",
+    "*.mts",
+    "*.cts",
+    "scripts/**/*.ts",
+    "scripts/**/*.mts",
+    "scripts/**/*.cts"
+  ]
 }

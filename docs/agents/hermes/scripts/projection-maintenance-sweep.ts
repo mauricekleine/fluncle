@@ -165,7 +165,7 @@ function isOptionalAge(value: unknown): value is null | number | undefined {
   return value === undefined || value === null || isNonnegativeInteger(value);
 }
 
-function isFamilyStatus(value: unknown): value is FamilyStatus {
+function isFamilyStatus(value: unknown): value is FamilyStatus & Record<string, unknown> {
   if (!isObject(value) || !isObject(value["convergence"]) || !isObject(value["repairs"])) {
     return false;
   }

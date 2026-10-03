@@ -133,7 +133,7 @@ function recordedCalls(): string[] {
 
 async function runBackfillSweep(): Promise<Record<string, unknown>> {
   const seenOperations = new Set<string>();
-  const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+  const fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const inputUrl =
       typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const url = new URL(inputUrl);
@@ -246,7 +246,7 @@ async function runBackfillSweep(): Promise<Record<string, unknown>> {
       skippedCount: 3,
       unresolvedCount: 2,
     });
-  }) as typeof globalThis.fetch;
+  };
 
   return runBackfillSweepImpl({
     createFetcher: () => ({
@@ -285,7 +285,9 @@ async function runBackfillSweep(): Promise<Record<string, unknown>> {
 
 describe("fluncleJson parse-first contract", () => {
   test("exit 0 with JSON returns the parsed payload", () => {
-    expect(fluncleJson<{ lovedCount: number; ok: boolean }>(["ok-json"])).toEqual({
+    expect(
+      fluncleJson<{ lovedCount: number; ok: boolean; failedCount: number }>(["ok-json"]),
+    ).toEqual({
       failedCount: 0,
       lovedCount: 2,
       ok: true,

@@ -30,6 +30,9 @@ describe("buildJwt", () => {
 
     const [h, c, sig] = jwt.split(".");
     expect(h && c && sig).toBeTruthy();
+    if (!h || !c || !sig) {
+      throw new Error("JWT must contain three segments");
+    }
 
     const header = JSON.parse(Buffer.from(h, "base64url").toString());
     const claim = JSON.parse(Buffer.from(c, "base64url").toString());

@@ -26,7 +26,7 @@ import {
 
 const ACTOR_CHUNK = 15;
 
-const APIFY_SAMPLE: ApifyResultItem[] = [
+const APIFY_SAMPLE: [ApifyResultItem, ApifyResultItem, ApifyResultItem] = [
   {
     albums: [{ album_image: "https://i.scdn.co/image/album1" }],
     artists: [{ artist_id: "29rsvX8tM1cbyZhn554CFk", artist_name: "Azuro" }],
@@ -1259,20 +1259,24 @@ describe("runAnchorTick", () => {
 
   test("a 200 with Deezer's real non-array error shape is an Apify ERROR, never an empty result", async () => {
     const realFetch = globalThis.fetch;
-    globalThis.fetch = ((input: string | URL | Request) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (url.includes("/v2/acts/")) {
-        return Promise.resolve(Response.json({ data: { id: "run-error", status: "READY" } }));
-      }
-      if (url.includes("/dataset/items")) {
-        return Promise.resolve(
-          Response.json({
-            error: { code: 4, message: "Quota limit exceeded", type: "Exception" },
-          }),
-        );
-      }
-      return Promise.resolve(Response.json({ data: { status: "SUCCEEDED" } }));
-    }) as typeof globalThis.fetch;
+    globalThis.fetch = Object.assign(
+      (input: string | URL | Request) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes("/v2/acts/")) {
+          return Promise.resolve(Response.json({ data: { id: "run-error", status: "READY" } }));
+        }
+        if (url.includes("/dataset/items")) {
+          return Promise.resolve(
+            Response.json({
+              error: { code: 4, message: "Quota limit exceeded", type: "Exception" },
+            }),
+          );
+        }
+        return Promise.resolve(Response.json({ data: { status: "SUCCEEDED" } }));
+      },
+      { preconnect: realFetch.preconnect },
+    );
 
     try {
       const summary = await runAnchorTick(
@@ -1299,21 +1303,25 @@ describe("runAnchorTick", () => {
     const realFetch = globalThis.fetch;
     const requests: string[] = [];
     const started: string[] = [];
-    globalThis.fetch = ((input: string | URL | Request) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      requests.push(url);
-      if (url.includes("/v2/acts/") && url.endsWith("/runs")) {
-        return Promise.resolve(Response.json({ data: { id: "run-1", status: "READY" } }));
-      }
-      if (url.includes("/v2/actor-runs/run-1/dataset/items")) {
-        return Promise.resolve(Response.json(APIFY_SAMPLE));
-      }
-      if (url.includes("/v2/actor-runs/run-1")) {
-        expect(started).toEqual(["run-1"]);
-        return Promise.resolve(Response.json({ data: { id: "run-1", status: "SUCCEEDED" } }));
-      }
-      throw new Error(`unexpected Apify request ${url}`);
-    }) as typeof globalThis.fetch;
+    globalThis.fetch = Object.assign(
+      (input: string | URL | Request) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        requests.push(url);
+        if (url.includes("/v2/acts/") && url.endsWith("/runs")) {
+          return Promise.resolve(Response.json({ data: { id: "run-1", status: "READY" } }));
+        }
+        if (url.includes("/v2/actor-runs/run-1/dataset/items")) {
+          return Promise.resolve(Response.json(APIFY_SAMPLE));
+        }
+        if (url.includes("/v2/actor-runs/run-1")) {
+          expect(started).toEqual(["run-1"]);
+          return Promise.resolve(Response.json({ data: { id: "run-1", status: "SUCCEEDED" } }));
+        }
+        throw new Error(`unexpected Apify request ${url}`);
+      },
+      { preconnect: realFetch.preconnect },
+    );
     try {
       const items = await runApifyActor(["Azuro Hold Tight"], (runId) => started.push(runId));
       expect(items).toEqual(APIFY_SAMPLE);
@@ -1547,8 +1555,8 @@ describe("runAnchorTick", () => {
     expect(summary.apifyDurationMsOmitted).toBe(1);
 
     expect(posted.length).toBe(1);
-    expect(posted[0].trackId).toBe("mb_hold");
-    expect(posted[0].candidates.map((candidate) => candidate.durationMs)).toEqual([319_112, null]);
+    expect(posted[0]?.trackId).toBe("mb_hold");
+    expect(posted[0]?.candidates.map((candidate) => candidate.durationMs)).toEqual([319_112, null]);
     expect(summary.missed).toBe(1);
 
     expect(summary.apifyTargetOmitted).toBe(0);
@@ -1714,11 +1722,14 @@ describe("searchDeezerOnBox", () => {
 
   test("maps hits to the four fields the Worker's gate reads (duration promoted to ms)", async () => {
     const calls: string[] = [];
-    globalThis.fetch = ((url: string) => {
-      calls.push(String(url));
+    globalThis.fetch = Object.assign(
+      (url: RequestInfo | URL) => {
+        calls.push(typeof url === "string" ? url : url instanceof URL ? url.href : url.url);
 
-      return Promise.resolve(Response.json({ data: [HIT] }));
-    }) as typeof globalThis.fetch;
+        return Promise.resolve(Response.json({ data: [HIT] }));
+      },
+      { preconnect: realFetch.preconnect },
+    );
 
     expect(await searchDeezerOnBox('artist:"Calibre" track:"Mr Right On"')).toEqual({
       candidates: [
@@ -1727,23 +1738,26 @@ describe("searchDeezerOnBox", () => {
       droppedIncomplete: 0,
     });
 
-    expect(decodeURIComponent(calls[0])).toContain('artist:"Calibre" track:"Mr Right On"');
+    expect(decodeURIComponent(calls[0] ?? "")).toContain('artist:"Calibre" track:"Mr Right On"');
     expect(calls[0]).toContain("https://api.deezer.com/search/track?q=");
   });
 
   test("drops a hit missing any signal the gate needs, rather than sending an unverifiable one", async () => {
-    globalThis.fetch = (() =>
-      Promise.resolve(
-        Response.json({
-          data: [
-            HIT,
-            { ...HIT, isrc: "  " },
-            { ...HIT, duration: 0 },
-            { ...HIT, artist: { name: "" } },
-            { ...HIT, title: undefined },
-          ],
-        }),
-      )) as typeof globalThis.fetch;
+    globalThis.fetch = Object.assign(
+      () =>
+        Promise.resolve(
+          Response.json({
+            data: [
+              HIT,
+              { ...HIT, isrc: "  " },
+              { ...HIT, duration: 0 },
+              { ...HIT, artist: { name: "" } },
+              { ...HIT, title: undefined },
+            ],
+          }),
+        ),
+      { preconnect: realFetch.preconnect },
+    );
 
     const result = await searchDeezerOnBox("q");
 
@@ -1753,21 +1767,25 @@ describe("searchDeezerOnBox", () => {
   });
 
   test("an empty result set is an honest miss (no candidates, nothing dropped), NOT a failure", async () => {
-    globalThis.fetch = (() =>
-      Promise.resolve(Response.json({ data: [] }))) as typeof globalThis.fetch;
+    globalThis.fetch = Object.assign(() => Promise.resolve(Response.json({ data: [] })), {
+      preconnect: realFetch.preconnect,
+    });
 
     expect(await searchDeezerOnBox("q")).toEqual({ candidates: [], droppedIncomplete: 0 });
   });
 
   test("THE QUOTA TRAP: a 200 carrying an error body is retried, then reported as a FAILURE", async () => {
     let calls = 0;
-    globalThis.fetch = (() => {
-      calls += 1;
+    globalThis.fetch = Object.assign(
+      () => {
+        calls += 1;
 
-      return Promise.resolve(
-        Response.json({ error: { code: 4, message: "Quota limit exceeded", type: "Exception" } }),
-      );
-    }) as typeof globalThis.fetch;
+        return Promise.resolve(
+          Response.json({ error: { code: 4, message: "Quota limit exceeded", type: "Exception" } }),
+        );
+      },
+      { preconnect: realFetch.preconnect },
+    );
 
     expect(await searchDeezerOnBox("q", [0, 0])).toBeNull();
     expect(calls).toBe(3);
@@ -1775,35 +1793,47 @@ describe("searchDeezerOnBox", () => {
 
   test("a quota answer that clears on retry returns the candidates", async () => {
     let calls = 0;
-    globalThis.fetch = (() => {
-      calls += 1;
+    globalThis.fetch = Object.assign(
+      () => {
+        calls += 1;
 
-      return Promise.resolve(
-        calls === 1 ? Response.json({ error: { code: 4 } }) : Response.json({ data: [HIT] }),
-      );
-    }) as typeof globalThis.fetch;
+        return Promise.resolve(
+          calls === 1 ? Response.json({ error: { code: 4 } }) : Response.json({ data: [HIT] }),
+        );
+      },
+      { preconnect: realFetch.preconnect },
+    );
 
     expect((await searchDeezerOnBox("q", [0, 0]))?.candidates.length).toBe(1);
     expect(calls).toBe(2);
   });
 
   test("a non-quota error body, a non-2xx, a bad body, and a thrown fetch are all failures — never a throw", async () => {
-    globalThis.fetch = (() =>
-      Promise.resolve(Response.json({ error: { code: 700 } }))) as typeof globalThis.fetch;
+    globalThis.fetch = Object.assign(
+      () => Promise.resolve(Response.json({ error: { code: 700 } })),
+      { preconnect: realFetch.preconnect },
+    );
     expect(await searchDeezerOnBox("q", [0, 0])).toBeNull();
 
-    globalThis.fetch = (() =>
-      Promise.resolve(new Response("nope", { status: 503 }))) as typeof globalThis.fetch;
+    globalThis.fetch = Object.assign(() => Promise.resolve(new Response("nope", { status: 503 })), {
+      preconnect: realFetch.preconnect,
+    });
     expect(await searchDeezerOnBox("q", [0, 0])).toBeNull();
 
-    globalThis.fetch = (() =>
-      Promise.resolve(new Response("<html>", { status: 200 }))) as typeof globalThis.fetch;
+    globalThis.fetch = Object.assign(
+      () => Promise.resolve(new Response("<html>", { status: 200 })),
+      { preconnect: realFetch.preconnect },
+    );
     expect(await searchDeezerOnBox("q", [0, 0])).toBeNull();
 
-    globalThis.fetch = (() => Promise.resolve(Response.json({}))) as typeof globalThis.fetch;
+    globalThis.fetch = Object.assign(() => Promise.resolve(Response.json({})), {
+      preconnect: realFetch.preconnect,
+    });
     expect(await searchDeezerOnBox("q", [0, 0])).toBeNull();
 
-    globalThis.fetch = (() => Promise.reject(new Error("socket"))) as typeof globalThis.fetch;
+    globalThis.fetch = Object.assign(() => Promise.reject(new Error("socket")), {
+      preconnect: realFetch.preconnect,
+    });
     expect(await searchDeezerOnBox("q", [0, 0])).toBeNull();
   });
 });
@@ -1835,7 +1865,7 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
 
     return {
       fetchQueue: (limit) => {
-        const page = pages[Math.min(call, pages.length - 1)].slice(0, limit);
+        const page = (pages[Math.min(call, pages.length - 1)] ?? []).slice(0, limit);
         call += 1;
 
         return Promise.resolve(page);
@@ -2441,17 +2471,17 @@ describe("runAnchorSweep — the firing preflight", () => {
 
   test("ISRC due read uses one bounded unasked-row probe and rejects a missing worklist", async () => {
     const urls: string[] = [];
-    const fetcher = ((input: RequestInfo | URL) => {
+    const fetcher = (input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
       urls.push(url);
       return Promise.resolve(Response.json({ tracks: [{ trackId: "unasked" }] }));
-    }) as typeof fetch;
+    };
     expect(await readAnchorIsrcDue(fetcher)).toBe(1);
     expect(urls).toHaveLength(1);
     expect(new URL(urls[0] ?? "").searchParams.toString()).toBe(
       "kind=anchor&limit=1&count=false&paidMode=unasked",
     );
-    const missing = (() => Promise.resolve(Response.json({}))) as typeof fetch;
+    const missing = () => Promise.resolve(Response.json({}));
     expect(readAnchorIsrcDue(missing)).rejects.toThrow("invalid worklist");
   });
 
@@ -2775,7 +2805,7 @@ describe("runAnchorSweep — the firing preflight", () => {
         freeAsks += 1;
         return Promise.resolve({
           anchored: true,
-          source: "spotify_isrc",
+          source: "spotify-isrc",
           spotifyIsrcAsked: true,
           spotifySearchDone: true,
           verifiedBy: "isrc",
@@ -2818,7 +2848,7 @@ describe("runAnchorSweep — the firing preflight", () => {
           freeAsks += 1;
           return Promise.resolve({
             anchored: true,
-            source: "spotify_isrc",
+            source: "spotify-isrc",
             spotifyIsrcAsked: true,
             spotifySearchDone: true,
             verifiedBy: "isrc",

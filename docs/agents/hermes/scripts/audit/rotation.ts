@@ -58,7 +58,7 @@ export function daysSinceEpoch(date: Date): number {
 
 export function domainForDate(date: Date): AuditDomain {
   const idx = ((daysSinceEpoch(date) % DOMAINS.length) + DOMAINS.length) % DOMAINS.length;
-  return DOMAINS[idx];
+  return DOMAINS[idx] ?? DOMAINS[0];
 }
 
 if (import.meta.main) {
