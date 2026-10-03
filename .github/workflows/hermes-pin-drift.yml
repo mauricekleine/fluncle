@@ -51,7 +51,6 @@ jobs:
               gh pr update-branch "$open_pr" || echo "update-branch: already current."
               exit 0
             fi
-            # A stale or conflicting pin-drift PR would otherwise block every later tick.
             echo "pin-drift PR #$open_pr is stale or conflicting ($open_mergeable) — superseding it."
             gh pr close "$open_pr" --delete-branch \
               --comment "Superseded by hermes-pin-drift run ${{ github.run_id }}: $PR_TITLE"
