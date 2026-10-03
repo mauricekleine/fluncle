@@ -44,10 +44,17 @@ jobs:
           open_pr="$(gh pr list --state open --json number,headRefName \
             --jq '[.[] | select(.headRefName | startswith("hermes-pin-drift/"))][0].number')"
           if [ -n "$open_pr" ]; then
-            echo "pin-drift PR #$open_pr is still open — updating its branch so auto-merge can land."
-            gh pr update-branch "$open_pr" \
-              || echo "update-branch unavailable (conflict or already current) — leaving it for review."
-            exit 0
+            open_title="$(gh pr view "$open_pr" --json title --jq .title)"
+            open_mergeable="$(gh pr view "$open_pr" --json mergeable --jq .mergeable)"
+            if [ "$open_title" = "$PR_TITLE" ] && [ "$open_mergeable" != "CONFLICTING" ]; then
+              echo "pin-drift PR #$open_pr already carries these bumps — updating its branch so auto-merge can land."
+              gh pr update-branch "$open_pr" || echo "update-branch: already current."
+              exit 0
+            fi
+            # A stale or conflicting pin-drift PR would otherwise block every later tick.
+            echo "pin-drift PR #$open_pr is stale or conflicting ($open_mergeable) — superseding it."
+            gh pr close "$open_pr" --delete-branch \
+              --comment "Superseded by hermes-pin-drift run ${{ github.run_id }}: $PR_TITLE"
           fi
           branch="hermes-pin-drift/${{ github.run_id }}"
           git config user.name "github-actions[bot]"

@@ -53,7 +53,7 @@ The image is built `FROM oven/bun:<ver>-debian@sha256:<digest>` (Debian trixie),
 
 ## 3. `fluncle` CLI (baked)
 
-- **File:** `docs/agents/hermes/Dockerfile` (the fluncle install block, ~line 83).
+- **File:** `docs/agents/hermes/Dockerfile` (the fluncle install block — locate it by `releases/download/v`).
 - **Marker:** `releases/download/v<version>/fluncle-linux-` — the box installs the **standalone bun-compiled binary**, NOT the `npm -g` thin client. The Bun-runtime commands (clip cut, media uploads — `Bun.spawn`/`Bun.file`) only run on the binary; the npm package's `#!/usr/bin/env node` shebang makes them throw "Bun is not defined". The binary embeds bun, so every command works on the box.
 - **Current pin:**
 
@@ -74,7 +74,7 @@ The image is built `FROM oven/bun:<ver>-debian@sha256:<digest>` (Debian trixie),
 
 ## 4. Claude Code CLI (baked)
 
-- **File:** `docs/agents/hermes/Dockerfile` (~line 90).
+- **File:** `docs/agents/hermes/Dockerfile` (locate it by `@anthropic-ai/claude-code@`).
 - **Marker:** `RUN npm install -g @anthropic-ai/claude-code@`
 - **Current pin:**
 
@@ -109,7 +109,7 @@ The image is built `FROM oven/bun:<ver>-debian@sha256:<digest>` (Debian trixie),
 
 Every action in every workflow is SHA-pinned, and Renovate maintains the digests. Do not hand-resolve tags to digests.
 
-`renovate.json` (repo root) configures the Renovate GitHub App scoped to the `github-actions` manager with the `helpers:pinGitHubActionDigests` preset: it SHA-pins any newly-added action and refreshes each digest (same-major) as the action ships updates, while a new major waits for dependency-dashboard approval. The config is **inert until the Renovate app is installed** on the repo.
+`renovate.json` (repo root) configures the Renovate GitHub App for the `github-actions` and `npm` managers. For Actions, the `helpers:pinGitHubActionDigests` preset applies: it SHA-pins any newly-added action and refreshes each digest (same-major) as the action ships updates, while a new major waits for dependency-dashboard approval.
 
 - **Verify the axis still holds** — every `uses:` should carry a 40-char SHA. A bare `@vN` is an action someone added by hand, and pinning that one at its current major is the only fix this item still asks for.
 
