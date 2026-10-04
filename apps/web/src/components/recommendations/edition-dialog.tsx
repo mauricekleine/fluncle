@@ -160,7 +160,7 @@ function EditionRow({
           <Button
             aria-label={`Listen on Spotify: ${trackLine}`}
             nativeButton={false}
-            // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's aria-label onto this anchor.
+            // oxlint-disable-next-line jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's aria-label onto this anchor.
             render={<a href={track.spotifyUrl} rel="noopener noreferrer" target="_blank" />}
             size="icon"
             variant="ghost"
