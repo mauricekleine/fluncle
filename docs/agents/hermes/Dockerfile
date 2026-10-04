@@ -21,14 +21,14 @@ FROM oven/bun:1.4.2-debian@sha256:4f6e31d1a54d6a3dd312daef655fc998101b5043d52e12
 # Node + npm — Claude Code installs through npm and runs on node, and the audit agent drives
 # the repo's node tooling. Copied from the matching Debian-trixie node image so the binary
 # links against the same glibc; digest-pinned for the same reason as the base.
-COPY --from=node:26.5.1-trixie-slim@sha256:deae974a69e140f44f434ab29cb519fb5f8fe250fd364b8ca446bd0761acdc6a /usr/local/bin/node /usr/local/bin/node
-COPY --from=node:26.5.1-trixie-slim@sha256:deae974a69e140f44f434ab29cb519fb5f8fe250fd364b8ca446bd0761acdc6a /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node:26.10.0-trixie-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e9615225ce4aaae1 /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:26.10.0-trixie-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e9615225ce4aaae1 /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
   && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
 # uv — installs the standalone Python 3.11 the MuQ venv below needs (Debian trixie ships
 # only 3.13 in apt, and muq requires <3.12).
-COPY --from=ghcr.io/astral-sh/uv:0.11.6@sha256:b1e699368d24c57cda93c338a57a8c5a119009ba809305cc8e86986d4a006754 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.21@sha256:a7aed3216253ee804de3e2d8afa5073baa1a177335345d43845cd4165e43b711 /uv /uvx /usr/local/bin/
 
 # Enrichment toolchain (docs/agents/hermes/cron/README.md): the
 # fluncle-track-enrichment skill's analyze-track.ts is `#!/usr/bin/env bun` and
@@ -190,11 +190,11 @@ RUN "${MUQ_VENV}/bin/pip" install --no-cache-dir \
 # operator decision with a `--preflight` run behind it.
 # The download is checksum-verified against the release's published SHA256SUMS, and
 # the bake-time smoke asserts the binary runs and reports the pinned version.
-RUN ver="1.0.9" \
+RUN ver="1.0.36" \
   && arch="$(uname -m)" \
   && case "$arch" in \
-       aarch64|arm64) cpu="arm64"; sha="eac73e8b804a50f514c80e22c8c13f1a4974ea80a95b33d84c8a9cbb0fe0085f" ;; \
-       x86_64|amd64)  cpu="x64";   sha="59f9191c9c9ec4a7556f4d766ff0277805fb7e7df668739371f64bfb44920615" ;; \
+       aarch64|arm64) cpu="arm64"; sha="b71b8d383b6b34a34463f9b319c6744f7daf032f462299dd77398b5bd281c8d5" ;; \
+       x86_64|amd64)  cpu="x64";   sha="47cb2be42442ba25d5c1cf586d97dc329a477b79574a7127f2d6b4d229f080bc" ;; \
        *) echo "unsupported arch for the boat.dev CLI: $arch" >&2; exit 1 ;; \
      esac \
   && curl -fsSL "https://github.com/ariana-dot-dev/agent-server/releases/download/boat-cli-v${ver}/boat-linux-${cpu}" \
@@ -241,11 +241,11 @@ RUN arch="$(uname -m)" \
        x86_64|amd64)  gharch="amd64" ;; \
        *) echo "unsupported arch for gh: $arch" >&2; exit 1 ;; \
      esac \
-  && curl -fsSL "https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_linux_${gharch}.tar.gz" \
+  && curl -fsSL "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_${gharch}.tar.gz" \
        -o /tmp/gh.tar.gz \
   && tar -xzf /tmp/gh.tar.gz -C /tmp \
-  && install -m 755 "/tmp/gh_2.96.0_linux_${gharch}/bin/gh" /usr/local/bin/gh \
-  && rm -rf /tmp/gh.tar.gz "/tmp/gh_2.96.0_linux_${gharch}"
+  && install -m 755 "/tmp/gh_2.102.0_linux_${gharch}/bin/gh" /usr/local/bin/gh \
+  && rm -rf /tmp/gh.tar.gz "/tmp/gh_2.102.0_linux_${gharch}"
 
 # Bake the on-box sweep scripts so they ride the image (auto-update via pin-watch) and are
 # read straight from here by the host-timer units — no docker cp, no /opt/data projection.
