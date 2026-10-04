@@ -5,6 +5,3 @@
 linker = "hoisted"
 # Only install package versions published at least 3 days ago
 minimumReleaseAge = 259200
-# cf is exempt: its deploy keeps Worker secrets only from 1.0.0-beta.8 (cloudflare/cf#70),
-# and Workers Builds installs it to deploy fluncle-web.
-minimumReleaseAgeExcludes = ["cf"]
