@@ -70,7 +70,7 @@ type CataloguePayload = {
 type CatalogueSearch = { lens: CatalogueLens };
 
 const fetchCatalogue = createServerFn({ method: "GET" })
-  .inputValidator((lens: CatalogueLens) => lens)
+  .validator((lens: CatalogueLens) => lens)
   .handler(async ({ data: lens }): Promise<CataloguePayload> => {
     if (!(await isAdminRequest())) {
       throw redirect({ to: "/admin/login" });
