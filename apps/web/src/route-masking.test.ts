@@ -23,6 +23,8 @@ function buildRouter() {
 
   return createRouter({
     history,
+    isServer: false,
+    origin: "http://localhost",
     routeTree: rootRoute.addChildren([indexRoute, logRoute]),
   });
 }

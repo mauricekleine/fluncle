@@ -21,7 +21,7 @@ export const Route = createFileRoute("/docs/$")({
 });
 
 const resolvePage = createServerFn({ method: "GET" })
-  .inputValidator((slugs: string[]) => slugs)
+  .validator((slugs: string[]) => slugs)
   .handler(async ({ data: slugs }) => {
     const { docsSource } = await import("@/lib/docs-source");
     const page = docsSource.getPage(slugs);
