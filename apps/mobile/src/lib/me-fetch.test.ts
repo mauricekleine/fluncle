@@ -76,7 +76,7 @@ const readCalls: Call[] = [];
 const readFetch = createMeFetch({
   baseUrl: "https://api.test",
   fetchImpl: fakeFetch(readCalls),
-  getCookie: () => "sid=1",
+  getCookie: async () => "sid=1",
 });
 await readFetch("/api/v1/me");
 assertEqual(readCalls.length, 1, "a read makes exactly one call — no CSRF fetch");
@@ -89,7 +89,7 @@ const writeCalls: Call[] = [];
 const writeFetch = createMeFetch({
   baseUrl: "https://api.test",
   fetchImpl: fakeFetch(writeCalls),
-  getCookie: () => "sid=9",
+  getCookie: async () => "sid=9",
 });
 await writeFetch("/api/v1/me/delete", { body: "{}", method: "POST" });
 assertEqual(writeCalls.length, 2, "a mutation makes two calls: CSRF then the write");
@@ -117,7 +117,7 @@ const goneFetch = createMeFetch({
     }
     return { json: async () => ({}), ok: true } as unknown as Response;
   }) as unknown as typeof fetch,
-  getCookie: () => "sid=x",
+  getCookie: async () => "sid=x",
 });
 await goneFetch("/api/v1/me/delete", { body: "{}", method: "POST" });
 assertEqual(

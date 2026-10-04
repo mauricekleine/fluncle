@@ -40,8 +40,8 @@ function commit(next: SavedFinding[]): void {
   void Storage.setItem(STORAGE_KEY, serialize(next)).catch(() => undefined);
 }
 
-function hasSession(): boolean {
-  const cookie = authClient.getCookie();
+async function hasSession(): Promise<boolean> {
+  const cookie = await authClient.getCookie();
   return typeof cookie === "string" && cookie.trim().length > 0;
 }
 
@@ -71,13 +71,15 @@ function ensureLaunchMerge(): void {
     return;
   }
   launchMergeAttempted = true;
-  if (hasSession()) {
-    void mergeSavedWithAccount();
-  }
+  void hasSession().then((signedIn) => {
+    if (signedIn) {
+      void mergeSavedWithAccount();
+    }
+  });
 }
 
-function mirrorAction(finding: SavableFinding, saved: boolean): void {
-  if (!hasSession()) {
+async function mirrorAction(finding: SavableFinding, saved: boolean): Promise<void> {
+  if (!(await hasSession())) {
     return;
   }
   if (saved) {
@@ -119,7 +121,7 @@ export function useSavedFindings(): {
 
     const nowSaved = !isSavedInList(current, finding);
     commit(toggleSaved(current, finding, Date.now()));
-    mirrorAction(finding, nowSaved);
+    void mirrorAction(finding, nowSaved);
   }, []);
 
   const isSaved = useCallback(
