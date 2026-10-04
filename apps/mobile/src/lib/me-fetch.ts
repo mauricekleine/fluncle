@@ -44,7 +44,7 @@ type MeRequestInit = {
 export type MeFetchDeps = {
   baseUrl?: string;
   fetchImpl: typeof fetch;
-  getCookie: () => string | null | undefined;
+  getCookie: () => Promise<string | null | undefined>;
 };
 
 export type MeFetch = (path: string, init?: MeRequestInit) => Promise<Response>;
@@ -71,7 +71,7 @@ export function createMeFetch(deps: MeFetchDeps): MeFetch {
 
   return async (path, init = {}) => {
     const method = (init.method ?? "GET").toUpperCase();
-    const cookie = deps.getCookie();
+    const cookie = await deps.getCookie();
     const csrfToken = isMutation(method)
       ? await fetchCsrfToken({ baseUrl, fetchImpl: deps.fetchImpl }, cookie)
       : null;
