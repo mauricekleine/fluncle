@@ -12,6 +12,7 @@
     "**/*.cts",
     "../.claude/hooks/**/*.ts",
     "../tools/oxlint/no-comments/**/*.ts",
+    "../taze.config.ts",
     "../.claude/hooks/**/*.mts",
     "../.claude/hooks/**/*.cts",
     "../.codex/hooks/**/*.ts",
