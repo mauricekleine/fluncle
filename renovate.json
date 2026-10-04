@@ -53,25 +53,29 @@
       "enabled": false
     },
     {
-      "description": "HELD: Expo-pinned native deps route through the Expo SDK bump only (bundledNativeModules.json is the authority, not the packages' own peer ranges).",
+      "description": "HELD: Expo-pinned mobile deps route through the Expo SDK bump only (expo's bundledNativeModules.json is the authority, not the packages' own peer ranges; move them with `npx expo install --fix`).",
       "matchFileNames": ["apps/mobile/package.json"],
       "matchPackageNames": [
-        "react-native",
-        "react-native-gesture-handler",
-        "react-native-safe-area-context",
         "expo",
-        "expo-*"
+        "expo-*",
+        "@expo/*",
+        "react-native",
+        "react-native-*",
+        "@react-native-async-storage/async-storage",
+        "@shopify/flash-list",
+        "@shopify/react-native-skia",
+        "eslint-config-expo"
       ],
       "enabled": false
     },
     {
-      "description": "HELD: @resvg/resvg-wasm pinned ~2.4.0 to match the copy workers-og bundles — a newer copy adds ~1 MB of Worker wasm for zero gain.",
-      "matchPackageNames": ["@resvg/resvg-wasm"],
-      "enabled": false
+      "description": "HELD: react and react-dom stay on the 19.2 line — React Native 0.85's bundled Fabric renderer is built from React 19.2.3, so a React minor moves with the React Native / Expo SDK bump. Patches within 19.2 ride along, and scripts/react-version.test.ts keeps mobile's exact pin and the catalog on one hoisted copy.",
+      "matchPackageNames": ["react", "react-dom"],
+      "allowedVersions": "<19.3.0"
     },
     {
-      "description": "HELD: @ai-sdk/react pinned exact 4.0.20 (ChatDnB generative-UI run).",
-      "matchPackageNames": ["@ai-sdk/react"],
+      "description": "HELD: @resvg/resvg-wasm pinned ~2.4.0 to match the copy workers-og bundles — a newer copy adds ~1 MB of Worker wasm for zero gain.",
+      "matchPackageNames": ["@resvg/resvg-wasm"],
       "enabled": false
     },
     {
@@ -81,8 +85,8 @@
       "enabled": false
     },
     {
-      "description": "GUARD: @remotion/bundler is patched via patchedDependencies, keyed by EXACT version — any bump must re-key patches/@remotion%2Fbundler@*.patch in the same PR (scripts/patched-dependencies.test.ts turns a detached patch into a red deploy gate). Surface it on the dashboard instead of auto-PRing.",
-      "matchPackageNames": ["@remotion/bundler"],
+      "description": "GUARD: Remotion packages share one exact version, and @remotion/bundler is patched via patchedDependencies keyed by that EXACT version — a bump moves every remotion and @remotion/* package together and re-keys patches/@remotion%2Fbundler@*.patch in the same PR (scripts/patched-dependencies.test.ts turns a detached patch into a red deploy gate). Surface it on the dashboard instead of auto-PRing.",
+      "matchPackageNames": ["remotion", "@remotion/*"],
       "dependencyDashboardApproval": true
     },
     {

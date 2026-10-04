@@ -230,6 +230,11 @@ cd packages/ui && bunx --bun shadcn@latest add dialog
 - MUST: Keep lockfile changes with the dependency change that caused them.
 - MUST: Follow the existing workspace catalog and version-range style when adding dependencies.
 - SHOULD: Avoid new dependencies when an existing repo package or platform API is sufficient.
+- MUST: Record a hold as a `renovate.json` package rule with its reason in `description`. `taze.config.ts` reads the gate from `bunfig.toml` and the holds from `renovate.json`. Outright holds become excludes, and `allowedVersions: "<x"` becomes a range exclude. Major-only holds are left out of the excludes, so check them before taking any major from `bunx taze major`.
+- Upgrades follow the `mk-dependency-upgrades` skill. The Hermes box pins and `.deepsec/pnpm-lock.yaml` follow `fluncle-maintenance`.
+- Checks: `bun run lint`, `bun run format:check`, `bun run typecheck`, `bun run test`, `bun run test:scripts`, `bun run audit`, `bun run build`.
+- Groups: `ai` with `@ai-sdk/react`, which pins `ai` exactly. `better-auth` with `@better-auth/expo`, at one version in web and mobile. All `@orpc/*` packages through the catalog. Every `remotion` and `@remotion/*` package together with the bundler patch re-key. Mobile's exact `react` with the catalog `react` and `react-dom` (`scripts/react-version.test.ts`). The Expo set moves only with an Expo SDK bump, via `npx expo install --fix`.
+- Smoke test: run the Playwright specs for what moved, with `bun run --cwd apps/web test:e2e tests/e2e/<spec>`. Routing and the masked story dialog: `findings`, `front-door`. Auth: `account`, `follow`, `follow-digest`, `save-share`. Chat streaming: `src/lib/server/chat-stream.test.ts`.
 
 ## Git
 
