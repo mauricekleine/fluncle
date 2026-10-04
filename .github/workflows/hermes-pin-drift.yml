@@ -56,8 +56,14 @@ jobs:
               --comment "Superseded by hermes-pin-drift run ${{ github.run_id }}: $PR_TITLE"
           fi
           branch="hermes-pin-drift/${{ github.run_id }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "$AUTOMERGE" = "true" ]; then
+            token_user="$(gh api user --jq '"\(.id) \(.login)"')"
+            git config user.name "${token_user#* }"
+            git config user.email "${token_user%% *}+${token_user#* }@users.noreply.github.com"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          fi
           git checkout -b "$branch"
           git add docs/agents/hermes/Dockerfile package.json
           git commit -m "$PR_TITLE"

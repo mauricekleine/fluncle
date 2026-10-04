@@ -18,7 +18,7 @@ That keeps the box token-free while the galaxy still self-maintains, **repo AND 
 
 ## Auth + how far it ships
 
-`hermes-pin-drift.yml` runs on the default `GITHUB_TOKEN` out of the box: it **opens the PR for an operator to review and merge** (CI runs on the operator's interaction with the PR). To make it fully hands-off, add a fine-scoped PAT as the `PIN_DRIFT_TOKEN` repo secret — the PR then triggers CI and is set to **auto-merge on green**. Either way, the merge is the deploy trigger for a baked Dockerfile pin (pin-watch takes it from there). Renovate opens its own PRs as the Renovate GitHub App; **install the app on the repo to activate `renovate.json`** — the config is inert until then.
+`hermes-pin-drift.yml` needs the `PIN_DRIFT_TOKEN` repo secret: a fine-grained PAT of the operator's, scoped to this repository with Contents, Pull requests and Issues read/write. The repository does not let the default `GITHUB_TOKEN` open pull requests, and the Hyperspeed reviewer skips any PR whose author or commits are not on its allowlist, so the workflow opens the PR with that token and commits as the token's owner (login and noreply email read from `gh api user`). The PR then triggers CI, gets reviewed, and auto-merges on green. When the secret is empty, the workflow falls back to `GITHUB_TOKEN` and fails at `gh pr create`; the pushed branch stays for a manual PR. The merge is the deploy trigger for a baked Dockerfile pin (pin-watch takes it from there). Renovate opens its own PRs as the Renovate GitHub App.
 
 ## What the deterministic sweep does NOT decide
 
