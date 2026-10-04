@@ -12,6 +12,6 @@
   "devDependencies": {
     "@types/bun": "catalog:",
     "typescript": "catalog:",
-    "wrangler": "~4.125.0"
+    "wrangler": "~4.145.0"
   }
 }

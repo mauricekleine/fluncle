@@ -28,7 +28,7 @@
     "@base-ui/react": "catalog:",
     "@fluncle/tokens": "workspace:*",
     "@phosphor-icons/react": "catalog:",
-    "@shadcn/react": "~0.3.0",
+    "@shadcn/react": "~0.3.1",
     "class-variance-authority": "catalog:",
     "cmdk": "catalog:",
     "cnfast": "catalog:",
