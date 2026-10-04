@@ -84,7 +84,7 @@ else
 fi
 verb="\${1:-}"; shift || true
 case "$verb" in
-  --version) printf 'boat 1.0.9\\n'; exit 0 ;;
+  --version) printf 'boat 1.0.36\\n'; exit 0 ;;
   login) cat >/dev/null 2>&1 || true; exit "\${STUB_LOGIN_EXIT:-0}" ;;
   resume) exit "\${STUB_RESUME_EXIT:-0}" ;;
   list)
@@ -753,7 +753,7 @@ describe("--preflight", () => {
       const tick = runTick({ args: ["--preflight"], restoringCalls: 0 });
 
       expect(tick.exitCode).toBe(0);
-      expect(tick.stdout).toContain("boat 1.0.9");
+      expect(tick.stdout).toContain("boat 1.0.36");
       expect(tick.stdout).toContain(`carry-over:  YES — ${BOX_ID} is still there`);
       expect(tick.stdout).toContain(
         `queue:       ${QUEUE_HEAD} renderable pick, 0 poisoned skip(s)`,
