@@ -1,10 +1,9 @@
 import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useMemo } from "react";
-import { siApplemusic, siBeatport, siDeezer, siSpotify, siYoutube } from "simple-icons";
-import { type SimpleIcon } from "simple-icons";
 import { Button, buttonVariants } from "@fluncle/ui/components/button";
 import { BrandIcon } from "@/components/brand-icon";
 import { DiscoveryList } from "@/components/discovery-row";
+import { LISTEN_META } from "@/components/listen-meta";
 import { GraphLink } from "@/components/graph-link";
 import { formatDuration, formatReleaseDate } from "@/lib/format";
 import { formatKey, useKeyNotation } from "@/lib/key-notation";
@@ -12,20 +11,7 @@ import { toQueueTrack } from "@/lib/player-tracks";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { sonicNeighbourToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { cn } from "@/lib/utils";
-import {
-  type ListenDestination,
-  type SonicNeighbour,
-  type TrackDestination,
-} from "@/lib/server/track-page";
-
-const LISTEN_META: Record<ListenDestination["kind"], { icon: SimpleIcon; label: string }> = {
-  apple: { icon: siApplemusic, label: "Listen on Apple Music" },
-
-  beatport: { icon: siBeatport, label: "Buy on Beatport" },
-  deezer: { icon: siDeezer, label: "Listen on Deezer" },
-  spotify: { icon: siSpotify, label: "Listen on Spotify" },
-  youtube: { icon: siYoutube, label: "Watch on YouTube" },
-};
+import { type SonicNeighbour, type TrackDestination } from "@/lib/server/track-page";
 
 function TrackPreviewButton({ track }: { track: TrackDestination }) {
   const queued = useMemo(
@@ -33,6 +19,7 @@ function TrackPreviewButton({ track }: { track: TrackDestination }) {
       toQueueTrack({
         albumImageUrl: track.albumImageUrl,
         artists: track.artists.map((artist) => artist.name),
+        listen: track.listen,
         spotifyUrl: track.listen.find((destination) => destination.kind === "spotify")?.href,
         title: track.title,
         trackId: track.trackId,

@@ -12,7 +12,7 @@ const TrackActionsContent = lazyNamed(loadTrackActionsContent, "TrackActionsCont
 
 export type TrackActionsTrack = Pick<
   QueueTrack,
-  "artists" | "coverUrl" | "href" | "id" | "logId" | "similar" | "spotifyUrl" | "title"
+  "artists" | "coverUrl" | "href" | "id" | "listen" | "logId" | "similar" | "spotifyUrl" | "title"
 >;
 
 function prefetchTrackActionsContent(): void {

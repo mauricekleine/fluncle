@@ -1,3 +1,4 @@
+import { type ListenLink } from "./listen-out";
 import { type QueueTrack } from "./preview-player";
 import { type SavableTrack } from "./saved-tracks";
 import { hitHref, searchArchiveApiPath, searchPagePath, type SearchHit } from "./search-results";
@@ -44,7 +45,9 @@ function isTrackId(id: string): boolean {
 
 export function toQueueTrack(row: {
   albumImageUrl?: string;
+  appleMusicUrl?: string;
   artists: string[];
+  listen?: ListenLink[];
   logId?: string;
   spotifyUrl?: string;
   title: string;
@@ -59,6 +62,8 @@ export function toQueueTrack(row: {
         ? trackPagePath(row.trackId)
         : undefined,
     id: row.trackId,
+    listen:
+      row.listen ?? (row.appleMusicUrl ? [{ href: row.appleMusicUrl, kind: "apple" }] : undefined),
     lit: row.logId !== undefined,
     logId: row.logId,
     spotifyUrl: row.spotifyUrl,

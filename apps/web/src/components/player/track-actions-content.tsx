@@ -1,15 +1,16 @@
 import { WaveformIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
-import { siSpotify } from "simple-icons";
 import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@fluncle/ui/components/dropdown-menu";
 import { BrandIcon } from "@/components/brand-icon";
+import { LISTEN_META } from "@/components/listen-meta";
 import { SaveMenuItem, ShareMenuItem } from "@/components/player/track-menu-items";
 import { type TrackActionsTrack } from "@/components/player/track-actions-menu";
+import { trackListenLinks } from "@/lib/listen-out";
 import { savableTrack, similarSearchHref } from "@/lib/player-tracks";
 
 export function TrackActionsContent({
@@ -26,25 +27,23 @@ export function TrackActionsContent({
   return (
     <DropdownMenuContent
       align="end"
-      className="track-menu-content min-w-48 shadow-none"
+      className="track-menu-content min-w-56 shadow-none"
       side={side}
     >
       {children}
-      {track.spotifyUrl ? (
-        <DropdownMenuItem
-          render={
-            <a
-              aria-label="Listen on Spotify"
-              href={track.spotifyUrl}
-              rel="noreferrer"
-              target="_blank"
-            />
-          }
-        >
-          <BrandIcon className="size-4" icon={siSpotify} />
-          Listen on Spotify
-        </DropdownMenuItem>
-      ) : null}
+      {trackListenLinks(track).map((link) => {
+        const meta = LISTEN_META[link.kind];
+
+        return (
+          <DropdownMenuItem
+            key={link.kind}
+            render={<a aria-label={meta.label} href={link.href} rel="noreferrer" target="_blank" />}
+          >
+            <BrandIcon className="size-4" icon={meta.icon} />
+            {meta.label}
+          </DropdownMenuItem>
+        );
+      })}
       {track.similar === false ? null : (
         <DropdownMenuItem
           render={

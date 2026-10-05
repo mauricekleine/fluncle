@@ -1,5 +1,5 @@
 import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
-import { blockExternalRequests } from "./browser";
+import { blockExternalRequests, installDiscoveryEventProbe } from "./browser";
 import { mediaSessionState, routePreviews } from "./player";
 import { SEEDED_LEAD } from "./seed";
 
@@ -26,6 +26,27 @@ async function hydrate(page: Page, path: string): Promise<void> {
 
   expect(response?.status()).toBe(200);
   await expect(page.locator("html[data-discovery-listening]")).toBeAttached({ timeout: 30_000 });
+}
+
+async function recordedOutbound(page: Page): Promise<(string | undefined)[]> {
+  return page.evaluate(() => {
+    const held =
+      (
+        window as Window & {
+          __discoveryEvents?: { event: string; metadata?: Record<string, string> }[];
+        }
+      ).__discoveryEvents ?? [];
+
+    return held
+      .filter((entry) => entry.event === "discovery_outbound")
+      .map((entry) => entry.metadata?.service);
+  });
+}
+
+async function barFits(page: Page): Promise<boolean> {
+  return page
+    .locator(".player-bar-inner")
+    .evaluate((inner) => inner.scrollWidth <= inner.clientWidth);
 }
 
 for (const viewport of VIEWPORTS) {
@@ -95,6 +116,61 @@ for (const viewport of VIEWPORTS) {
       await player.getByRole("button", { name: "Close the player" }).click();
       await expect(player).toHaveCount(0);
       await expect.poll(() => mediaSessionState(page)).not.toBe("playing");
+    });
+
+    test("a resting preview offers the full song, counted as an outbound listen", async ({
+      page,
+    }) => {
+      await blockExternalRequests(page);
+      await installDiscoveryEventProbe(page);
+      await routePreviews(page, { seconds: 30 });
+
+      const problems = watchForErrors(page);
+
+      await hydrate(page, `/log/${SEEDED_LEAD.logId}`);
+      await page.getByRole("button", { name: "Play the preview" }).click();
+
+      const player = page.getByRole("region", { name: "Player" });
+      const listenOut = player.getByRole("link", { name: "Listen on Spotify" });
+
+      await expect(player.getByRole("button", { exact: true, name: "Pause" })).toBeVisible();
+      await expect(listenOut).toHaveCount(0);
+
+      await player.getByRole("button", { exact: true, name: "Pause" }).click();
+      await expect(listenOut).toBeVisible();
+      await expect(listenOut).toHaveAttribute("href", /open\.spotify\.com/);
+      await expect(listenOut).toHaveAttribute("target", "_blank");
+      expect(await barFits(page)).toBe(true);
+
+      const popupPromise = page.waitForEvent("popup").catch(() => undefined);
+
+      await listenOut.click();
+      await (await popupPromise)?.close().catch(() => undefined);
+      await expect.poll(() => recordedOutbound(page)).toEqual(["spotify"]);
+
+      await player.getByRole("button", { exact: true, name: "Play" }).click();
+      await expect(player.getByRole("button", { exact: true, name: "Pause" })).toBeVisible();
+      await expect(listenOut).toHaveCount(0);
+
+      expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
+    });
+
+    test("an ended preview offers the full song beside Keep going", async ({ page }) => {
+      await blockExternalRequests(page);
+      await routePreviews(page, { seconds: 1 });
+      await hydrate(page, `/log/${SEEDED_LEAD.logId}`);
+      await page.getByRole("button", { name: "Play the preview" }).click();
+
+      const player = page.getByRole("region", { name: "Player" });
+
+      await expect(player.getByRole("button", { name: "Keep going" })).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect(player.getByRole("link", { name: "Listen on Spotify" })).toBeVisible();
+      await expect(player.getByRole("button", { name: "Close the player" })).toBeInViewport({
+        ratio: 1,
+      });
+      expect(await barFits(page)).toBe(true);
     });
   });
 }
