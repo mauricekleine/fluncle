@@ -587,7 +587,7 @@ export async function listAlbumsApiPage(page: number): Promise<CatalogueListPage
   };
 }
 
-async function albumCoverUrl(albumId: string): Promise<string | undefined> {
+export async function albumCoverUrl(albumId: string): Promise<string | undefined> {
   const db = await getDb();
   const result = await db.execute({
     args: [albumId],

@@ -1,5 +1,5 @@
 import llmsTxt from "../../../public/llms.txt?raw";
-import { siteUrl, spotifyPlaylistCanonicalUrl, telegramUrl } from "../fluncle-links";
+import { radioUrl, siteUrl, spotifyPlaylistCanonicalUrl, telegramUrl } from "../fluncle-links";
 import { findingsCount } from "../format";
 import { fluncleDescription } from "../identity";
 import { type FeedItem } from "../mixtapes";
@@ -292,10 +292,17 @@ ${tracks.join("\n")}
 - [Fluncle on Telegram](${telegramUrl}): one banger per post, most nights
 - [The front door](${siteUrl}/): where a first visit starts, with search over the whole archive, one finding written up, the newest findings, what just came out, and the four ways into the wider index
 - [The archive](${siteUrl}/findings): every certified track with the date Fluncle found it
+- [The log](${siteUrl}/log): every finding's coordinate page, one per Log ID (e.g. ${siteUrl}/log/004.7.2I)
+- [The Logbook](${siteUrl}/logbook): the voyage written up as a first-person travelogue, one entry per sector-day, with that day's findings inlined. One page per day, at ${siteUrl}/logbook/<sector>
+- [Search the archive](${siteUrl}/search): one query box over everything Fluncle holds. A coordinate, an artist, a label, an album, a plain word, a sentence such as "tracks in A minor above 170 bpm", or a sonic reference such as "tracks that sound like Nine Clouds". The whole query lives in the URL, so ${siteUrl}/search?q=<query> is a shareable result set
+- [Mixtapes](${siteUrl}/mixtapes): Fluncle's own DJ mixtapes, each a checkpoint with a Log ID such as ${siteUrl}/log/019.F.1A
+- [The observation station](${siteUrl}/radio): Fluncle's spoken field observations on a loop, one finding at a time, with transcripts. Also at ${radioUrl}
+- [The newsletter archive](${siteUrl}/newsletter): every edition Fluncle has sent, one page each at ${siteUrl}/newsletter/<number>
+- [About Fluncle](${siteUrl}/about): who Fluncle is, what the Galaxy is, and how to read a Log ID like fluncle://004.7.2I
 
 ## Data
 
-- [RSS feed](${siteUrl}/rss.xml): the 25 most recent tracks
+- [RSS feed](${siteUrl}/rss.xml): the 25 most recent findings and mixtapes
 - [Fresh releases feed](${siteUrl}/fresh.xml): the newest drum & bass releases over the last 30 days, as RSS (also ${siteUrl}/fresh.json as a JSON Feed). Release-dated (when a tune came out), not found-dated
 - [Findings API](${siteUrl}/api/v1/findings): the feed as JSON, newest found first, cursor-paginated; accepts limit (max 48) and cursor query params
 - [Tracks API](${siteUrl}/api/v1/tracks): every track, newest release first, numbered pages (page); certified=true narrows to findings, certified=false to the rest
@@ -328,6 +335,7 @@ ${tracks.join("\n")}
 - [Agent skills](${siteUrl}/.well-known/agent-skills/index.json): the fluncle-api skill, with digest
 - [llms.txt](${siteUrl}/llms.txt): the plain-language map of the Galaxy
 - [llms-full.txt](${siteUrl}/llms-full.txt): the entire archive in one document, every finding
+- [The docs](${siteUrl}/docs): the field manual for the machinery, the API, the CLI, the rave terminal, the MCP server, the Log ID, the feeds, and Tor. Every page has a clean Markdown twin at /docs.md/<slug>, and the Getting started page is the bare ${siteUrl}/docs.md
 
 ## Tools
 
@@ -532,7 +540,7 @@ The server card (SEP-2127) is at \`${siteUrl}/.well-known/mcp/server-card.json\`
 
 ## Everything else
 
-- \`GET /rss.xml\`: the 25 most recent findings as RSS.
+- \`GET /rss.xml\`: the 25 most recent findings and mixtapes as RSS.
 - \`GET /fresh.xml\` (+ \`/fresh.json\`): the newest releases over a 30-day window, as RSS / JSON Feed.
 - \`GET /api/v1/tracks/fresh\`: what just came out, as JSON (limit max 100).
 - \`GET /llms.txt\`: the plain-language map of the Galaxy.

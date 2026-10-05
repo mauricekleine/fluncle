@@ -1,4 +1,4 @@
-import { ALBUM_INDEX_MIN_TRACKS, getAlbumBySlug } from "@/lib/server/albums";
+import { ALBUM_INDEX_MIN_TRACKS, albumCoverUrl, getAlbumBySlug } from "@/lib/server/albums";
 import { type ArtistChip, listArtistsByAlbum } from "@/lib/server/artists";
 import { getLabelForAlbum, type LabelRecord } from "@/lib/server/labels";
 import { releaseTodayUtc } from "@/lib/server/release-day";
@@ -44,7 +44,7 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     return { status: "missing" };
   }
 
-  const [findings, catalogue, artists, label, related] = await Promise.all([
+  const [findings, catalogue, artists, label, related, albumCover] = await Promise.all([
     getFindingsByAlbum(album.id),
     listCatalogueTracksByAlbum(album.id),
     listArtistsByAlbum(album.id),
@@ -53,6 +53,7 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
       { albumId: album.id, kind: "album" },
       { today: releaseTodayUtc(new Date()) },
     ).catch((): TrackListItem[] => []),
+    albumCoverUrl(album.id).catch((): string | undefined => undefined),
   ]);
 
   if (album.renderableTrackCount === 0) {
@@ -66,7 +67,7 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     catalogue: catalogue.tracks,
     catalogueTotal: catalogue.total,
 
-    coverImageUrl: findings[0]?.albumImageUrl,
+    coverImageUrl: findings[0]?.albumImageUrl ?? albumCover,
     findings,
 
     indexable: album.renderableTrackCount >= ALBUM_INDEX_MIN_TRACKS,

@@ -502,6 +502,12 @@ const registryServiceLabels: Record<string, string> = (() => {
     }
   }
 
+  for (const surface of liveSurfaces()) {
+    if (surface.kind === "cron" && surface.title && !(surface.name in labels)) {
+      labels[surface.name] = surface.title;
+    }
+  }
+
   return labels;
 })();
 
