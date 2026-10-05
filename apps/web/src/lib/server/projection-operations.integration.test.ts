@@ -366,7 +366,7 @@ describe("projection production operations", () => {
         expect(marker.rows[0]?.value).toBe(`${generation}:${completedAt}`);
         await db.execute(`insert into settings (key, value)
           values ('public_projection_cutover_enabled', 'true')`);
-        expect(await readProjectedDefaultTrackTotal(db)).toBeUndefined();
+        expect(await readProjectedDefaultTrackTotal(db)).toBe(3);
         for (let repairStep = 0; repairStep < 10; repairStep += 1) {
           await advanceProjectionFor(db, {
             action: "repair",

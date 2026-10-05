@@ -461,6 +461,13 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
   },
   {
     count: 1,
+    file: "lib/server/public-projection-cutover.ts",
+    pattern: "fn-wrapped:substr-release-date",
+    reason:
+      "The debt-corrected release-year buckets compute the live bucket only for pending `public_aggregates` repair subjects: at most 501 ids read through projection_repairs_order_idx, each joined to tracks by primary key. The plan is pinned in public-projection-cutover.integration.test.ts.",
+  },
+  {
+    count: 1,
     file: "lib/server/search.ts",
     pattern: "fn-wrapped:leading-wildcard-like",
     reason:
