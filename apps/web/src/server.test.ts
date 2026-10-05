@@ -590,12 +590,12 @@ describe("server.ts shared-cache isolation", () => {
   });
 
   it("stamps the security headers on a cache HIT, not just the cold render", async () => {
-    const miss = await dispatch("https://www.fluncle.com/artists", { accept: "text/html" });
+    const miss = await dispatchAndSettle("https://www.fluncle.com/artists", {
+      accept: "text/html",
+    });
 
     expect(miss.headers.get("x-edge-cache")).toBe("miss");
     expect(miss.headers.get("x-content-type-options")).toBe("nosniff");
-    await Promise.resolve();
-    await Promise.resolve();
 
     const hit = await dispatch("https://www.fluncle.com/artists", { accept: "text/html" });
 
