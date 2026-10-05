@@ -639,6 +639,39 @@ describe("listLabelCatalogue (the label page's artists, then records)", () => {
     expect(page.totalTracks).toBe(1);
   });
 
+  it("subtracts a duplicated collaboration once when the label pages", async () => {
+    for (const [trackId, spotifyUrl] of [
+      ["t_collab_anchored", "https://open.spotify.com/track/collab"],
+      ["t_collab_bare", null],
+    ] as const) {
+      await seedCatalogueTrack({
+        album: "Together",
+        artists: ["Calibre", "DRS"],
+        labelId: "lbl_1",
+        releaseDate: "2010-01-01",
+        spotifyUrl,
+        title: "Shared Tune",
+        trackId,
+      });
+    }
+    for (let index = 1; index <= 11; index++) {
+      const name = `Zed ${String(index).padStart(2, "0")}`;
+
+      await seedCatalogueTrack({
+        album: `${name} EP`,
+        artists: [name],
+        labelId: "lbl_1",
+        releaseDate: "2011-01-01",
+        trackId: `t_solo_${index}`,
+      });
+    }
+
+    const page = await listLabelCatalogue("lbl_1", "name", 1);
+
+    expect(page.pageCount).toBe(2);
+    expect(page.totalTracks).toBe(12);
+  });
+
   it("returns an empty page (no throw) for page 1 of a label with no quieter rows", async () => {
     const page = await listLabelCatalogue("lbl_1", "name", 1);
 

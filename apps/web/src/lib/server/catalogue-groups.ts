@@ -466,11 +466,13 @@ export async function listLabelCatalogue(
 
   const totalTracks = Number(rows[0]?.total_tracks ?? 0);
   const totalGroups = Number(rows[0]?.total_groups ?? 0);
-  let removed = 0;
+  const removed = new Set<string>();
   const groups = intoGroups(rows).map(({ head, rows: held }) => {
     const records = intoRecords(held);
 
-    removed += records.removed;
+    for (const trackId of records.removed) {
+      removed.add(trackId);
+    }
 
     return {
       name: head.group_name,
@@ -488,7 +490,7 @@ export async function listLabelCatalogue(
     totalGroups,
 
     totalTracks: Math.max(
-      totalTracks - removed,
+      totalTracks - removed.size,
       new Set(flattenArtistGroups(groups).map((track) => track.trackId)).size,
     ),
   };
@@ -513,7 +515,7 @@ function intoGroups(
   return groups;
 }
 
-function intoRecords(rows: GroupTrackRow[]): { records: CatalogueRecord[]; removed: number } {
+function intoRecords(rows: GroupTrackRow[]): { records: CatalogueRecord[]; removed: string[] } {
   const buckets: GroupTrackRow[][] = [];
   const index = new Map<string, GroupTrackRow[]>();
 
@@ -532,11 +534,12 @@ function intoRecords(rows: GroupTrackRow[]): { records: CatalogueRecord[]; remov
     buckets.push(bucket);
   }
 
-  let removed = 0;
+  const removed: string[] = [];
   const records = buckets.map((bucket) => {
     const deduped = dedupeByRecordingIdentity(bucket, groupRowIdentity);
+    const kept = new Set(deduped.map((row) => row.track_id));
 
-    removed += bucket.length - deduped.length;
+    removed.push(...bucket.filter((row) => !kept.has(row.track_id)).map((row) => row.track_id));
 
     const head = bucket[0];
 
