@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 
+curl_config() {
+	local key="$1" value="$2"
+	value="${value//\\/\\\\}"
+	value="${value//\"/\\\"}"
+	value="${value//$'\n'/\\n}"
+	value="${value//$'\r'/\\r}"
+	value="${value//$'\t'/\\t}"
+	printf '%s = "%s"\n' "$key" "$value"
+}
+
 set -uo pipefail
 
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
@@ -116,7 +126,7 @@ emit_render_cost() {
 		"$id" "$log_id" "$occurred_at" "$seconds")"
 	http="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
 		-X POST "${API_URL}/api/v1/admin/costs/events" \
-		-H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
+		--config - <<<"$(curl_config header "Authorization: Bearer ${FLUNCLE_API_TOKEN}")" \
 		-H "Content-Type: application/json" \
 		-d "$body" 2>>"$LOG_FILE" || printf '000')"
 	case "$http" in
@@ -129,7 +139,7 @@ discord_alert() {
 	[ -n "${DISCORD_ALERT_WEBHOOK:-}" ] || return 0
 	curl -sS -o /dev/null --max-time 10 -H 'Content-Type: application/json' \
 		-d "$(printf '{"content":"%s"}' "$1")" \
-		"$DISCORD_ALERT_WEBHOOK" 2>>"$LOG_FILE" || true
+		--config - <<<"$(curl_config url "$DISCORD_ALERT_WEBHOOK")" 2>>"$LOG_FILE" || true
 }
 
 probe_box() {

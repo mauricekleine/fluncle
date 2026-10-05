@@ -2,6 +2,16 @@
 
 set -euo pipefail
 
+curl_config() {
+	local key="$1" value="$2"
+	value="${value//\\/\\\\}"
+	value="${value//\"/\\\"}"
+	value="${value//$'\n'/\\n}"
+	value="${value//$'\r'/\\r}"
+	value="${value//$'\t'/\\t}"
+	printf '%s = "%s"\n' "$key" "$value"
+}
+
 ZONE_NAME="fluncle.com"
 DELEGATED_ZONE="dig.fluncle.com"
 NS_HOST="ns1.dig.fluncle.com"
@@ -55,27 +65,23 @@ if [[ -z "$API_KEY" ]]; then
 	exit 1
 fi
 
-auth_headers() {
+auth_config() {
 	if [[ -n "$CF_EMAIL" ]]; then
-		printf '%s\n' "-H" "X-Auth-Email: $CF_EMAIL" "-H" "X-Auth-Key: $API_KEY"
+		curl_config header "X-Auth-Email: $CF_EMAIL"
+		curl_config header "X-Auth-Key: $API_KEY"
 	else
-		printf '%s\n' "-H" "Authorization: Bearer $API_KEY"
+		curl_config header "Authorization: Bearer $API_KEY"
 	fi
 }
 
 cf() {
 
 	local method="$1" path="$2" body="${3:-}"
-	local -a hdrs=()
-	local line
-	while IFS= read -r line; do
-		hdrs+=("$line")
-	done < <(auth_headers)
 	if [[ -n "$body" ]]; then
 		curl -fsS -X "$method" "${API}${path}" \
-			"${hdrs[@]}" -H "Content-Type: application/json" --data "$body"
+			--config - -H "Content-Type: application/json" --data "$body" <<<"$(auth_config)"
 	else
-		curl -fsS -X "$method" "${API}${path}" "${hdrs[@]}"
+		curl -fsS -X "$method" "${API}${path}" --config - <<<"$(auth_config)"
 	fi
 }
 

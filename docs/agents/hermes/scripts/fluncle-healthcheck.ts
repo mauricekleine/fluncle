@@ -13,6 +13,7 @@ import {
 import { connect } from "node:net";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { curlUrlConfig } from "./curl-config";
 import { cronStaleBudgetMs, type CronDef } from "./cron-freshness";
 import { findJsonSummary, splitMarker } from "./cron-marker";
 import {
@@ -112,9 +113,11 @@ function runQuiet(
   bin: string,
   args: string[],
   timeoutMs: number,
+  input?: string,
 ): { code: number; stderr: string; stdout: string } {
   const result = spawnSync(bin, args, {
     encoding: "utf8",
+    input,
     maxBuffer: 8 * 1024 * 1024,
     timeout: timeoutMs,
   });
@@ -1715,9 +1718,11 @@ function pingDiscord(content: string): void {
         body,
         "--max-time",
         "10",
-        DISCORD_ALERT_WEBHOOK,
+        "--config",
+        "-",
       ],
       12_000,
+      curlUrlConfig(DISCORD_ALERT_WEBHOOK),
     );
 
     if (code !== 0) {
@@ -1738,8 +1743,9 @@ function pingBeacon(): void {
   try {
     const { code } = runQuiet(
       "curl",
-      ["-sS", "-o", "/dev/null", "--max-time", "10", BEACON_URL],
+      ["-sS", "-o", "/dev/null", "--max-time", "10", "--config", "-"],
       12_000,
+      curlUrlConfig(BEACON_URL),
     );
 
     if (code !== 0) {

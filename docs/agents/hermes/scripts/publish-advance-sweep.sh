@@ -17,7 +17,7 @@ run_publish_advance() {
 	local raw rc=0
 	raw="$(curl -fsS --max-time 30 \
 		-X POST "${API_BASE_URL}${ADVANCE_PATH}" \
-		-H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
+		--config - <<<"$(curl_config header "Authorization: Bearer ${FLUNCLE_API_TOKEN}")" \
 		-H "Content-Type: application/json" \
 		-d '{}')" || rc="$?"
 

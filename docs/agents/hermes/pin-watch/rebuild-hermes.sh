@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 
+curl_config() {
+	local key="$1" value="$2"
+	value="${value//\\/\\\\}"
+	value="${value//\"/\\\"}"
+	value="${value//$'\n'/\\n}"
+	value="${value//$'\r'/\\r}"
+	value="${value//$'\t'/\\t}"
+	printf '%s = "%s"\n' "$key" "$value"
+}
+
 set -euo pipefail
 
 CONTAINER="${PINWATCH_CONTAINER:-hermes}"
@@ -147,7 +157,7 @@ alert() {
 	[ -n "${WEBHOOK:-}" ] || return 0
 	curl -fsS -m 10 -H 'Content-Type: application/json' \
 		-d "$(printf '{"content":%s}' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')")" \
-		"$WEBHOOK" >/dev/null 2>&1 || true
+		--config - <<<"$(curl_config url "$WEBHOOK")" >/dev/null 2>&1 || true
 }
 
 RUN_EVENT_PATH='/api/v1/admin/telemetry/runs'
@@ -193,7 +203,7 @@ record_run_event() {
 		"$(_run_event_json_string "$summary_raw")")"
 	if ! curl -fsS -o /dev/null --max-time "$RUN_EVENT_TIMEOUT_SECS" \
 		-X POST -H 'Content-Type: application/json' \
-		-H "Authorization: Bearer ${token}" \
+		--config - <<<"$(curl_config header "Authorization: Bearer ${token}")" \
 		--data-binary "$body" "${base}${RUN_EVENT_PATH}" >/dev/null 2>&1; then
 		RUN_EVENT_FAILURE_REASON="post-failed"
 		return 1
@@ -630,7 +640,7 @@ post_health() {
 	for attempt in 1 2; do
 		http_status=""
 		if http_status="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' \
-			-H 'Content-Type: application/json' -H "Authorization: Bearer $APITOKEN" \
+			-H 'Content-Type: application/json' --config - <<<"$(curl_config header "Authorization: Bearer $APITOKEN")" \
 			-d "$body" "${WORKER_URL%/}/api/v1/admin/health" 2>/dev/null)"; then
 			case "$http_status" in
 			2??) return 0 ;;
@@ -642,7 +652,7 @@ post_health() {
 		fi
 
 		if ! response="$(curl -sS -m 10 -w $'\n%{http_code}' \
-			-H 'Content-Type: application/json' -H "Authorization: Bearer $APITOKEN" \
+			-H 'Content-Type: application/json' --config - <<<"$(curl_config header "Authorization: Bearer $APITOKEN")" \
 			-d "$reconcile_body" "${WORKER_URL%/}/api/v1/admin/operation-receipts/resolve" 2>/dev/null)"; then
 			log "record_health reconciliation unavailable; snapshot was not replayed"
 			return 0

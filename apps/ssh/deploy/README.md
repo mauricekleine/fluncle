@@ -15,6 +15,8 @@ It puts **no token on the box** for its core job and reads nothing from `op`:
 - **Build context:** the Fluncle repo is public, so the clone at `/opt/fluncle-ssh-build` needs no key. If GitHub's anonymous smart-HTTP path is challenged as though it needed a username, the script falls back to GitHub's unauthenticated ref API and the codeload archive for the exact returned commit. It validates the full commit SHA and the archive's commit-bearing root before using the source. No credential prompt, helper, token, or SSH key participates in either path.
 - **The swap only replaces the binary.** It writes `/opt/fluncle-ssh/fluncle-ssh` and restarts the service; the systemd unit and `/etc/fluncle-ssh.env` (the service contract the deploy script established) are **left untouched**, so the reused runtime env is exactly what the operator already placed. Nothing is captured, nothing is read from `op`.
 
+Bearer headers and secret webhook/beacon URLs reach curl through escaped config on stdin (`--config -`), never argv.
+
 The only optional inputs — the Discord webhook and the agent-scoped API token used for the best-effort **alert** + **/status** visibility — come from an operator-placed `EnvironmentFile` (`/etc/fluncle/ssh-freshen.env`, `-`-optional in the unit) kept **out of the repo**. Unset any of them and that visibility is simply skipped; the self-deploy still runs. (The token is the same agent-scoped token the [watchdog](../watchdog) already uses for its `record_health` POST — you can point this at the same values.)
 
 ## Build model: on-box `go build` (and why, vs a CI-built artifact)

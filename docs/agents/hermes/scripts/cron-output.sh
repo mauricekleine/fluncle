@@ -1,5 +1,15 @@
 # shellcheck shell=bash
 
+curl_config() {
+	local key="$1" value="$2"
+	value="${value//\\/\\\\}"
+	value="${value//\"/\\\"}"
+	value="${value//$'\n'/\\n}"
+	value="${value//$'\r'/\\r}"
+	value="${value//$'\t'/\\t}"
+	printf '%s = "%s"\n' "$key" "$value"
+}
+
 _REBAKE_LOCK="$(dirname -- "${HOME:-/opt/data/home}")/rebake.lock"
 _CRON_OUTPUT_REBAKE_ACTIVE=false
 if [ -f "$_REBAKE_LOCK" ]; then
@@ -65,7 +75,7 @@ record_run_event() {
 		"$(_run_event_json_string "$summary_raw")")"
 	if ! curl -fsS -o /dev/null --max-time "$RUN_EVENT_TIMEOUT_SECS" \
 		-X POST -H 'Content-Type: application/json' \
-		-H "Authorization: Bearer ${token}" \
+		--config - <<<"$(curl_config header "Authorization: Bearer ${token}")" \
 		--data-binary "$body" "${base}${RUN_EVENT_PATH}" >/dev/null 2>&1; then
 		RUN_EVENT_FAILURE_REASON="post-failed"
 		return 1

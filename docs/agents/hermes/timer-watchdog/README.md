@@ -72,6 +72,8 @@ So every pass ends with a JSON summary line on stdout and POSTs it to the run le
 
 **There is no `ok` in that line, deliberately.** The verdict is `exit_code == 0 && errors == 0` and the Worker computes it from the two facts above; a summary that grades itself is rejected at the edge, because the nightly Sentry sweep exited 0 for eleven nights while printing `{"errors":2,"ok":true}` — a hardcoded literal sitting beside the number that contradicted it.
 
+Bearer headers and secret webhook/beacon URLs reach curl through escaped config on stdin (`--config -`), never argv.
+
 The agent token for the POST is read off the LIVE container's env via `docker inspect` — the same credential-free read the Discord webhook uses, so this unit still holds no config file and reads nothing from `op`. No token, or the container down, means no POST: absence of a row reads as a missed run, which is the alarm.
 
 ## Verifying it

@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 
+curl_config() {
+	local key="$1" value="$2"
+	value="${value//\\/\\\\}"
+	value="${value//\"/\\\"}"
+	value="${value//$'\n'/\\n}"
+	value="${value//$'\r'/\\r}"
+	value="${value//$'\t'/\\t}"
+	printf '%s = "%s"\n' "$key" "$value"
+}
+
 set -euo pipefail
 
 UNIT="${1:?usage: fluncle-sweep-failure-notify.sh <failed-unit-name>}"
@@ -87,7 +97,7 @@ MSG="⚠️ fluncle sweep failed on the Hermes host: ${UNIT} (result=${RESULT:-u
 
 if curl -fsS -m 10 -H 'Content-Type: application/json' \
 	-d "$(printf '{"content":%s}' "$(printf '%s' "$MSG" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')")" \
-	"$WEBHOOK" >/dev/null 2>&1; then
+	--config - <<<"$(curl_config url "$WEBHOOK")" >/dev/null 2>&1; then
 	[ "$COOLDOWN_ACTIVE" = "1" ] && printf '%s\n' "$NOW" >"$STAMP" 2>/dev/null || true
 fi
 
