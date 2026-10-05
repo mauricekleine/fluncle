@@ -94,6 +94,31 @@ describe("IndexNow submission lifecycle", () => {
     await expect(submitIndexNowUrls([`${siteUrl}/log/004.7.2I`])).resolves.toBe(status);
   });
 
+  it.each([200, 202])(
+    "retries a rate-limited publish payload once at Yandex and logs HTTP %i acceptance",
+    async (status) => {
+      const logged = vi.spyOn(console, "info").mockImplementation(() => {});
+      const fetchStub = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 429 }))
+        .mockResolvedValueOnce(new Response(null, { status }));
+      vi.stubGlobal("fetch", fetchStub);
+      submitFindingToIndexNow("004.7.2I");
+      await vi.waitFor(() => expect(workers.takeWaitUntilPromises()).toHaveLength(1));
+      await vi.waitFor(() => expect(logged).toHaveBeenCalled());
+      expect(fetchStub.mock.calls.map(([url]) => url)).toEqual([
+        "https://api.indexnow.org/indexnow",
+        "https://yandex.com/indexnow",
+      ]);
+      expect(fetchStub.mock.calls[1]?.[1]?.body).toBe(fetchStub.mock.calls[0]?.[1]?.body);
+      expect(JSON.parse(String(logged.mock.calls[0]?.[0]))).toMatchObject({
+        endpoint: "https://yandex.com/indexnow",
+        event: "indexnow.fallback-accepted",
+        status,
+      });
+    },
+  );
+
   it("acknowledges accepted responses without waiting for body cancellation", async () => {
     vi.stubGlobal(
       "fetch",
@@ -120,6 +145,7 @@ describe("IndexNow submission lifecycle", () => {
       const error = await submitIndexNowUrls([`${siteUrl}/log/004.7.2I`]).catch(
         (cause: unknown) => cause,
       );
+      expect(fetch).toHaveBeenCalledTimes(status === 429 ? 2 : 1);
       expect(error).toBeInstanceOf(IndexNowFailed);
       expect(error).toMatchObject({ excerpt: expect.stringContaining("denied"), status });
       if (error instanceof IndexNowFailed) {

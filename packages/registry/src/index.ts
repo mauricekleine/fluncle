@@ -1804,7 +1804,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.indexnow",
     operatorNotes:
-      "06:00 Europe/Amsterdam, after nightly hub reconciliation, with a 07:15 retry. Calls the agent-tier submit_indexnow op directly in bounded admitted windows, then submits at most 10,000 currently indexable due URLs. HTTP 200/202 stamp the submitted versions; rejections stay due and fail the run ledger summary. Source: docs/agents/hermes/scripts/indexnow.* and docs/agents/hermes/indexnow-timer/.",
+      "06:00 Europe/Amsterdam, after nightly hub reconciliation, with a 07:15 retry. Calls the agent-tier submit_indexnow walk, claim, and ack phases in bounded admitted windows. The box posts paced batches of 1,000, up to 10,000 URLs per daily run, with Yandex fallback on 429 and bounded Retry-After backoff. A complete walk within 12 hours skips the retry walk. HTTP 200/202 allow matching-version stamps; unaccepted versions stay due, partial rate limits remain resumable, and zero-acceptance rate limits or other rejections fail the run summary. Source: docs/agents/hermes/scripts/indexnow.* and docs/agents/hermes/indexnow-timer/.",
     operatorOnly: "Search-engine notification is plumbing, not a listener-facing automation.",
     probeConfig: {
       cadenceMs: 24 * 60 * MINUTE_MS,
