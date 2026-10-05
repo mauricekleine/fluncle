@@ -58,7 +58,15 @@ vi.mock("./env", () => ({
     name === "TURSO_TELEMETRY_DATABASE_URL" ? "libsql://scratch-telemetry" : "token",
 }));
 
-const { DB_MAX_RETRIES, databaseOperationStatement, getDb, getTelemetryDb } = await import("./db");
+const {
+  DB_MAX_RETRIES,
+  classifyDatabaseFailure,
+  databaseOperationStatement,
+  getDb,
+  getTelemetryDb,
+  noteTransientDatabaseFailure,
+  requestSawTransientDatabaseFailure,
+} = await import("./db");
 const { runWithDatabaseRequestScope } = await import("./database-request-scope");
 
 function gatewayError(status: number) {
@@ -66,6 +74,29 @@ function gatewayError(status: number) {
     cause: Object.assign(new Error(`server returned HTTP status ${status}`), { status }),
   });
 }
+
+describe("classifyDatabaseFailure", () => {
+  it.each([
+    ...[502, 503, 504, 520, 522, 525, 530].map((status) => ({
+      error: gatewayError(status),
+      expected: "retryable-gateway",
+      name: String(status),
+    })),
+    { error: gatewayError(524), expected: "transient-gateway", name: "524" },
+    { error: gatewayError(400), expected: "other", name: "400" },
+    { error: new Error("plain failure"), expected: "other", name: "plain error" },
+    ...[1, 2, 3, 4].map((depth) => ({
+      error: Array.from({ length: depth }).reduce<unknown>(
+        (cause) => new Error("wrapped", { cause }),
+        { status: 502 },
+      ),
+      expected: depth <= 3 ? "retryable-gateway" : "other",
+      name: `cause depth ${depth}`,
+    })),
+  ])("classifies $name as $expected", ({ error, expected }) => {
+    expect(classifyDatabaseFailure(error)).toBe(expected);
+  });
+});
 
 beforeEach(() => {
   execute.mockReset();
@@ -1062,6 +1093,66 @@ describe("getDb transient-gateway retry", () => {
 
     return outcome;
   }
+
+  it.each([502, 524, 400])("marks only final transient failures for a %s read", async (status) => {
+    const error = gatewayError(status);
+    execute.mockRejectedValue(error);
+    await runWithDatabaseRequestScope(async () => {
+      const db = await getDb();
+      expect(requestSawTransientDatabaseFailure()).toBe(false);
+      expect(await rejectionAfterTimers(db.execute("select 1"))).toBe(error);
+      expect(requestSawTransientDatabaseFailure()).toBe(status !== 400);
+      expect(execute).toHaveBeenCalledTimes(status === 502 ? DB_MAX_RETRIES + 1 : 1);
+    });
+    expect(requestSawTransientDatabaseFailure()).toBe(false);
+    runWithDatabaseRequestScope(() => {
+      expect(requestSawTransientDatabaseFailure()).toBe(false);
+    });
+  });
+
+  it("does not mark a read that recovers on retry", async () => {
+    const result = { rows: [] };
+    execute.mockRejectedValueOnce(gatewayError(502)).mockResolvedValue(result);
+    await runWithDatabaseRequestScope(async () => {
+      const db = await getDb();
+      const pending = db.execute("select 1");
+      await flushBackoff();
+      expect(await pending).toBe(result);
+      expect(requestSawTransientDatabaseFailure()).toBe(false);
+    });
+  });
+
+  it.each([
+    ["primary", "execute"],
+    ["primary", "batch"],
+    ["telemetry", "execute"],
+    ["telemetry", "batch"],
+  ] as const)("marks %s %s write failures without retrying", async (slot, operation) => {
+    const error = gatewayError(502);
+    execute.mockRejectedValue(error);
+    batch.mockRejectedValue(error);
+    await runWithDatabaseRequestScope(async () => {
+      const db = slot === "primary" ? await getDb() : await getTelemetryDb();
+      if (db === undefined) {
+        throw new Error("telemetry client missing");
+      }
+      const pending =
+        operation === "execute"
+          ? db.execute("insert into tracks (id) values ('x')")
+          : db.batch(["insert into tracks (id) values ('x')"], "write");
+      expect(await rejectionAfterTimers(pending)).toBe(error);
+      expect(requestSawTransientDatabaseFailure()).toBe(true);
+      expect(operation === "execute" ? execute : batch).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("leaves unscoped failures unmarked without throwing from the marker", async () => {
+    expect(() => noteTransientDatabaseFailure()).not.toThrow();
+    execute.mockRejectedValue(gatewayError(524));
+    const db = await getDb();
+    await rejectionAfterTimers(db.execute("select 1"));
+    expect(requestSawTransientDatabaseFailure()).toBe(false);
+  });
 
   it("retries a select that fails once with a 502 and returns the retried result", async () => {
     const result = { rows: [{ id: 1 }] };

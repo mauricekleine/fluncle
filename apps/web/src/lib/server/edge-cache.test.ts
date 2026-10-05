@@ -21,6 +21,7 @@ import {
   SITEMAP_CACHE_POLICY,
   SITEMAP_FRESH_SECONDS,
   SITEMAP_SWR_SECONDS,
+  STALE_IF_ERROR_SECONDS,
   SWR_SECONDS,
   withEdgeCache,
 } from "./edge-cache";
@@ -452,7 +453,7 @@ describe("withEdgeCache", () => {
           await withEdgeCache(new Request(url), async () => html("stored"), policy);
           await Promise.all(takeWaitUntilPromises());
           expect(fake.entries.get(url)?.headers.get("cache-control")).toBe(
-            `public, s-maxage=${retention}`,
+            `public, s-maxage=${retention + STALE_IF_ERROR_SECONDS}`,
           );
           vi.setSystemTime(Date.now() + age * 1000);
           const render = vi.fn(async () => html("rendered"));
@@ -554,6 +555,37 @@ describe("withEdgeCache", () => {
     },
   );
 
+  it.each([500, 503, "throws"] as const)(
+    "serves an expired copy when rendering %s and keeps its original retention timestamps",
+    async (failure) => {
+      const fake = installFakeCache();
+      const request = new Request("https://www.fluncle.com/track/mb_x");
+      try {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-07-20T12:00:00.000Z"));
+        await withEdgeCache(request, async () => html("old page"));
+        await vi.advanceTimersByTimeAsync(0);
+        const stored = fake.entries.get(request.url);
+        vi.advanceTimersByTime(PAGE_CACHE_POLICY.retainSeconds * 1_000);
+
+        const response = await withEdgeCache(request, async () => {
+          if (failure === "throws") {
+            throw new Error("render failed");
+          }
+          return new Response("error page", { status: failure });
+        });
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-edge-cache")).toBe("stale-if-error");
+        expect(response.headers.get("x-edge-expires-at")).toBeNull();
+        expect(await response.text()).toBe("old page");
+        expect(fake.entries.get(request.url)).toBe(stored);
+      } finally {
+        fake.restore();
+      }
+    },
+  );
+
   it.each([
     { body: "legacy", headers: new Headers(), status: "fresh" },
     { body: "current", headers: new Headers({ "sec-fetch-mode": "navigate" }), status: "miss" },
@@ -604,36 +636,72 @@ describe("withEdgeCache", () => {
   it.each([
     { age: 7_200_000, build: "current-build", reason: "past its browser window" },
     { age: 0, build: "new-build", reason: "from another build" },
-  ])("keeps crawler reuse when a browser replacement $reason fails", async ({ age, build }) => {
+  ])(
+    "serves the retained entry when a browser replacement $reason fails",
+    async ({ age, build }) => {
+      const fake = installFakeCache();
+      const url = "https://www.fluncle.com/track/mb_abc";
+      const browser = new Request(url, { headers: { "sec-fetch-mode": "navigate" } });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-07-20T00:00:00Z"));
+      try {
+        await withEdgeCache(new Request(url), async () => html("stored"));
+        await Promise.all(takeWaitUntilPromises());
+        vi.setSystemTime(Date.now() + age);
+        release.id = build;
+        const failed = await withEdgeCache(
+          browser,
+          async () =>
+            new Response("unavailable", {
+              headers: { "content-type": "text/html" },
+              status: 503,
+            }),
+        );
+        expect(failed.status).toBe(200);
+        expect(failed.headers.get("x-edge-cache")).toBe("stale-if-error");
+        expect(await failed.text()).toBe("stored");
+        const render = vi.fn(async () => html("recovered"));
+        const crawler = await withEdgeCache(new Request(url), render);
+        expect(crawler.headers.get("x-edge-cache")).toBe("fresh");
+        expect(await crawler.text()).toBe("stored");
+        expect(takeWaitUntilPromises()).toHaveLength(0);
+        expect(render).not.toHaveBeenCalled();
+        const recovered = await withEdgeCache(browser, render);
+        expect(recovered.headers.get("x-edge-cache")).toBe("miss");
+        expect(await recovered.text()).toBe("recovered");
+      } finally {
+        fake.restore();
+      }
+    },
+  );
+
+  it.each([200, 404])("replaces or deletes an expired entry after rendering %s", async (status) => {
     const fake = installFakeCache();
-    const url = "https://www.fluncle.com/track/mb_abc";
-    const browser = new Request(url, { headers: { "sec-fetch-mode": "navigate" } });
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-07-20T00:00:00Z"));
+    const request = new Request("https://www.fluncle.com/track/mb_x");
     try {
-      await withEdgeCache(new Request(url), async () => html("stored"));
-      await Promise.all(takeWaitUntilPromises());
-      vi.setSystemTime(Date.now() + age);
-      release.id = build;
-      const failed = await withEdgeCache(
-        browser,
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-20T12:00:00.000Z"));
+      await withEdgeCache(request, async () => html("old page"));
+      await vi.advanceTimersByTimeAsync(0);
+      vi.advanceTimersByTime(PAGE_CACHE_POLICY.retainSeconds * 1_000);
+
+      const response = await withEdgeCache(
+        request,
         async () =>
-          new Response("unavailable", {
+          new Response("new page", {
             headers: { "content-type": "text/html" },
-            status: 503,
+            status,
           }),
       );
-      expect(failed.status).toBe(503);
-      expect(await failed.text()).toBe("unavailable");
-      const render = vi.fn(async () => html("recovered"));
-      const crawler = await withEdgeCache(new Request(url), render);
-      expect(crawler.headers.get("x-edge-cache")).toBe("fresh");
-      expect(await crawler.text()).toBe("stored");
-      expect(takeWaitUntilPromises()).toHaveLength(0);
-      expect(render).not.toHaveBeenCalled();
-      const recovered = await withEdgeCache(browser, render);
-      expect(recovered.headers.get("x-edge-cache")).toBe("miss");
-      expect(await recovered.text()).toBe("recovered");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(response.status).toBe(status);
+      expect(await response.text()).toBe("new page");
+      if (status === 200) {
+        expect(await fake.entries.get(request.url)?.clone().text()).toBe("new page");
+      } else {
+        expect(fake.entries.has(request.url)).toBe(false);
+      }
     } finally {
       fake.restore();
     }
@@ -678,6 +746,38 @@ describe("withEdgeCache", () => {
         );
         expect(response.headers.get("x-edge-cache")).toBe("miss");
         expect(await response.text()).toBe("today");
+      } finally {
+        fake.restore();
+      }
+    },
+  );
+
+  it.each([500, "throws", 404] as const)(
+    "keeps a good SWR entry only for errors during a refresh returning %s",
+    async (failure) => {
+      const fake = installFakeCache();
+      const request = new Request("https://www.fluncle.com/track/mb_x", {
+        headers: { "sec-fetch-mode": "navigate" },
+      });
+      try {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-07-20T12:00:00.000Z"));
+        await withEdgeCache(request, async () => html("old page"));
+        await vi.advanceTimersByTimeAsync(0);
+        const stored = fake.entries.get(request.url);
+        vi.advanceTimersByTime(PAGE_CACHE_POLICY.freshSeconds * 1_000);
+
+        const response = await withEdgeCache(request, async () => {
+          if (failure === "throws") {
+            throw new Error("refresh failed");
+          }
+          return new Response("error page", { status: failure });
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(response.headers.get("x-edge-cache")).toBe("stale");
+        expect(await response.text()).toBe("old page");
+        expect(fake.entries.get(request.url)).toBe(failure === 404 ? undefined : stored);
       } finally {
         fake.restore();
       }
@@ -755,11 +855,50 @@ describe("withEdgeCache", () => {
       );
       await Promise.all(takeWaitUntilPromises());
       expect(fake.entries.get(request.url)?.headers.get("cache-control")).toBe(
-        "public, s-maxage=20",
+        "public, s-maxage=86420",
       );
       expect(fake.entries.get(request.url)?.headers.get("x-edge-expires-at")).toBe(
         String(Date.parse("2026-07-21T00:00:00Z")),
       );
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("uses a previous release day's copy only when rendering fails", async () => {
+    const fake = installFakeCache();
+    const request = new Request("https://www.fluncle.com/artist/drift");
+    try {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-20T23:59:00.000Z"));
+      await withEdgeCache(request, async () => html("yesterday"));
+      await vi.advanceTimersByTimeAsync(0);
+      vi.setSystemTime(new Date("2026-07-21T00:00:00.000Z"));
+
+      const response = await withEdgeCache(
+        request,
+        async () => new Response("error", { status: 500 }),
+      );
+      expect(response.headers.get("x-edge-cache")).toBe("stale-if-error");
+      expect(await response.text()).toBe("yesterday");
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("retains stored entries for one error-only day beyond their serving expiry", async () => {
+    const fake = installFakeCache();
+    const request = new Request("https://www.fluncle.com/track/mb_x");
+    try {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      await withEdgeCache(request, async () => html("page"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      const headers = fake.entries.get(request.url)?.headers;
+      expect(headers?.get("Cache-Control")).toBe("public, s-maxage=691200");
+      expect(headers?.get("x-edge-fresh-until")).toBe("300000");
+      expect(headers?.get("x-edge-expires-at")).toBe("604800000");
     } finally {
       fake.restore();
     }
@@ -1018,7 +1157,7 @@ describe("withEdgeCache", () => {
         "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400",
       );
       expect(fake.entries.get(request.url)?.headers.get("cache-control")).toBe(
-        "public, s-maxage=90000",
+        "public, s-maxage=176400",
       );
       release.id = "next-build";
       const hit = await withEdgeCache(request, render, SITEMAP_CACHE_POLICY);

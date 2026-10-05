@@ -16,6 +16,7 @@ import { presenceRedirect, withPresenceRobots } from "./lib/server/presence-host
 import { subdomainSurfaceRoute } from "./router-rewrite";
 import { serverSentryIntegrations, serverSentryScrubHooks } from "./lib/server/sentry-options";
 import { SENTRY_RELEASE, WORKER_SENTRY_DSN } from "./lib/sentry-config";
+import { withTransientDatabaseFailure } from "./lib/server/transient-failure";
 
 const TRACE_RATE_ALWAYS = 1.0;
 const TRACE_RATE_NONE = 0;
@@ -99,14 +100,18 @@ async function dispatch(request: Request): Promise<Response> {
     !hasAdminCookie(request) &&
     (cachePolicy.contentType !== "text/html" || acceptsHtml)
   ) {
-    const cached = await withEdgeCache(request, async () => handler.fetch(request), cachePolicy);
+    const cached = await withEdgeCache(
+      request,
+      async () => withTransientDatabaseFailure(request, await handler.fetch(request)),
+      cachePolicy,
+    );
 
     const located = appendOnionLocation(cached, url);
 
     return url.pathname === "/" ? appendAgentLinkHeaders(located) : located;
   }
 
-  let response = await handler.fetch(request);
+  let response = withTransientDatabaseFailure(request, await handler.fetch(request));
 
   if (
     isPublicHtmlPagePath(url.pathname) &&

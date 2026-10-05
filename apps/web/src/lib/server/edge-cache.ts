@@ -49,6 +49,8 @@ export const FRESH_SECONDS = 300;
 
 export const SWR_SECONDS = 3_600;
 
+export const STALE_IF_ERROR_SECONDS = 86_400;
+
 export const PAGE_CACHE_POLICY = policy(
   FRESH_SECONDS,
   SWR_SECONDS,
@@ -310,12 +312,30 @@ export async function withEdgeCache(
     return tagHit(hit, "stale", cachePolicy);
   }
 
-  if (hit && !withinRetention) {
-    await cache.delete(cacheKey);
+  const { response, servedStale } = await renderOrServeStale(render, hit, cachePolicy);
+
+  if (servedStale) {
+    return response;
   }
 
-  const response = await render();
+  await storeRendered(
+    cache,
+    cacheKey,
+    response,
+    cachePolicy,
+    hit !== undefined && !withinRetention,
+  );
 
+  return tagResponse(response, "miss", cachePolicy);
+}
+
+async function storeRendered(
+  cache: Cache,
+  cacheKey: Request,
+  response: Response,
+  cachePolicy: EdgeCachePolicy,
+  evictExpiredHit: boolean,
+): Promise<void> {
   if (isStorable(response, cachePolicy)) {
     void runServerEffect(
       keepAlive(
@@ -326,9 +346,28 @@ export async function withEdgeCache(
         }),
       ),
     );
+  } else if (evictExpiredHit) {
+    await cache.delete(cacheKey);
+  }
+}
+
+async function renderOrServeStale(
+  render: () => Promise<Response>,
+  hit: Response | undefined,
+  cachePolicy: EdgeCachePolicy,
+): Promise<{ response: Response; servedStale: boolean }> {
+  if (!hit) {
+    return { response: await render(), servedStale: false };
   }
 
-  return tagResponse(response, "miss", cachePolicy);
+  try {
+    const response = await render();
+    if (response.status < 500) {
+      return { response, servedStale: false };
+    }
+  } catch {}
+
+  return { response: tagHit(hit, "stale-if-error", cachePolicy), servedStale: true };
 }
 
 async function refresh(
@@ -341,7 +380,7 @@ async function refresh(
 
   if (isStorable(response, cachePolicy)) {
     await cache.put(cacheKey, toStoredResponse(response, cachePolicy, cacheKey));
-  } else {
+  } else if (response.status < 500) {
     await cache.delete(cacheKey);
   }
 }
@@ -366,7 +405,10 @@ function toStoredResponse(
   const storedPolicy = releaseSensitivePath(new URL(cacheKey.url).pathname)
     ? releaseBoundPolicy(cachePolicy, new Date(storedAt))
     : cachePolicy;
-  stored.headers.set("Cache-Control", `public, s-maxage=${storedPolicy.retainSeconds}`);
+  stored.headers.set(
+    "Cache-Control",
+    `public, s-maxage=${storedPolicy.retainSeconds + STALE_IF_ERROR_SECONDS}`,
+  );
   stored.headers.set(STAMP_HEADER, String(storedAt));
   stored.headers.set(BUILD_HEADER, SENTRY_RELEASE ?? "dev");
   stored.headers.set(FRESH_UNTIL_HEADER, String(storedAt + storedPolicy.freshSeconds * 1_000));
@@ -385,7 +427,7 @@ function toStoredResponse(
 
 function tagHit(
   response: Response,
-  status: "fresh" | "stale",
+  status: "fresh" | "stale" | "stale-if-error",
   cachePolicy: EdgeCachePolicy,
 ): Response {
   const out = new Response(response.body, response);
