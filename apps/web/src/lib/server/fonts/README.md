@@ -6,7 +6,7 @@ They exist because a Worker is the hostile case for DESIGN.md's **Canon Travels 
 
 | Constraint                               | Consequence                                                                                                                         |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Satori does not read **woff2**           | `public/fonts/*.woff2` — the faces the web app serves — are unusable. These are **TTF**.                                            |
+| Satori does not read **woff2**           | `src/fonts/*.woff2` — the faces the web app serves — are unusable. These are **TTF**.                                               |
 | The Worker has nowhere to fetch **from** | The bytes ship **in the bundle** (Vite `?inline` → base64 data-URI, decoded once per isolate in `lib/server/satori-render.ts`).     |
 | Satori has no **`@font-face`**           | The One Box Rule's `ascent-override`/`descent-override` in `styles.css` cannot reach it, so the metrics are **baked into the TTF**. |
 

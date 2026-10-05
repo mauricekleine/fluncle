@@ -192,8 +192,29 @@
   transition: color 150ms ease-out;
 }
 
-#nd-docs-layout :where(h1, h2, h3, h4, h5, h6):hover > a[data-card] {
+#nd-docs-layout :where(h1, h2, h3, h4, h5, h6):hover > a[data-card],
+#nd-docs-layout .docs-heading:hover > :where(h1, h2, h3, h4, h5, h6) > a[data-card] {
   color: var(--color-fd-accent-foreground);
+}
+
+#nd-docs-layout .prose .docs-heading:has(> :where(h2, h3, h4)) + * {
+  margin-top: 0;
+}
+
+#nd-docs-layout
+  .prose
+  :is(hr, h2, h3, h4, .docs-heading:has(> :where(h2, h3, h4)))
+  + .docs-heading
+  > :where(h1, h2, h3, h4, h5, h6) {
+  margin-top: 0;
+}
+
+#nd-docs-layout .prose > .docs-heading:first-child > :where(h1, h2, h3, h4, h5, h6) {
+  margin-top: 0;
+}
+
+#nd-docs-layout .prose > .docs-heading:last-child > :where(h1, h2, h3, h4, h5, h6) {
+  margin-bottom: 0;
 }
 
 /* ————— Code: the machine's own word ————— */
