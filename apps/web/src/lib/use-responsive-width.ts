@@ -29,6 +29,14 @@ export function stepDownRenditionWidth(width: RenditionWidth, steps: number): Re
   return RENDITION_LADDER[target] ?? SMALLEST_RENDITION_WIDTH;
 }
 
+export function nextRenditionWidthOnError(
+  width: RenditionWidth | undefined,
+): RenditionWidth | undefined {
+  return width === undefined || width === SMALLEST_RENDITION_WIDTH
+    ? undefined
+    : stepDownRenditionWidth(width, 1);
+}
+
 export function useResponsiveWidth(ref: RefObject<HTMLElement | null>): RenditionWidth | undefined {
   const [width, setWidth] = useState<RenditionWidth | undefined>(undefined);
 

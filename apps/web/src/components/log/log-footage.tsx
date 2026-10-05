@@ -19,6 +19,7 @@ import { useInViewport } from "@/lib/use-in-viewport";
 import { DESKTOP_QUERY, useMediaQuery } from "@/lib/use-media-query";
 import {
   SMALLEST_RENDITION_WIDTH,
+  nextRenditionWidthOnError,
   stepDownRenditionWidth,
   useResponsiveWidth,
 } from "@/lib/use-responsive-width";
@@ -65,26 +66,20 @@ export function LogFootage({ track }: { track: Track }) {
 
   const [stallDownshifts, setStallDownshifts] = useState(0);
   const renditionWidth = paneWidth ? stepDownRenditionWidth(paneWidth, stallDownshifts) : undefined;
-  const [renditionFailed, setRenditionFailed] = useState(false);
+  const [renditionsExhausted, setRenditionsExhausted] = useState(false);
 
   const videoUrl =
-    masterVideoUrl && track.logId && nearViewport
-      ? renditionFailed
-        ? masterVideoUrl
-        : renditionWidth
-          ? squared
-            ? videoCrop(track.logId, orientation, renditionWidth, false, version)
-            : videoRendition(track.logId, { version, width: renditionWidth })
-          : undefined
+    masterVideoUrl && track.logId && nearViewport && !renditionsExhausted && renditionWidth
+      ? squared
+        ? videoCrop(track.logId, orientation, renditionWidth, false, version)
+        : videoRendition(track.logId, { version, width: renditionWidth })
       : undefined;
-  const onMaster = videoUrl === masterVideoUrl;
 
   const rearmed = useRef(false);
 
   const recoverStuck = useCallback(() => {
     const video = videoRef.current;
-    const canStepDown =
-      !onMaster && renditionWidth !== undefined && renditionWidth > SMALLEST_RENDITION_WIDTH;
+    const canStepDown = renditionWidth !== undefined && renditionWidth > SMALLEST_RENDITION_WIDTH;
 
     if (canStepDown) {
       setStallDownshifts((steps) => steps + 1);
@@ -102,7 +97,7 @@ export function LogFootage({ track }: { track: Track }) {
     if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       video.play().catch(() => {});
     }
-  }, [onMaster, renditionWidth]);
+  }, [renditionWidth]);
 
   const [posterFailed, setPosterFailed] = useState(false);
   const [framePosterFailed, setFramePosterFailed] = useState(false);
@@ -136,7 +131,13 @@ export function LogFootage({ track }: { track: Track }) {
   useEffect(() => {
     const video = videoRef.current;
 
-    if (!video || !nearViewport) {
+    if (!video) {
+      return;
+    }
+
+    if (!videoUrl) {
+      video.load();
+
       return;
     }
 
@@ -183,9 +184,12 @@ export function LogFootage({ track }: { track: Track }) {
           muted
 
           onError={() => {
-            if (!renditionFailed && videoUrl !== masterVideoUrl) {
-              setRenditionFailed(true);
+            if (!videoUrl) {
+              return;
             }
+
+            setRenditionsExhausted(nextRenditionWidthOnError(renditionWidth) === undefined);
+            setStallDownshifts((steps) => steps + 1);
           }}
           playsInline
           poster={posterUrl}
