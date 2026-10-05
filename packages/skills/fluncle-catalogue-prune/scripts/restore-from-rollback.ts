@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 
 import { type Client } from "@libsql/client/web";
 
-import { chunk, getDb } from "./lib";
+import { chunk, getDb, pagesTouchedByCatalogueWrite, purgeEdgeCachePaths } from "./lib";
 import { insertTrackDuplicateKeyStatement } from "../../../../apps/web/src/lib/server/track-duplicate-keys";
 
 export type Row = Record<string, null | number | string>;
@@ -106,6 +106,7 @@ export async function main(
   openDb: () => Promise<Client> = getDb,
   readRollback: (path: string) => Rollback = (path) =>
     JSON.parse(readFileSync(path, "utf8")) as Rollback,
+  purge?: (urls: string[]) => Promise<void>,
 ): Promise<number> {
   const confirm = argv.includes("--confirm");
   const rollbackPath = flag(argv, "--rollback");
@@ -261,6 +262,19 @@ export async function main(
     written.push(`${section.table}: ${inserted}`);
     console.log(`  inserted ${section.table}: ${inserted}`);
   }
+
+  const pages = await pagesTouchedByCatalogueWrite(db, {
+    albumIds: [
+      ...new Set(
+        plan.tracks.flatMap((track) =>
+          typeof track.album_id === "string" ? [track.album_id] : [],
+        ),
+      ),
+    ],
+    artistIds: [...new Set(plan.edges.map((edge) => String(edge.artist_id)))],
+    trackIds: plan.tracks.map((track) => String(track.track_id)),
+  });
+  await purgeEdgeCachePaths(pages, purge);
 
   console.log(`\nDONE. ${written.join(" · ")}`);
 

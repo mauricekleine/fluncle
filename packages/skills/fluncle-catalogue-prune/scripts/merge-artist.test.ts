@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -50,6 +50,39 @@ function stub(rowsFor: (sql: string) => Row[] | undefined = () => undefined): St
 
       if (override) {
         return { rows: override, rowsAffected: 1 };
+      }
+
+      if (/from artists where id in/.test(sql)) {
+        return {
+          rows: batches.length === 0 ? args.flatMap((id) => ARTIST_ROWS[String(id)] ?? []) : [],
+          rowsAffected: 0,
+        };
+      }
+
+      if (/join albums/.test(sql)) {
+        const slugs: Record<string, string> = {
+          t_canon_only: "canon-release",
+          t_dup1: "moved-release",
+          t_dup2: "moved-release",
+          t_shared: "shared-release",
+        };
+        return {
+          rows: args.flatMap((id) => (slugs[String(id)] ? [{ slug: slugs[String(id)] }] : [])),
+          rowsAffected: 0,
+        };
+      }
+
+      if (/join labels/.test(sql)) {
+        const slugs: Record<string, string> = {
+          t_canon_only: "vibez",
+          t_dup1: "knowledge",
+          t_dup2: "knowledge",
+          t_shared: "looking-good",
+        };
+        return {
+          rows: args.flatMap((id) => (slugs[String(id)] ? [{ slug: slugs[String(id)] }] : [])),
+          rowsAffected: 0,
+        };
       }
 
       if (/from artists where id = \?/.test(sql)) {
@@ -123,7 +156,11 @@ const duplicated = (db: Client, opts: { findingTrackIds?: string[] } = {}) =>
     ],
   });
 
-async function run(argv: string[], cat: Catalogue): Promise<{ code: number; out: string }> {
+async function run(
+  argv: string[],
+  cat: Catalogue,
+  purge: (urls: string[]) => Promise<void> = async () => {},
+): Promise<{ code: number; out: string }> {
   const lines: string[] = [];
   const original = console.log;
   console.log = (...args: unknown[]) => {
@@ -135,6 +172,7 @@ async function run(argv: string[], cat: Catalogue): Promise<{ code: number; out:
       async () => cat,
       () => "2026-07-27T00:00:00.000Z",
       () => "NEW_ID",
+      purge,
     );
 
     return { code, out: lines.join("\n") };
@@ -567,4 +605,110 @@ describe("re-point completeness", () => {
     );
     expect(drop.map((s) => s.sql)).toEqual(["delete from artist_centroids where artist_id = ?"]);
   });
+});
+
+const MERGE_URLS = [
+  "https://www.fluncle.com/album/moved-release",
+  "https://www.fluncle.com/album/shared-release",
+  "https://www.fluncle.com/artist/orion",
+  "https://www.fluncle.com/artist/orion-2",
+  "https://www.fluncle.com/label/knowledge",
+  "https://www.fluncle.com/label/looking-good",
+  "https://www.fluncle.com/track/t_dup1",
+  "https://www.fluncle.com/track/t_dup2",
+  "https://www.fluncle.com/track/t_shared",
+];
+
+describe("edge cache after catalogue writes", () => {
+  test("a merge purges both artists and every moved or collapsed track's album and label after writing", async () => {
+    const s = stub();
+    const purged: string[][] = [];
+    const { code } = await run(
+      ["--canonical", "orion", "--duplicate", "orion-2", "--confirm"],
+      duplicated(s.client),
+      async (urls) => {
+        expect(s.batches).toHaveLength(1);
+        purged.push(urls);
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(purged).toHaveLength(1);
+    expect(purged[0]?.sort()).toEqual(MERGE_URLS);
+  });
+
+  test.each([
+    { argv: ["--canonical", "orion", "--duplicate", "orion-2"] },
+    { argv: ["--canonical", "orion", "--set-mbid", "mb-real"] },
+  ])("a dry run purges nothing (%j)", async ({ argv }) => {
+    const purged: string[][] = [];
+    const { code } = await run([...argv], duplicated(stub().client), async (urls) => {
+      purged.push(urls);
+    });
+
+    expect(code).toBe(0);
+    expect(purged).toEqual([]);
+  });
+
+  test("a failed purge preserves all URLs for retry and the merge succeeds", async () => {
+    process.env.PRUNE_OUT_DIR = PRUNE_OUT_DIR;
+    const s = stub();
+    const { code, out } = await run(
+      ["--canonical", "orion", "--duplicate", "orion-2", "--confirm"],
+      duplicated(s.client),
+      async () => {
+        throw new Error("CF_CACHE_PURGE_TOKEN is not set");
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(s.batches).toHaveLength(1);
+    expect(out).toContain("EDGE CACHE NOT PURGED");
+    expect(out).toContain("cache:purge --urls-file");
+    expect(
+      readFileSync(join(PRUNE_OUT_DIR, "edge-cache-purge-urls.txt"), "utf8")
+        .trim()
+        .split("\n")
+        .sort(),
+    ).toEqual(MERGE_URLS);
+  });
+
+  test("an identity repoint with unchanged credit visibility purges only the canonical artist", async () => {
+    const purged: string[][] = [];
+    const { code } = await run(
+      ["--canonical", "orion", "--set-mbid", "mb-real", "--confirm"],
+      duplicated(stub().client),
+      async (urls) => {
+        purged.push(urls);
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(purged).toEqual([["https://www.fluncle.com/artist/orion"]]);
+  });
+});
+
+test("an identity repoint that changes credit visibility purges the canonical tracks and their albums and labels", async () => {
+  const s = stub((sql) =>
+    sql.includes("from artist_rules") ? [{ artist_mbid: "mb-wrong" }] : undefined,
+  );
+  const purged: string[][] = [];
+  const { code } = await run(
+    ["--canonical", "orion", "--set-mbid", "mb-real", "--confirm"],
+    duplicated(s.client),
+    async (urls) => {
+      purged.push(urls);
+    },
+  );
+
+  expect(code).toBe(0);
+  expect(purged[0]?.sort()).toEqual([
+    "https://www.fluncle.com/album/canon-release",
+    "https://www.fluncle.com/album/shared-release",
+    "https://www.fluncle.com/artist/orion",
+    "https://www.fluncle.com/label/looking-good",
+    "https://www.fluncle.com/label/vibez",
+    "https://www.fluncle.com/track/t_canon_only",
+    "https://www.fluncle.com/track/t_shared",
+  ]);
 });

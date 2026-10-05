@@ -101,7 +101,11 @@ const conflated = (db: Client, opts: { findingTrackIds?: string[] } = {}) =>
     ],
   });
 
-async function run(argv: string[], cat: Catalogue): Promise<{ code: number; out: string }> {
+async function run(
+  argv: string[],
+  cat: Catalogue,
+  purge: (urls: string[]) => Promise<void> = async () => {},
+): Promise<{ code: number; out: string }> {
   const lines: string[] = [];
   const original = console.log;
   console.log = (...args: unknown[]) => {
@@ -112,6 +116,7 @@ async function run(argv: string[], cat: Catalogue): Promise<{ code: number; out:
       argv,
       async () => cat,
       () => "NEW_ID",
+      purge,
     );
 
     return { code, out: lines.join("\n") };
@@ -369,3 +374,60 @@ describe("--confirm", () => {
     expect(albumDeletes).toHaveLength(1);
   });
 });
+
+test.each([false, true])(
+  "SPLIT purges the changed pages only after a confirmed write (%j)",
+  async (confirm) => {
+    let written = false;
+    const s = stub((sql) => {
+      if (isWrite(sql)) {
+        written = true;
+      }
+      if (written) {
+        return [];
+      }
+      if (/from artists where id in/.test(sql)) {
+        return [{ slug: "k" }];
+      }
+      if (/join albums/.test(sql)) {
+        return [{ slug: "shiny-days" }];
+      }
+      if (/join labels/.test(sql)) {
+        return [{ slug: "cutting-edge" }];
+      }
+      return [];
+    });
+    const purged: string[][] = [];
+    const { code } = await run(
+      [
+        "--artist",
+        "k",
+        "--labels",
+        "cutting-edge",
+        "--into",
+        "K.",
+        ...(confirm ? ["--confirm"] : []),
+      ],
+      conflated(s.client),
+      async (urls) => {
+        expect(written).toBe(true);
+        purged.push(urls);
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(purged).toEqual(
+      confirm
+        ? [
+            [
+              "https://www.fluncle.com/track/t_jpop1",
+              "https://www.fluncle.com/track/t_jpop2",
+              "https://www.fluncle.com/artist/k",
+              "https://www.fluncle.com/album/shiny-days",
+              "https://www.fluncle.com/label/cutting-edge",
+            ],
+          ]
+        : [],
+    );
+  },
+);

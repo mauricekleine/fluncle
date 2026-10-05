@@ -10,6 +10,8 @@ import {
   chunk,
   countTrackRefs,
   deleteTracksWithEdges,
+  pagesTouchedByCatalogueWrite,
+  purgeEdgeCachePaths,
   entanglementHits,
   getOrSet,
   orphanAlbums,
@@ -103,7 +105,13 @@ export async function applySplit(
   newArtist: { id: string; mbid: null | string; name: string; slug: string },
   fromArtistId: string,
   trackIds: string[],
+  purge?: (urls: string[]) => Promise<void>,
 ): Promise<number> {
+  const pages = await pagesTouchedByCatalogueWrite(db, {
+    albumIds: [],
+    artistIds: [fromArtistId],
+    trackIds,
+  });
   const now = new Date().toISOString();
   await db.execute({
     args: [newArtist.id, newArtist.name, newArtist.slug, newArtist.mbid, now, now],
@@ -121,6 +129,8 @@ export async function applySplit(
     });
     moved += Number(result.rowsAffected);
   }
+
+  await purgeEdgeCachePaths(pages, purge);
 
   return moved;
 }
@@ -218,8 +228,14 @@ async function applySplitPlan(
   intoName: string | undefined,
   intoMbid: string | null,
   newId: () => string,
+  purge: ((urls: string[]) => Promise<void>) | undefined,
 ): Promise<void> {
   if (mode === "strip") {
+    const pages = await pagesTouchedByCatalogueWrite(cat.db, {
+      albumIds: plan.albumIds,
+      artistIds: [artist.id],
+      trackIds: plan.impostorTrackIds,
+    });
     const removed = await deleteTracksWithEdges(cat.db, plan.impostorTrackIds);
     console.log(`  deleted track_artists.track_id: ${removed.edges}`);
     console.log(`  deleted tracks.track_id: ${removed.tracks}`);
@@ -231,6 +247,7 @@ async function applySplitPlan(
       });
       console.log(`  deleted albums: ${Number(result.rowsAffected)}`);
     }
+    await purgeEdgeCachePaths(pages, purge);
     return;
   }
 
@@ -245,6 +262,7 @@ async function applySplitPlan(
     },
     artist.id,
     plan.impostorTrackIds,
+    purge,
   );
   console.log(`  moved track_artists edges: ${moved}`);
 }
@@ -253,6 +271,7 @@ export async function main(
   argv: string[] = process.argv.slice(2),
   load: () => Promise<Catalogue> = loadCatalogue,
   newId: () => string = () => crypto.randomUUID(),
+  purge?: (urls: string[]) => Promise<void>,
 ): Promise<number> {
   const confirm = argv.includes("--confirm");
   const mode = splitMode(argv);
@@ -343,7 +362,7 @@ export async function main(
   writeFileSync(path, JSON.stringify({ ...rollback, mode }, null, 2));
   console.log(`\nrollback → ${path}`);
 
-  await applySplitPlan(cat, artist, plan, mode, intoName, intoMbid, newId);
+  await applySplitPlan(cat, artist, plan, mode, intoName, intoMbid, newId, purge);
 
   console.log(`\nDONE. Rollback: ${path}`);
 

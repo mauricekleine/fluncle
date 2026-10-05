@@ -4,7 +4,13 @@ import { writeFileSync } from "node:fs";
 
 import { type Client, type Row } from "@libsql/client/web";
 
-import { type Catalogue, loadCatalogue, rowString } from "./lib";
+import {
+  type Catalogue,
+  loadCatalogue,
+  pagesTouchedByCatalogueWrite,
+  purgeEdgeCachePaths,
+  rowString,
+} from "./lib";
 
 export type ArtistReference = {
   column: string;
@@ -349,11 +355,33 @@ function reportReconciledIdentity(
   return reconciled;
 }
 
+async function tracksTouchedByIdentity(
+  cat: Catalogue,
+  artistId: string,
+  previousMbid: unknown,
+  nextMbid: unknown,
+): Promise<string[]> {
+  if (typeof nextMbid !== "string" || nextMbid === previousMbid) {
+    return [];
+  }
+  const rules = await cat.db.execute({
+    args: [typeof previousMbid === "string" ? previousMbid : null, nextMbid],
+    sql: `select artist_mbid from artist_rules
+          where label_id is null and verdict = 'unlisted' and artist_mbid in (?, ?)`,
+  });
+  const unlisted = new Set(rules.rows.map((row) => rowString(row, "artist_mbid")));
+  if (unlisted.has(String(previousMbid)) === unlisted.has(nextMbid)) {
+    return [];
+  }
+  return cat.edges.filter((edge) => edge.artist_id === artistId).map((edge) => edge.track_id);
+}
+
 export async function main(
   argv: string[] = process.argv.slice(2),
   load: () => Promise<Catalogue> = loadCatalogue,
   now: () => string = () => new Date().toISOString(),
   newId: () => string = () => crypto.randomUUID(),
+  purge?: (urls: string[]) => Promise<void>,
 ): Promise<number> {
   const confirm = argv.includes("--confirm");
   const dropSocials = argv.includes("--drop-duplicate-socials");
@@ -531,7 +559,19 @@ export async function main(
     });
   }
 
+  const pages = await pagesTouchedByCatalogueWrite(db, {
+    albumIds: [],
+    artistIds: [canonical, duplicate].flatMap((artist) => (artist ? [artist.id] : [])),
+    trackIds: [
+      ...new Set([
+        ...plan.movedTrackIds,
+        ...plan.collapsedTrackIds,
+        ...(await tracksTouchedByIdentity(cat, canonical.id, canonRow.mbid, set.mbid)),
+      ]),
+    ],
+  });
   const results = await db.batch(statements, "write");
+  await purgeEdgeCachePaths(pages, purge);
 
   for (const [i, statement] of statements.entries()) {
     console.log(
