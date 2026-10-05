@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { createClient } from "@libsql/client";
 import { type Client } from "@libsql/client/web";
 
 import {
@@ -80,7 +81,12 @@ const ROLLBACK: Rollback = {
   ],
 };
 
-async function run(argv: string[], s: Stub, rollback = ROLLBACK) {
+async function run(
+  argv: string[],
+  s: Stub,
+  rollback = ROLLBACK,
+  purge: (urls: string[]) => Promise<void> = async () => {},
+) {
   const lines: string[] = [];
   const original = console.log;
   console.log = (...args: unknown[]) => {
@@ -91,6 +97,7 @@ async function run(argv: string[], s: Stub, rollback = ROLLBACK) {
       argv,
       async () => s.client,
       () => rollback,
+      purge,
     );
 
     return { code, out: lines.join("\n") };
@@ -300,3 +307,59 @@ describe("--confirm", () => {
     expect(trackInsert?.stmts[0]?.sql).not.toContain("label");
   });
 });
+
+test.each([false, true])(
+  "a restore purges restored tracks and both surviving and restored graph pages only after writing (%j)",
+  async (confirm) => {
+    const db = createClient({ url: ":memory:" });
+    try {
+      await db.executeMultiple(`
+      create table albums (id text primary key, name text, slug text);
+      create table artists (id text primary key, name text, slug text);
+      create table labels (id text primary key, slug text);
+      create table tracks (track_id text primary key, title text, artists_json text, album text, label text, album_id text, label_id text, isrc text);
+      create table track_artists (track_id text, artist_id text, position integer, primary key (track_id, artist_id));
+      create table track_duplicate_keys (track_id text primary key, match_key text, normalized_isrc text);
+      insert into albums values ('alb_hitdecks', 'Hit the Decks, Volume 1', 'hit-the-decks-volume-1');
+      insert into artists values ('A_COX', 'Carl Cox', 'carl-cox');
+      insert into labels values ('L_PLANET', 'planet-earth-recordings');
+    `);
+      const rollback: Rollback = {
+        ...ROLLBACK,
+        track_artists: [
+          ...(ROLLBACK.track_artists ?? []),
+          { artist_id: "A_COX", position: 0, track_id: "t_cox" },
+        ],
+        tracks: (ROLLBACK.tracks ?? []).map((track) => ({ ...track, label_id: "L_PLANET" })),
+      };
+      const purged: string[][] = [];
+      const { code } = await run(
+        ["--rollback", "f.json", "--tracks", "all", ...(confirm ? ["--confirm"] : [])],
+        { batches: [], client: db, executed: [] },
+        rollback,
+        async (urls) => {
+          expect((await db.execute("select count(*) as n from track_artists")).rows[0]?.n).toBe(2);
+          purged.push(urls);
+        },
+      );
+
+      expect(code).toBe(0);
+      expect(purged.map((urls) => urls.sort())).toEqual(
+        confirm
+          ? [
+              [
+                "https://www.fluncle.com/album/hit-the-decks-volume-1",
+                "https://www.fluncle.com/artist/carl-cox",
+                "https://www.fluncle.com/artist/sl2",
+                "https://www.fluncle.com/label/planet-earth-recordings",
+                "https://www.fluncle.com/track/t_cox",
+                "https://www.fluncle.com/track/t_sl2",
+              ],
+            ]
+          : [],
+      );
+    } finally {
+      db.close();
+    }
+  },
+);

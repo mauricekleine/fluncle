@@ -476,7 +476,7 @@ export async function captureArtistCascadeRollback(
   };
 }
 
-export async function pagesTouchedByDelete(
+export async function pagesTouchedByCatalogueWrite(
   db: Client,
   ids: { albumIds: string[]; artistIds: string[]; trackIds: string[] },
 ): Promise<string[]> {
@@ -540,7 +540,7 @@ export async function purgeEdgeCachePaths(
     writeFileSync(file, `${urls.join("\n")}\n`);
     console.log(
       `\n  ⚠ EDGE CACHE NOT PURGED (${error instanceof Error ? error.message : String(error)}).` +
-        ` Crawlers keep the deleted pages for up to 7 days. Run:\n` +
+        ` Crawlers keep stale pages for up to 7 days. Run:\n` +
         `    CF_CACHE_PURGE_TOKEN=... bun run --cwd apps/web cache:purge --urls-file ${file}`,
     );
   }
@@ -553,7 +553,7 @@ export async function deleteArtistCascade(
   albumIds: string[],
   purge?: (urls: string[]) => Promise<void>,
 ): Promise<void> {
-  const pages = await pagesTouchedByDelete(db, { albumIds, artistIds, trackIds });
+  const pages = await pagesTouchedByCatalogueWrite(db, { albumIds, artistIds, trackIds });
   const del = async (table: string, col: string, ids: string[]) => {
     console.log(`  deleted ${table}.${col}: ${await deleteIn(db, table, col, ids)}`);
   };

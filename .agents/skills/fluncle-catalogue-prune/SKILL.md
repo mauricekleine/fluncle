@@ -102,6 +102,8 @@ The shared track delete also clears every due-work row for that track in the sam
 
 **After a purge, the hub counts lag.** The maintained `renderable_track_count` / `certified_finding_count` on artists/labels/albums are delta-maintained by the server's write paths, and this purge writes straight to prod out of band — so they overstate the truth until the nightly `reconcile_hub_counts` sweep recomputes them (within a day; it names this skill as one of its three drift sources). To correct them immediately instead of waiting, fire that sweep's trigger by hand: `POST /api/v1/admin/hub-counts/reconcile` with an admin token.
 
+**Export `CF_CACHE_PURGE_TOKEN` before a confirmed run** (`op read "op://$FLUNCLE_1PASSWORD_ENV_ITEM/CF_CACHE_PURGE_TOKEN"`). The Worker serves detail pages to crawlers from its edge cache for up to 7 days, and only its own write paths purge them, so `purge.ts`, `purge-artists.ts`, `purge-albums.ts`, both modes of `split-artist.ts`, `merge-artist.ts` and `restore-from-rollback.ts` purge the track, album, artist and label pages they change. Merge and split resolve existing targets before writing; restore resolves them after re-insertion, including surviving parents absent from the rollback. Without the token (or if the purge fails) the write still succeeds, prints `EDGE CACHE NOT PURGED`, and writes the URLs to `$PRUNE_OUT_DIR/edge-cache-purge-urls.txt`; finish with `bun run --cwd apps/web cache:purge --urls-file <that file>`.
+
 Track deletion also queues public aggregate and artist qualification repairs in the same database batch. The projection maintenance timer drains those repairs and advances the release hub order epoch before rebuilding anchors.
 
 ### 5 — Verify
@@ -261,7 +263,7 @@ bun run …/merge-artist.ts --canonical instinct --duplicate instinct-2 --set-mb
 bun run …/merge-artist.ts --canonical neon --set-mbid <mb-artist-id>
 ```
 
-**No track is ever deleted** — a merge moves credit, so it is reversible from the rollback. It re-points every reference to the duplicate, reconciles identity **canonical-wins** (an EMPTY canonical slot is filled from the duplicate), records the duplicate's name + slug as a **confirmed operator alias** so the merged-away slug can never be re-minted, moves the maintained hub counts by measured delta, and deletes the duplicate row. It mirrors `mergeLabel` (`apps/web/src/lib/server/labels.ts`) statement for statement.
+**No track is ever deleted** — a merge moves credit, so it is reversible from the rollback. It re-points every reference to the duplicate, reconciles identity **canonical-wins** (an EMPTY canonical slot is filled from the duplicate), records the duplicate's name + slug as a **confirmed operator alias** so the merged-away slug can never be re-minted, moves the maintained hub counts by measured delta, and deletes the duplicate row. It mirrors `mergeLabel` (`apps/web/src/lib/server/labels.ts`) statement for statement. After the write succeeds, it purges both artist pages and every moved or collapsed track page plus those tracks’ album and label pages. Repoint-only mode purges the canonical artist page; if the MBID change flips global `unlisted` visibility, it also purges that artist’s tracks and their album and label pages. Dry runs never purge. A failed purge leaves the retry URLs as described above.
 
 **Choose the survivor by slug:** prefer the unsalted public URL, then use `--set-mbid` to repair identity when needed.
 
@@ -280,7 +282,7 @@ bun run …/restore-from-rollback.ts --rollback "$PRUNE_OUT_DIR/edgeless-rollbac
   --tracks mb_eb5c1f5d-…            # or a comma/space list, or @file, or `all`
 ```
 
-The undo every destructive tool here has always promised. It re-inserts albums → artists → tracks → `track_artists`, each `insert or ignore`, so a row already live is never clobbered and a second run changes nothing. Use it for the narrow case that actually comes up: a purge was RIGHT about a label and WRONG about a handful of rows under it.
+The undo every destructive tool here has always promised. It re-inserts albums → artists → tracks → `track_artists`, each `insert or ignore`, so a row already live is never clobbered and a second run changes nothing. After confirmed re-insertion, it purges the restored track pages and their album, label and credited artist pages, including parents that survived the deletion. Use it for the narrow case that actually comes up: a purge was RIGHT about a label and WRONG about a handful of rows under it.
 
 **A missing requested ID hard-aborts because the rollback does not contain the complete requested set.** Schema drift is handled: each insert uses the intersection of the snapshot's columns and the live table's (`pragma table_info`), so a column added since takes its default and a dropped one is reported rather than throwing.
 
