@@ -25,6 +25,14 @@ import {
   withEdgeCache,
 } from "./edge-cache";
 
+const release = vi.hoisted(() => ({ id: "current-build" as string | undefined }));
+
+vi.mock("../sentry-config", () => ({
+  get SENTRY_RELEASE() {
+    return release.id;
+  },
+}));
+
 describe("isCacheableLogPath", () => {
   it("matches the log index and a finding's log page", () => {
     expect(isCacheableLogPath("/log")).toBe(true);
@@ -53,18 +61,6 @@ describe("PUBLIC_CACHE_CONTROL", () => {
     expect(PUBLIC_CACHE_CONTROL).toContain("s-maxage=300");
     expect(PUBLIC_CACHE_CONTROL).toContain("stale-while-revalidate=3600");
   });
-
-  it("keeps the stale tail inside the deploy cadence, not a whole day", () => {
-    expect(FRESH_SECONDS).toBe(300);
-    expect(SWR_SECONDS).toBe(3_600);
-    expect(SWR_SECONDS).toBeGreaterThan(FRESH_SECONDS);
-    expect(SWR_SECONDS).toBeLessThanOrEqual(3_600);
-  });
-
-  it("stores an entry for the whole fresh+stale window under each policy", () => {
-    expect(PAGE_CACHE_POLICY.storedMaxAge).toBe(FRESH_SECONDS + SWR_SECONDS);
-    expect(HUB_CACHE_POLICY.storedMaxAge).toBe(HUB_FRESH_SECONDS + HUB_SWR_SECONDS);
-  });
 });
 
 describe("the hub policy", () => {
@@ -85,7 +81,7 @@ describe("the sitemap policy", () => {
     expect(SITEMAP_CACHE_POLICY.cacheControl).toBe(
       "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400",
     );
-    expect(SITEMAP_CACHE_POLICY.storedMaxAge).toBe(SITEMAP_FRESH_SECONDS + SITEMAP_SWR_SECONDS);
+    expect(SITEMAP_CACHE_POLICY.retainSeconds).toBe(SITEMAP_FRESH_SECONDS + SITEMAP_SWR_SECONDS);
   });
 
   it("is the one XML tier — the HTML tiers stay HTML", () => {
@@ -94,7 +90,7 @@ describe("the sitemap policy", () => {
     expect(HUB_CACHE_POLICY.contentType).toBe("text/html");
   });
 
-  it("outlives its build safely, unlike the HTML tiers", () => {
+  it("keeps a day-long XML stale window", () => {
     expect(SITEMAP_SWR_SECONDS).toBeGreaterThan(SWR_SECONDS);
   });
 });
@@ -205,7 +201,7 @@ describe("edgeCachePolicyFor", () => {
     vi.useRealTimers();
   });
 
-  it("ends release-sensitive fresh and stale windows at the next UTC midnight", () => {
+  it("ends release-sensitive cache windows at the next UTC midnight", () => {
     const before = new Date("2026-10-31T23:59:30.000Z");
     const after = new Date("2026-11-01T00:00:01.000Z");
     for (const path of [
@@ -217,21 +213,40 @@ describe("edgeCachePolicyFor", () => {
       "/artist/drift",
       "/label/hospital",
     ]) {
-      expect(edgeCachePolicyFor(path, "", before)?.storedMaxAge).toBeLessThanOrEqual(30);
-      expect(edgeCachePolicyFor(path, "", after)?.storedMaxAge).toBeGreaterThan(30);
+      expect(edgeCachePolicyFor(path, "", before)?.retainSeconds).toBeLessThanOrEqual(30);
+      expect(edgeCachePolicyFor(path, "", before)?.crawlerFreshSeconds).toBe(30);
+      expect(edgeCachePolicyFor(path, "", after)?.retainSeconds).toBeGreaterThan(30);
     }
     expect(edgeCachePolicyFor("/album/drift", "", before)).toBe(PAGE_CACHE_POLICY);
     expect(releaseBoundFeedCacheControl(before)).toContain("s-maxage=30");
     expect(releaseBoundFeedCacheControl(after)).toBe(PAGE_CACHE_POLICY.cacheControl);
   });
 
+  it("caps long retention at midnight even when the browser stale window ends earlier", () => {
+    const now = new Date("2026-07-20T12:00:00.000Z");
+    for (const path of ["/", "/tracks", "/fresh", "/artist/drift", "/label/hospital"]) {
+      const policy = edgeCachePolicyFor(path, "", now);
+      expect(policy?.retainSeconds).toBe(43_200);
+      expect(policy?.crawlerFreshSeconds).toBe(
+        path.startsWith("/artist/") || path.startsWith("/label/") ? 43_200 : 60,
+      );
+      expect(policy?.cacheControl).toBe(
+        path.startsWith("/artist/") || path.startsWith("/label/")
+          ? "public, max-age=0, s-maxage=300, stale-while-revalidate=3600"
+          : "public, max-age=0, s-maxage=60, stale-while-revalidate=600",
+      );
+    }
+  });
+
   it("routes each cacheable surface to its policy", () => {
     expect(edgeCachePolicyFor("/log", "")).toBe(PAGE_CACHE_POLICY);
     expect(edgeCachePolicyFor("/log/2026.A.7Q", "")).toBe(PAGE_CACHE_POLICY);
-    expect(edgeCachePolicyFor("/artist/sub-focus", "")).toBe(PAGE_CACHE_POLICY);
-    expect(edgeCachePolicyFor("/", "")).toBe(HUB_CACHE_POLICY);
+    expect(edgeCachePolicyFor("/artist/sub-focus", "")?.cacheControl).toBe(
+      PAGE_CACHE_POLICY.cacheControl,
+    );
+    expect(edgeCachePolicyFor("/", "")?.cacheControl).toBe(HUB_CACHE_POLICY.cacheControl);
     expect(edgeCachePolicyFor("/artists", "")).toBe(HUB_CACHE_POLICY);
-    expect(edgeCachePolicyFor("/fresh", "")).toBe(HUB_CACHE_POLICY);
+    expect(edgeCachePolicyFor("/fresh", "")?.cacheControl).toBe(HUB_CACHE_POLICY.cacheControl);
 
     expect(edgeCachePolicyFor("/artists", "?page=3")).toBe(HUB_CACHE_POLICY);
   });
@@ -392,8 +407,362 @@ describe("withEdgeCache", () => {
     return new Response(body, { headers: { "content-type": "text/html; charset=utf-8" } });
   }
 
-  afterEach(() => {
+  beforeEach(() => {
+    release.id = "current-build";
+    void takeWaitUntilPromises();
+  });
+
+  afterEach(async () => {
+    await Promise.all(takeWaitUntilPromises());
     vi.useRealTimers();
+  });
+
+  describe.each([
+    {
+      age: 6 * 86_400,
+      crawlerStatus: "fresh",
+      fresh: 300,
+      path: "/track/mb_abc",
+      policy: PAGE_CACHE_POLICY,
+      retention: 604_800,
+      tail: 3_900,
+    },
+    {
+      age: 7_200,
+      crawlerStatus: "stale",
+      fresh: 60,
+      path: "/artists",
+      policy: HUB_CACHE_POLICY,
+      retention: 86_400,
+      tail: 660,
+    },
+  ])("HTML retention on $path", ({ policy, path, age, retention, fresh, tail, crawlerStatus }) => {
+    it.each([
+      { body: "stored", headers: new Headers(), status: crawlerStatus },
+      { body: "rendered", headers: new Headers({ "sec-fetch-mode": "navigate" }), status: "miss" },
+      { body: "rendered", headers: new Headers({ "sec-fetch-dest": "document" }), status: "miss" },
+    ])(
+      "answers $status beyond the browser stale window for $headers",
+      async ({ headers, status, body }) => {
+        const fake = installFakeCache();
+        const url = `https://www.fluncle.com${path}`;
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-07-20T00:00:00Z"));
+        try {
+          await withEdgeCache(new Request(url), async () => html("stored"), policy);
+          await Promise.all(takeWaitUntilPromises());
+          expect(fake.entries.get(url)?.headers.get("cache-control")).toBe(
+            `public, s-maxage=${retention}`,
+          );
+          vi.setSystemTime(Date.now() + age * 1000);
+          const render = vi.fn(async () => html("rendered"));
+          const response = await withEdgeCache(new Request(url, { headers }), render, policy);
+          expect(response.headers.get("x-edge-cache")).toBe(status);
+          expect(response.headers.get("cache-control")).toBe(policy.cacheControl);
+          expect(await response.text()).toBe(body);
+          const tasks = takeWaitUntilPromises();
+          expect(tasks).toHaveLength(status === "fresh" ? 0 : 1);
+          await Promise.all(tasks);
+          expect(render).toHaveBeenCalledTimes(status === "fresh" ? 0 : 1);
+          const next = await withEdgeCache(new Request(url, { headers }), render, policy);
+          expect(next.headers.get("x-edge-cache")).toBe("fresh");
+          expect(await next.text()).toBe(status === "fresh" ? "stored" : "rendered");
+        } finally {
+          fake.restore();
+        }
+      },
+    );
+
+    it.each([
+      { age: 0, body: "stored", renders: 0, status: "fresh" },
+      { age: fresh, body: "stored", renders: 1, status: "stale" },
+      { age: tail, body: "rendered", renders: 1, status: "miss" },
+    ])("a same-build browser gets $status at age $age", async ({ age, status, body, renders }) => {
+      const fake = installFakeCache();
+      const request = new Request(`https://www.fluncle.com${path}`, {
+        headers: new Headers({ "sec-fetch-mode": "navigate" }),
+      });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-07-20T00:00:00Z"));
+      try {
+        await withEdgeCache(request, async () => html("stored"), policy);
+        await Promise.all(takeWaitUntilPromises());
+        vi.setSystemTime(Date.now() + age * 1000);
+        const render = vi.fn(async () => html("rendered"));
+        const response = await withEdgeCache(request, render, policy);
+        expect(response.headers.get("x-edge-cache")).toBe(status);
+        expect(await response.text()).toBe(body);
+        await Promise.all(takeWaitUntilPromises());
+        expect(render).toHaveBeenCalledTimes(renders);
+      } finally {
+        fake.restore();
+      }
+    });
+
+    it("misses at the retention deadline even if the Cache API returns the entry", async () => {
+      const fake = installFakeCache();
+      const request = new Request(`https://www.fluncle.com${path}`);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-07-20T00:00:00Z"));
+      try {
+        await withEdgeCache(request, async () => html("stored"), policy);
+        await Promise.all(takeWaitUntilPromises());
+        vi.setSystemTime(Date.now() + retention * 1000);
+        const response = await withEdgeCache(request, async () => html("rendered"), policy);
+        expect(response.headers.get("x-edge-cache")).toBe("miss");
+        expect(await response.text()).toBe("rendered");
+      } finally {
+        fake.restore();
+      }
+    });
+  });
+
+  it.each([
+    { body: "old-build", headers: new Headers(), status: "fresh" },
+    { body: "new-build", headers: new Headers({ "sec-fetch-mode": "navigate" }), status: "miss" },
+    { body: "new-build", headers: new Headers({ "sec-fetch-dest": "document" }), status: "miss" },
+  ])(
+    "answers $status for a different HTML build with $headers",
+    async ({ headers, status, body }) => {
+      const fake = installFakeCache();
+      const url = "https://www.fluncle.com/track/mb_abc";
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-07-20T00:00:00Z"));
+      try {
+        release.id = "old-build";
+        await withEdgeCache(new Request(url), async () => html("old-build"));
+        await Promise.all(takeWaitUntilPromises());
+        release.id = "new-build";
+        vi.setSystemTime(Date.now() + 7_200_000);
+        const render = vi.fn(async () => html("new-build"));
+        const response = await withEdgeCache(new Request(url, { headers }), render);
+        expect(response.headers.get("x-edge-cache")).toBe(status);
+        expect(await response.text()).toBe(body);
+        expect([...response.headers.keys()].filter((name) => name.startsWith("x-edge-"))).toEqual([
+          "x-edge-cache",
+        ]);
+        const tasks = takeWaitUntilPromises();
+        expect(tasks).toHaveLength(status === "fresh" ? 0 : 1);
+        await Promise.all(tasks);
+        const next = await withEdgeCache(new Request(url, { headers }), render);
+        expect(next.headers.get("x-edge-cache")).toBe("fresh");
+        expect(await next.text()).toBe(body);
+        expect(render).toHaveBeenCalledTimes(status === "fresh" ? 0 : 1);
+      } finally {
+        fake.restore();
+      }
+    },
+  );
+
+  it.each([
+    { body: "legacy", headers: new Headers(), status: "fresh" },
+    { body: "current", headers: new Headers({ "sec-fetch-mode": "navigate" }), status: "miss" },
+  ])(
+    "answers $status for HTML without a build stamp with $headers",
+    async ({ headers, status, body }) => {
+      const fake = installFakeCache();
+      const url = "https://www.fluncle.com/track/mb_abc";
+      try {
+        await withEdgeCache(new Request(url), async () => html("legacy"));
+        await Promise.all(takeWaitUntilPromises());
+        fake.entries.get(url)?.headers.delete("x-edge-build-id");
+        const response = await withEdgeCache(new Request(url, { headers }), async () =>
+          html("current"),
+        );
+        expect(response.headers.get("x-edge-cache")).toBe(status);
+        expect(await response.text()).toBe(body);
+      } finally {
+        fake.restore();
+      }
+    },
+  );
+
+  it("returns retained stale HTML while a slow refresh is still pending", async () => {
+    const fake = installFakeCache();
+    const request = new Request("https://www.fluncle.com/artists");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-20T00:00:00Z"));
+    try {
+      await withEdgeCache(request, async () => html("stored"), HUB_CACHE_POLICY);
+      await Promise.all(takeWaitUntilPromises());
+      vi.setSystemTime(Date.now() + 7_200_000);
+      const refresh = Promise.withResolvers<Response>();
+      const response = await withEdgeCache(request, () => refresh.promise, HUB_CACHE_POLICY);
+      const tasks = takeWaitUntilPromises();
+      expect(response.headers.get("x-edge-cache")).toBe("stale");
+      expect(await response.text()).toBe("stored");
+      expect(tasks).toHaveLength(1);
+      refresh.resolve(html("updated"));
+      await Promise.all(tasks);
+      const next = await withEdgeCache(request, async () => html("unexpected"), HUB_CACHE_POLICY);
+      expect(await next.text()).toBe("updated");
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it.each([
+    { age: 7_200_000, build: "current-build", reason: "past its browser window" },
+    { age: 0, build: "new-build", reason: "from another build" },
+  ])("keeps crawler reuse when a browser replacement $reason fails", async ({ age, build }) => {
+    const fake = installFakeCache();
+    const url = "https://www.fluncle.com/track/mb_abc";
+    const browser = new Request(url, { headers: { "sec-fetch-mode": "navigate" } });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-20T00:00:00Z"));
+    try {
+      await withEdgeCache(new Request(url), async () => html("stored"));
+      await Promise.all(takeWaitUntilPromises());
+      vi.setSystemTime(Date.now() + age);
+      release.id = build;
+      const failed = await withEdgeCache(
+        browser,
+        async () =>
+          new Response("unavailable", {
+            headers: { "content-type": "text/html" },
+            status: 503,
+          }),
+      );
+      expect(failed.status).toBe(503);
+      expect(await failed.text()).toBe("unavailable");
+      const render = vi.fn(async () => html("recovered"));
+      const crawler = await withEdgeCache(new Request(url), render);
+      expect(crawler.headers.get("x-edge-cache")).toBe("fresh");
+      expect(await crawler.text()).toBe("stored");
+      expect(takeWaitUntilPromises()).toHaveLength(0);
+      expect(render).not.toHaveBeenCalled();
+      const recovered = await withEdgeCache(browser, render);
+      expect(recovered.headers.get("x-edge-cache")).toBe("miss");
+      expect(await recovered.text()).toBe("recovered");
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("uses a stable development build when the release is undefined", async () => {
+    const fake = installFakeCache();
+    const request = new Request("https://www.fluncle.com/track/mb_abc", {
+      headers: new Headers({ "sec-fetch-mode": "navigate" }),
+    });
+    try {
+      release.id = undefined;
+      const render = vi.fn(async () => html("dev"));
+      await withEdgeCache(request, render);
+      await Promise.all(takeWaitUntilPromises());
+      const response = await withEdgeCache(request, render);
+      expect(response.headers.get("x-edge-cache")).toBe("fresh");
+      expect(render).toHaveBeenCalledOnce();
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it.each([new Headers(), new Headers({ "sec-fetch-mode": "navigate" })])(
+    "misses a release-sensitive entry from the previous UTC day for %s",
+    async (headers) => {
+      const fake = installFakeCache();
+      const request = new Request("https://www.fluncle.com/artist/drift", { headers });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-07-20T23:59:00Z"));
+      try {
+        await withEdgeCache(request, async () => html("yesterday"), PAGE_CACHE_POLICY);
+        await Promise.all(takeWaitUntilPromises());
+        fake.entries
+          .get(request.url)
+          ?.headers.set("x-edge-expires-at", String(Date.parse("2026-07-22T00:00:00Z")));
+        vi.setSystemTime(new Date("2026-07-21T00:00:00Z"));
+        const response = await withEdgeCache(
+          request,
+          async () => html("today"),
+          edgeCachePolicyFor("/artist/drift", ""),
+        );
+        expect(response.headers.get("x-edge-cache")).toBe("miss");
+        expect(await response.text()).toBe("today");
+      } finally {
+        fake.restore();
+      }
+    },
+  );
+
+  it.each(["private", 'private="Set-Cookie"', "public, no-store", "NO-STORE, max-age=0"])(
+    "never stores or overrides a render carrying %s",
+    async (cacheControl) => {
+      const fake = installFakeCache();
+      const request = new Request("https://www.fluncle.com/track/mb_abc");
+      const render = vi.fn(
+        async () =>
+          new Response("private", {
+            headers: { "cache-control": cacheControl, "content-type": "text/html" },
+          }),
+      );
+      try {
+        for (let i = 0; i < 2; i++) {
+          const response = await withEdgeCache(request, render);
+          expect(response.headers.get("cache-control")).toBe(cacheControl);
+          expect(response.headers.get("x-edge-cache")).toBe("miss");
+          await Promise.all(takeWaitUntilPromises());
+        }
+        expect(fake.entries.size).toBe(0);
+        expect(render).toHaveBeenCalledTimes(2);
+      } finally {
+        fake.restore();
+      }
+    },
+  );
+
+  it.each(["private", "no-store"])(
+    "evicts a public entry when its background render becomes %s",
+    async (cacheControl) => {
+      const fake = installFakeCache();
+      const request = new Request("https://www.fluncle.com/artists");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-07-20T00:00:00Z"));
+      try {
+        await withEdgeCache(request, async () => html("public"), HUB_CACHE_POLICY);
+        await Promise.all(takeWaitUntilPromises());
+        vi.setSystemTime(Date.now() + 61_000);
+        const render = async () =>
+          new Response("private", {
+            headers: { "cache-control": cacheControl, "content-type": "text/html" },
+          });
+        const stale = await withEdgeCache(request, render, HUB_CACHE_POLICY);
+        expect(stale.headers.get("x-edge-cache")).toBe("stale");
+        await Promise.all(takeWaitUntilPromises());
+        expect(fake.entries.size).toBe(0);
+        const response = await withEdgeCache(request, render, HUB_CACHE_POLICY);
+        expect(response.headers.get("x-edge-cache")).toBe("miss");
+        expect(response.headers.get("cache-control")).toBe(cacheControl);
+      } finally {
+        fake.restore();
+      }
+    },
+  );
+
+  it("caps storage retention at midnight after time spent rendering", async () => {
+    const fake = installFakeCache();
+    const request = new Request("https://www.fluncle.com/artist/drift");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-20T23:59:30Z"));
+    try {
+      const policy = edgeCachePolicyFor("/artist/drift", "");
+      await withEdgeCache(
+        request,
+        async () => {
+          vi.setSystemTime(new Date("2026-07-20T23:59:40Z"));
+          return html("artist");
+        },
+        policy,
+      );
+      await Promise.all(takeWaitUntilPromises());
+      expect(fake.entries.get(request.url)?.headers.get("cache-control")).toBe(
+        "public, s-maxage=20",
+      );
+      expect(fake.entries.get(request.url)?.headers.get("x-edge-expires-at")).toBe(
+        String(Date.parse("2026-07-21T00:00:00Z")),
+      );
+    } finally {
+      fake.restore();
+    }
   });
 
   it("keeps a release-day entry until its stored midnight expiry", async () => {
@@ -402,7 +771,7 @@ describe("withEdgeCache", () => {
     const render = vi.fn(async () => html("artist"));
     try {
       vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-07-20T23:58:00.000Z"));
+      vi.setSystemTime(new Date("2026-07-20T12:00:00.000Z"));
       await withEdgeCache(
         request,
         render,
@@ -570,33 +939,41 @@ describe("withEdgeCache", () => {
     }
   });
 
-  it("goes stale at the POLICY's fresh window, so a hub expires long before a page", async () => {
-    const fake = installFakeCache();
+  it.each(["current-build", "new-build"])(
+    "keeps hub crawler freshness at sixty seconds across %s",
+    async (build) => {
+      const fake = installFakeCache();
+      const request = new Request("https://www.fluncle.com/artists");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-07-20T00:00:00Z"));
+      try {
+        await withEdgeCache(request, async () => html("stored"), HUB_CACHE_POLICY);
+        await Promise.all(takeWaitUntilPromises());
+        release.id = build;
+        const render = vi.fn(async () => html("updated"));
+        vi.setSystemTime(Date.now() + 30_000);
+        const fresh = await withEdgeCache(request, render, HUB_CACHE_POLICY);
+        expect(fresh.headers.get("x-edge-cache")).toBe("fresh");
+        expect(await fresh.text()).toBe("stored");
+        expect(takeWaitUntilPromises()).toHaveLength(0);
+        expect(render).not.toHaveBeenCalled();
 
-    try {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-07-20T00:00:00.000Z"));
-      await withEdgeCache(
-        new Request("https://www.fluncle.com/artists"),
-        async () => html("hubs"),
-        HUB_CACHE_POLICY,
-      );
-      await vi.advanceTimersByTimeAsync(0);
-
-      vi.setSystemTime(new Date("2026-07-20T00:01:30.000Z"));
-
-      const stale = await withEdgeCache(
-        new Request("https://www.fluncle.com/artists"),
-        async () => html("hubs"),
-        HUB_CACHE_POLICY,
-      );
-
-      expect(stale.headers.get("x-edge-cache")).toBe("stale");
-    } finally {
-      vi.useRealTimers();
-      fake.restore();
-    }
-  });
+        vi.setSystemTime(Date.now() + 30_000);
+        const stale = await withEdgeCache(request, render, HUB_CACHE_POLICY);
+        expect(stale.headers.get("x-edge-cache")).toBe("stale");
+        expect(await stale.text()).toBe("stored");
+        const tasks = takeWaitUntilPromises();
+        expect(tasks).toHaveLength(1);
+        await Promise.all(tasks);
+        expect(render).toHaveBeenCalledOnce();
+        const next = await withEdgeCache(request, render, HUB_CACHE_POLICY);
+        expect(next.headers.get("x-edge-cache")).toBe("fresh");
+        expect(await next.text()).toBe("updated");
+      } finally {
+        fake.restore();
+      }
+    },
+  );
 
   it("never stores a non-200 or non-HTML response", async () => {
     const fake = installFakeCache();
@@ -620,35 +997,43 @@ describe("withEdgeCache", () => {
     }
   });
 
-  it("stores and serves an XML sitemap under the sitemap policy", async () => {
+  it("keeps XML freshness and expiry independent of builds and browser navigation", async () => {
     const fake = installFakeCache();
-    const xml = (): Response =>
-      new Response("<sitemapindex/>", {
-        headers: { "content-type": "application/xml; charset=utf-8" },
-      });
-
+    const request = new Request("https://www.fluncle.com/sitemap.xml", {
+      headers: new Headers({ "sec-fetch-mode": "navigate" }),
+    });
+    const render = vi.fn(
+      async () =>
+        new Response("<sitemapindex/>", {
+          headers: { "content-type": "application/xml; charset=utf-8" },
+        }),
+    );
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-20T00:00:00Z"));
     try {
-      const miss = await withEdgeCache(
-        new Request("https://www.fluncle.com/sitemap.xml"),
-        async () => xml(),
-        SITEMAP_CACHE_POLICY,
-      );
-      await Promise.resolve();
-
+      const miss = await withEdgeCache(request, render, SITEMAP_CACHE_POLICY);
+      await Promise.all(takeWaitUntilPromises());
       expect(miss.headers.get("x-edge-cache")).toBe("miss");
-      expect(miss.headers.get("Cache-Control")).toBe(SITEMAP_CACHE_POLICY.cacheControl);
-      expect(fake.entries.size).toBe(1);
-
-      const hit = await withEdgeCache(
-        new Request("https://www.fluncle.com/sitemap.xml"),
-        async () => {
-          throw new Error("must not re-render a fresh sitemap");
-        },
-        SITEMAP_CACHE_POLICY,
+      expect(miss.headers.get("cache-control")).toBe(
+        "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400",
       );
-
+      expect(fake.entries.get(request.url)?.headers.get("cache-control")).toBe(
+        "public, s-maxage=90000",
+      );
+      release.id = "next-build";
+      const hit = await withEdgeCache(request, render, SITEMAP_CACHE_POLICY);
       expect(hit.headers.get("x-edge-cache")).toBe("fresh");
       expect(await hit.text()).toBe("<sitemapindex/>");
+      expect(render).toHaveBeenCalledOnce();
+      vi.setSystemTime(Date.now() + 3_600_000);
+      const stale = await withEdgeCache(request, render, SITEMAP_CACHE_POLICY);
+      expect(stale.headers.get("x-edge-cache")).toBe("stale");
+      expect(stale.headers.get("cache-control")).toBe(SITEMAP_CACHE_POLICY.cacheControl);
+      await Promise.all(takeWaitUntilPromises());
+      vi.setSystemTime(Date.now() + 90_000_000);
+      const expired = await withEdgeCache(request, render, SITEMAP_CACHE_POLICY);
+      expect(expired.headers.get("x-edge-cache")).toBe("miss");
+      expect(render).toHaveBeenCalledTimes(3);
     } finally {
       fake.restore();
     }

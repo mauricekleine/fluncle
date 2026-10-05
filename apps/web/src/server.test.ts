@@ -43,7 +43,6 @@ vi.mock("./lib/server/agent-discovery", async (importOriginal) => {
   return {
     ...actual,
 
-    appendAgentLinkHeaders: (response: Response) => response,
     appendOnionLocation: (response: Response) => response,
     handleAgentDiscovery: hoisted.handleAgentDiscovery,
   };
@@ -267,8 +266,7 @@ describe("server.ts shared-cache isolation", () => {
     method: "GET" | "HEAD" = "GET",
   ): Promise<Response> {
     const response = await dispatch(url, headers, method);
-    await Promise.resolve();
-    await Promise.resolve();
+    await Promise.all(takeWaitUntilPromises());
 
     return response;
   }
@@ -316,6 +314,48 @@ describe("server.ts shared-cache isolation", () => {
     await dispatchAndSettle("https://www.fluncle.com/artists", { accept: "text/html" });
 
     expect([...entries.keys()]).toEqual(["https://www.fluncle.com/artists"]);
+  });
+
+  it.each([undefined, "*/*", "text/*"])(
+    "stores and hits public HTML when Accept is %s",
+    async (accept) => {
+      const headers: Record<string, string> = accept === undefined ? {} : { accept };
+      const url = "https://www.fluncle.com/track/mb_abc";
+      const miss = await dispatchAndSettle(url, headers);
+      const hit = await dispatchAndSettle(url, headers);
+
+      expect(miss.headers.get("x-edge-cache")).toBe("miss");
+      expect(hit.headers.get("x-edge-cache")).toBe("fresh");
+      for (const response of [miss, hit]) {
+        expect(response.headers.get("cache-control")).toBe(
+          "public, max-age=0, s-maxage=300, stale-while-revalidate=3600",
+        );
+        expect(await response.text()).toBe("router-sentinel");
+      }
+      expect(hoisted.routerFetch).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps the home discovery links and Accept variance on cold renders and cache hits", async () => {
+    const miss = await dispatchAndSettle("https://www.fluncle.com/", { accept: "*/*" });
+    const hit = await dispatchAndSettle("https://www.fluncle.com/", { accept: "*/*" });
+
+    expect(miss.headers.get("x-edge-cache")).toBe("miss");
+    expect(hit.headers.get("x-edge-cache")).toBe("fresh");
+    for (const response of [miss, hit]) {
+      expect(response.headers.get("link")).toContain(
+        '</.well-known/api-catalog>; rel="api-catalog"',
+      );
+      expect(response.headers.get("link")).toContain('</api/v1/openapi.json>; rel="service-desc"');
+      expect(
+        response.headers
+          .get("vary")
+          ?.split(",")
+          .map((value) => value.trim()),
+      ).toContain("Accept");
+    }
+    expect(hit.headers.get("link")).toBe(miss.headers.get("link"));
+    expect(hoisted.routerFetch).toHaveBeenCalledOnce();
   });
 
   it("redirects trailing-slash entity HTML requests without caching them", async () => {
@@ -394,18 +434,49 @@ describe("server.ts shared-cache isolation", () => {
     expect(entries.size).toBe(0);
   });
 
-  it("NEVER shared-caches an admin view", async () => {
-    await dispatchAndSettle("https://www.fluncle.com/artists", {
-      accept: "text/html",
-      cookie: "fluncle_admin=some-grant; other=1",
-    });
-    await dispatchAndSettle("https://www.fluncle.com/log/abc123", {
-      accept: "text/html",
-      cookie: "fluncle_admin=some-grant",
-    });
+  it("marks public HTML rendered with an admin cookie as private and bypasses stored anonymous HTML", async () => {
+    const url = "https://www.fluncle.com/artists";
+    await dispatchAndSettle(url);
+    hoisted.routerFetch.mockImplementation(
+      async () => new Response("admin-view", { headers: { "content-type": "text/html" } }),
+    );
 
-    expect(entries.size).toBe(0);
+    for (const path of ["/artists", "/log/abc123", "/artist/sub-focus?page=2"]) {
+      const response = await dispatchAndSettle(`https://www.fluncle.com${path}`, {
+        cookie: "fluncle_admin=some-grant; other=1",
+      });
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("x-edge-cache")).toBeNull();
+      expect(await response.text()).toBe("admin-view");
+    }
+    expect([...entries.keys()]).toEqual([url]);
+    const anonymous = await dispatchAndSettle(url);
+    expect(await anonymous.text()).toBe("router-sentinel");
   });
+
+  it.each([
+    ["/artists", "text/html", "private, max-age=0"],
+    ["/artists", "application/json", undefined],
+    ["/api/preview/x", "text/html", undefined],
+  ])(
+    "preserves existing cache directives and non-public-HTML responses on %s",
+    async (path, contentType, cacheControl) => {
+      hoisted.routerFetch.mockImplementationOnce(
+        async () =>
+          new Response("router", {
+            headers: {
+              "content-type": contentType,
+              ...(cacheControl === undefined ? {} : { "cache-control": cacheControl }),
+            },
+          }),
+      );
+      const response = await dispatchAndSettle(`https://www.fluncle.com${path}`, {
+        cookie: "fluncle_admin=some-grant",
+      });
+      expect(response.headers.get("cache-control")).toBe(cacheControl ?? null);
+      expect(entries.size).toBe(0);
+    },
+  );
 
   it("NEVER shared-caches a query variant that would collide onto the canonical entry", async () => {
     await dispatchAndSettle("https://www.fluncle.com/tracks?galaxy=drift", {

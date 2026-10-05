@@ -75,12 +75,12 @@ async function dispatch(request: Request): Promise<Response> {
   }
 
   const cachePolicy = edgeCachePolicyFor(url.pathname, url.search);
-  const acceptsHtml = request.headers.get("accept")?.includes("text/html") ?? false;
+  const acceptsHtml = acceptHeaderAdmitsHtml(request.headers.get("accept"));
 
   if (
     isPublicHtmlPagePath(url.pathname) &&
     (request.method === "GET" || request.method === "HEAD") &&
-    !acceptHeaderAdmitsHtml(request.headers.get("accept"))
+    !acceptsHtml
   ) {
     return Response.json(
       {
@@ -101,10 +101,22 @@ async function dispatch(request: Request): Promise<Response> {
   ) {
     const cached = await withEdgeCache(request, async () => handler.fetch(request), cachePolicy);
 
-    return appendOnionLocation(cached, url);
+    const located = appendOnionLocation(cached, url);
+
+    return url.pathname === "/" ? appendAgentLinkHeaders(located) : located;
   }
 
-  const response = await handler.fetch(request);
+  let response = await handler.fetch(request);
+
+  if (
+    isPublicHtmlPagePath(url.pathname) &&
+    hasAdminCookie(request) &&
+    response.headers.get("content-type")?.includes("text/html") &&
+    !response.headers.has("cache-control")
+  ) {
+    response = new Response(response.body, response);
+    response.headers.set("Cache-Control", "private, no-store");
+  }
 
   const located = appendOnionLocation(response, url);
 
