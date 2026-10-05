@@ -51,6 +51,13 @@ export const discogsUrl = "https://www.discogs.com/user/fluncle";
 
 export const fluncleEntityId = `${siteUrl}/#fluncle`;
 
+export const fluncleEntityRef = {
+  "@id": fluncleEntityId,
+  "@type": "Person",
+  name: "Fluncle",
+  url: `${siteUrl}/`,
+} as const;
+
 export const fluncleWebsiteId = `${siteUrl}/#website`;
 
 export const fluncleSameAs: string[] = [

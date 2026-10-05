@@ -135,13 +135,23 @@ describe("the @id entity graph — every #fluncle reference resolves to the one 
     const website = schemasOf(homeHead).find((schema) => schema["@type"] === "WebSite");
 
     expect(website?.["@id"]).toBe(fluncleWebsiteId);
-    expect(website?.publisher).toEqual({ "@id": fluncleEntityId });
+    expect(website?.publisher).toEqual({
+      "@id": fluncleEntityId,
+      "@type": "Person",
+      name: "Fluncle",
+      url: "https://www.fluncle.com/",
+    });
   });
 
   it("the archive page's MusicPlaylist is created BY the canonical node and re-declares no sameAs", () => {
     const playlist = schemasOf(findingsHead).find((schema) => schema["@type"] === "MusicPlaylist");
 
-    expect(playlist?.creator).toEqual({ "@id": fluncleEntityId });
+    expect(playlist?.creator).toEqual({
+      "@id": fluncleEntityId,
+      "@type": "Person",
+      name: "Fluncle",
+      url: "https://www.fluncle.com/",
+    });
 
     expect(playlist).not.toHaveProperty("sameAs");
   });

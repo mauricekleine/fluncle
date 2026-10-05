@@ -14,7 +14,7 @@ import { BrandIcon } from "@/components/brand-icon";
 import { Button } from "@fluncle/ui/components/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
 import { Switch } from "@fluncle/ui/components/switch";
-import { fluncleEntityId, siteUrl } from "@/lib/fluncle-links";
+import { fluncleEntityRef, siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
 import { formatDateLong } from "@/lib/format";
 import { activeSliceForOffset } from "@/lib/observation-slices";
@@ -81,7 +81,7 @@ export const Route = createFileRoute("/radio")({
       jsonLdScript({
         "@context": "https://schema.org",
         "@type": "CreativeWork",
-        creator: { "@id": fluncleEntityId },
+        creator: fluncleEntityRef,
         description,
         genre: "Drum and Bass",
         image: coverUrl,

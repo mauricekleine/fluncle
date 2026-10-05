@@ -11,7 +11,7 @@ import { FrontDoorSection } from "@/components/front-door/section";
 import { LiveBanner } from "@/components/home/live-banner";
 import { printConsoleGreeting } from "@/lib/console-greeting";
 import { findingToDiscoveryTrack } from "@/lib/discovery-tracks";
-import { fluncleEntityId, fluncleWebsiteId, siteUrl } from "@/lib/fluncle-links";
+import { fluncleEntityRef, fluncleWebsiteId, siteUrl } from "@/lib/fluncle-links";
 import { frontDoorCount } from "@/lib/front-door";
 import { fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
@@ -72,7 +72,7 @@ export const Route = createFileRoute("/")({
         },
         description: fluncleDescription,
         name: "Fluncle",
-        publisher: { "@id": fluncleEntityId },
+        publisher: fluncleEntityRef,
         url: `${siteUrl}/`,
       }),
 
