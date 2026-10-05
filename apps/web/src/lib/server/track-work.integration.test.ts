@@ -1,5 +1,5 @@
 import { type Client, type InStatement } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createIntegrationDb,
@@ -8,7 +8,12 @@ import {
   seedTrack,
 } from "./integration-db";
 
+import { AGENT_TOKEN, readJson, req, setAdminTokenEnv, warmOrpcRouter } from "./orpc-test-kit";
+
 let db: Client;
+
+beforeAll(setAdminTokenEnv);
+warmOrpcRouter();
 
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
@@ -1527,5 +1532,105 @@ describe("countTrackWork — the backfill queues report the same brake the page 
     await openCaptureBudget();
 
     expect(await countTrackWork({ kind: "youtube-provenance", scope: "all" })).toBe(2);
+  });
+});
+
+describe("the worklist reports the catalogue capture brake", () => {
+  const readWork = async (kind: string, scope: string) => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/tracks/work?kind=${kind}&scope=${scope}&count=true`, "GET", AGENT_TOKEN),
+    );
+
+    expect(response?.status).toBe(200);
+    return readJson(response);
+  };
+
+  it.each(["paused", "tracks_spent", "bytes_spent"] as const)(
+    "reports %s for metered catalogue work and preserves findings work",
+    async (closedReason) => {
+      const { setCatalogueCaptureBudget, setCatalogueCapturePaused } =
+        await import("./capture-budget");
+
+      await setCatalogueCapturePaused(closedReason === "paused");
+      await setCatalogueCaptureBudget({
+        dailyBytes: closedReason === "bytes_spent" ? 0 : 1_000_000,
+        dailyTracks: closedReason === "tracks_spent" ? 0 : 10,
+      });
+      await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+      await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+      await withPriority("cat1000000000000000000", 3);
+
+      for (const kind of ["capture", "youtube-provenance"]) {
+        if (kind === "youtube-provenance") {
+          await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
+          await withAudio("cat1000000000000000000");
+        }
+        for (const scope of ["catalogue", "all"]) {
+          const execute = vi.spyOn(db, "execute");
+          let body: unknown;
+
+          try {
+            body = await readWork(kind, scope);
+            const spendReads = execute.mock.calls.filter(([statement]) =>
+              sqlOf(statement).includes("source_audio_attempted_at >= ?"),
+            );
+            expect(spendReads).toHaveLength(closedReason === "paused" ? 0 : 1);
+          } finally {
+            execute.mockRestore();
+          }
+
+          expect(body).toMatchObject({
+            catalogueCapture: { closedReason, open: false },
+            ok: true,
+            queued: scope === "catalogue" ? 0 : 1,
+          });
+          expect(
+            (body as { tracks: { trackId: string }[] }).tracks.map((row) => row.trackId),
+          ).toEqual(scope === "catalogue" ? [] : ["aaaaaaaaaaaaaaaaaaaaaa"]);
+        }
+      }
+    },
+  );
+
+  it("omits the brake for open budgets, findings scopes, and unmetered work", async () => {
+    const { setCatalogueCapturePaused } = await import("./capture-budget");
+
+    await openCaptureBudget();
+
+    for (const kind of ["capture", "youtube-provenance"]) {
+      const execute = vi.spyOn(db, "execute");
+
+      try {
+        expect(await readWork(kind, "all")).not.toHaveProperty("catalogueCapture");
+        expect(
+          execute.mock.calls.filter(([statement]) =>
+            sqlOf(statement).includes("source_audio_attempted_at >= ?"),
+          ),
+        ).toHaveLength(1);
+      } finally {
+        execute.mockRestore();
+      }
+    }
+
+    await setCatalogueCapturePaused(true);
+    const execute = vi.spyOn(db, "execute");
+
+    try {
+      for (const [kind, scope] of [
+        ["capture", "findings"],
+        ["youtube-provenance", "findings"],
+        ["embed", "all"],
+      ] as const) {
+        expect(await readWork(kind, scope)).not.toHaveProperty("catalogueCapture");
+      }
+      expect(
+        execute.mock.calls.filter(([statement]) =>
+          sqlOf(statement).includes("source_audio_attempted_at >= ?"),
+        ),
+      ).toEqual([]);
+    } finally {
+      execute.mockRestore();
+    }
   });
 });

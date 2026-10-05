@@ -30,6 +30,42 @@ function unsafeCurlCommands(source: string, typescript = false): string[] {
   );
 }
 
+function unsafeProxyCommands(source: string, typescript = false): string[] {
+  const argvSource = source.replace(/<<<"\$\(curl_config[^\n]*?\)"/g, "").replace(/\\\n/g, " ");
+  const sensitiveProxy =
+    /(?:^|[\s"'`])--proxy(?:[\s="'`]|$)|[a-z][a-z\d+.-]*:\/\/[^\s"'`/:]+:[^\s"'`@]+@/i;
+  if (!typescript) {
+    return argvSource
+      .split("\n")
+      .filter((line) => !/^\s*(?:#|[\w]+=(?!["']?\$\())/.test(line) && sensitiveProxy.test(line));
+  }
+  const commands: string[] = [];
+  const argvNames = new Set<string>();
+  for (const match of argvSource.matchAll(
+    /\b(?:spawn(?:Sync)?|execFile(?:Sync)?)\s*\(\s*(?:\{\s*cmd:\s*)?(?:\[([^\]]*)\]|[^,\n]+,\s*\[([^\]]*)\]|[^,\n]+,\s*([\w$]+))/g,
+  )) {
+    const inline = match[1] ?? match[2];
+    if (inline !== undefined) {
+      commands.push(inline);
+      for (const spread of inline.matchAll(/\.\.\.([\w$]+)/g)) {
+        if (spread[1] !== undefined) {
+          argvNames.add(spread[1]);
+        }
+      }
+    } else if (match[3] !== undefined) {
+      argvNames.add(match[3]);
+    }
+  }
+  for (const match of argvSource.matchAll(
+    /(?:const|let|var)\s+([\w$]+)(?:\s*:[^=\n]+)?\s*=\s*\[([^\]]*)\]/g,
+  )) {
+    if (match[1] !== undefined && argvNames.has(match[1])) {
+      commands.push(match[2] ?? "");
+    }
+  }
+  return commands.filter((command) => sensitiveProxy.test(command));
+}
+
 test("the secret argv scanner detects exposed headers, credentials, arrays, and URLs", () => {
   for (const command of [
     'curl -H "Authorization: Bearer ${token}" "$url"',
@@ -50,6 +86,37 @@ test("the secret argv scanner detects exposed headers, credentials, arrays, and 
   expect(
     unsafeCurlCommands(
       'curl --config - <<<"$(curl_config header "Authorization: Bearer $token")" "$url"',
+    ),
+  ).toEqual([]);
+  for (const command of [
+    'spawn("yt-dlp", ["--proxy", proxyUrl, url])',
+    'spawnSync(YT_DLP_BIN, ["--proxy", proxyUrl, url])',
+    'Bun.spawn(["yt-dlp", "--proxy", proxyUrl, url])',
+    'Bun.spawnSync(["yt-dlp", "--proxy=http://user:secret@proxy.example", url])',
+    'execFile("yt-dlp", ["--proxy", proxyUrl, url], callback)',
+    'execFileSync("yt-dlp", ["http://user:secret@proxy.example"])',
+    'const args: string[] = ["--proxy", proxyUrl]; spawnSync(YT_DLP_BIN, args)',
+    'const args = ["--proxy", proxyUrl]; spawnSync(YT_DLP_BIN, [...configArgs, ...args])',
+  ]) {
+    expect(unsafeProxyCommands(command, true)).toHaveLength(1);
+  }
+  for (const command of [
+    'yt-dlp --proxy "$proxy_url" "$url"',
+    'curl -x "http://user:secret@proxy.example" "$url"',
+    'out="$(yt-dlp --proxy "$proxy_url" "$url")"',
+  ]) {
+    expect(unsafeProxyCommands(command)).toHaveLength(1);
+  }
+  expect(
+    unsafeProxyCommands('spawnSync(YT_DLP_BIN, ["--config-locations", configPath, url])', true),
+  ).toEqual([]);
+  expect(
+    unsafeProxyCommands('const config = `--proxy "http://user:secret@proxy.example"`; ', true),
+  ).toEqual([]);
+  expect(unsafeProxyCommands('proxy_url="http://user:secret@proxy.example"')).toEqual([]);
+  expect(
+    unsafeProxyCommands(
+      'curl --config - <<<"$(curl_config proxy "http://user:secret@proxy.example")" "$url"',
     ),
   ).toEqual([]);
 });
@@ -83,13 +150,13 @@ test("URL config preserves curl requests with quotes and backslashes", async () 
   }
 });
 
-test("tracked host scripts keep curl secrets out of argv", () => {
+test("tracked host scripts keep curl and proxy secrets out of argv", () => {
   const paths = execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" })
     .split("\0")
     .filter(Boolean);
   const violations: string[] = [];
   for (const path of paths) {
-    const typescript = /^docs\/agents\/hermes\/scripts\/.*(?<!\.test)\.ts$/.test(path);
+    const typescript = /^docs\/agents\/hermes\/.*(?<!\.test)\.ts$/.test(path);
     const shellArea = /^(?:docs\/agents\/hermes\/|apps\/[^/]+\/(?:deploy|watchdog|scripts)\/)/.test(
       path,
     );
@@ -100,7 +167,10 @@ test("tracked host scripts keep curl secrets out of argv", () => {
     if (!path.endsWith(".sh") && !typescript && !/^#![^\n]*\bbash\b/.test(source)) {
       continue;
     }
-    for (const command of unsafeCurlCommands(source, typescript)) {
+    for (const command of [
+      ...unsafeCurlCommands(source, typescript),
+      ...unsafeProxyCommands(source, typescript),
+    ]) {
       violations.push(`${path}: ${command.trim()}`);
     }
   }

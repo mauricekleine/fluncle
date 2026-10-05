@@ -171,9 +171,9 @@ probe_and_post_onion() {
 	code="000"
 	time_total="0"
 	for attempt in $(seq 1 "${WATCH_ONION_ATTEMPTS}"); do
-		out="$("${CURL_BIN}" -x "socks5h://onion-probe-${attempt}:x@${WATCH_TOR_SOCKS}" -s -o /dev/null \
+		out="$("${CURL_BIN}" --config - -s -o /dev/null \
 			-w '%{http_code} %{time_total}' --max-time "${WATCH_ONION_TIMEOUT}" \
-			"${WATCH_ONION_URL}" 2>/dev/null || true)"
+			"${WATCH_ONION_URL}" <<<"$(curl_config proxy "socks5h://onion-probe-${attempt}:x@${WATCH_TOR_SOCKS}")" 2>/dev/null || true)"
 		code="${out%% *}"
 		time_total="${out##* }"
 		[ -z "${code}" ] && code="000"
