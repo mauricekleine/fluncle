@@ -49,6 +49,8 @@ export const FRESH_SECONDS = 300;
 
 export const SWR_SECONDS = 3_600;
 
+export const STALE_IF_ERROR_SECONDS = 86_400;
+
 export const PAGE_CACHE_POLICY = policy(
   FRESH_SECONDS,
   SWR_SECONDS,
@@ -310,11 +312,19 @@ export async function withEdgeCache(
     return tagHit(hit, "stale", cachePolicy);
   }
 
-  if (hit && !withinRetention) {
-    await cache.delete(cacheKey);
+  let response: Response;
+  try {
+    response = await render();
+  } catch (error) {
+    if (hit) {
+      return tagHit(hit, "stale-if-error", cachePolicy);
+    }
+    throw error;
   }
 
-  const response = await render();
+  if (hit && response.status >= 500) {
+    return tagHit(hit, "stale-if-error", cachePolicy);
+  }
 
   if (isStorable(response, cachePolicy)) {
     void runServerEffect(
@@ -326,6 +336,8 @@ export async function withEdgeCache(
         }),
       ),
     );
+  } else if (hit && !withinRetention) {
+    await cache.delete(cacheKey);
   }
 
   return tagResponse(response, "miss", cachePolicy);
@@ -341,7 +353,7 @@ async function refresh(
 
   if (isStorable(response, cachePolicy)) {
     await cache.put(cacheKey, toStoredResponse(response, cachePolicy, cacheKey));
-  } else {
+  } else if (response.status < 500) {
     await cache.delete(cacheKey);
   }
 }
@@ -366,7 +378,7 @@ function toStoredResponse(
   const storedPolicy = releaseSensitivePath(new URL(cacheKey.url).pathname)
     ? releaseBoundPolicy(cachePolicy, new Date(storedAt))
     : cachePolicy;
-  stored.headers.set("Cache-Control", `public, s-maxage=${storedPolicy.retainSeconds}`);
+  stored.headers.set("Cache-Control", `public, s-maxage=${storedPolicy.retainSeconds + STALE_IF_ERROR_SECONDS}`);
   stored.headers.set(STAMP_HEADER, String(storedAt));
   stored.headers.set(BUILD_HEADER, SENTRY_RELEASE ?? "dev");
   stored.headers.set(FRESH_UNTIL_HEADER, String(storedAt + storedPolicy.freshSeconds * 1_000));
@@ -385,7 +397,7 @@ function toStoredResponse(
 
 function tagHit(
   response: Response,
-  status: "fresh" | "stale",
+  status: "fresh" | "stale" | "stale-if-error",
   cachePolicy: EdgeCachePolicy,
 ): Response {
   const out = new Response(response.body, response);

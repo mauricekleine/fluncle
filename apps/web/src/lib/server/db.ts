@@ -34,6 +34,7 @@ import {
   enterDatabaseRequestTransaction,
   getRequestScopedDatabaseClient,
   getRequestScopedTransactionLease,
+  getRequestScopedValue,
   type DatabaseRequestOperationLease,
   type DatabaseRequestTransactionLease,
 } from "./database-request-scope";
@@ -188,6 +189,19 @@ export const DB_MAX_RETRIES = DB_RETRY_BACKOFF_MS.length;
 const DB_RETRY_JITTER_MS = 50;
 
 const RETRYABLE_GATEWAY_STATUSES = new Set([502, 503, 504, 520, 522, 525, 530]);
+const TRANSIENT_GATEWAY_STATUSES = new Set([...RETRYABLE_GATEWAY_STATUSES, 524]);
+const TRANSIENT_DATABASE_FAILURE = Symbol("fluncle.transient-database-failure");
+
+export function noteTransientDatabaseFailure(): void {
+  const marker = getRequestScopedValue(TRANSIENT_DATABASE_FAILURE, () => ({ seen: false }));
+  if (marker !== undefined) {
+    marker.seen = true;
+  }
+}
+
+export function requestSawTransientDatabaseFailure(): boolean {
+  return getRequestScopedValue(TRANSIENT_DATABASE_FAILURE, () => ({ seen: false }))?.seen ?? false;
+}
 
 const MAX_CAUSE_DEPTH = 3;
 
@@ -204,22 +218,32 @@ function causeOf(value: unknown): unknown {
   return typeof value === "object" && value !== null && "cause" in value ? value.cause : undefined;
 }
 
-function isRetryableGatewayError(error: unknown): boolean {
+export function classifyDatabaseFailure(
+  error: unknown,
+): "retryable-gateway" | "transient-gateway" | "other" {
   let current: unknown = error;
 
   for (let depth = 0; depth <= MAX_CAUSE_DEPTH; depth += 1) {
     if (hasNumericStatus(current)) {
-      return RETRYABLE_GATEWAY_STATUSES.has(current.status);
+      return RETRYABLE_GATEWAY_STATUSES.has(current.status)
+        ? "retryable-gateway"
+        : TRANSIENT_GATEWAY_STATUSES.has(current.status)
+          ? "transient-gateway"
+          : "other";
     }
 
     current = causeOf(current);
 
     if (current === undefined) {
-      return false;
+      return "other";
     }
   }
 
-  return false;
+  return "other";
+}
+
+function isRetryableGatewayError(error: unknown): boolean {
+  return classifyDatabaseFailure(error) === "retryable-gateway";
 }
 
 function isRetryableRead(sql: string): boolean {
@@ -464,6 +488,9 @@ function instrument(
                 finishSpan(span, startedAt, "success", requestOperation);
                 return result;
               } catch (error) {
+                if (classifyDatabaseFailure(error) !== "other") {
+                  noteTransientDatabaseFailure();
+                }
                 finishSpan(span, startedAt, "failure", requestOperation);
                 throw error;
               } finally {
@@ -526,6 +553,9 @@ function instrument(
                 finishSpan(span, startedAt, "success", requestOperation);
                 return result;
               } catch (error) {
+                if (classifyDatabaseFailure(error) !== "other") {
+                  noteTransientDatabaseFailure();
+                }
                 finishSpan(span, startedAt, "failure", requestOperation);
                 throw error;
               } finally {

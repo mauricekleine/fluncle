@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { takeWaitUntilPromises } from "./test/cloudflare-workers-stub";
+import { noteTransientDatabaseFailure } from "./lib/server/db";
 import {
   CONTENT_POLICY,
   CONTENT_POLICY_WITH_REPORTING,
@@ -270,6 +271,60 @@ describe("server.ts shared-cache isolation", () => {
 
     return response;
   }
+
+  it.each(["GET", "HEAD"] as const)(
+    "rewrites a failed public %s render inside the request scope without storing the error",
+    async (method) => {
+      hoisted.routerFetch.mockImplementation(async () => {
+        noteTransientDatabaseFailure();
+        return new Response("redacted error", {
+          headers: { "content-type": "text/html" },
+          status: 500,
+        });
+      });
+
+      const response = await dispatchAndSettle(
+        "https://www.fluncle.com/track/mb_x",
+        { accept: "text/html" },
+        method,
+      );
+
+      expect(response.status).toBe(503);
+      expect(response.headers.get("Retry-After")).toBe("60");
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(await response.text()).toBe("redacted error");
+      expect(entries.size).toBe(0);
+
+      hoisted.routerFetch.mockImplementation(
+        async () => new Response("unrelated error", { status: 500 }),
+      );
+      const unrelated = await dispatch("https://www.fluncle.com/track/mb_y", {
+        accept: "text/html",
+      });
+      expect(unrelated.status).toBe(500);
+      expect(unrelated.headers.get("Retry-After")).toBeNull();
+    },
+  );
+
+  it("substitutes an expired page for a transient failure before returning the render", async () => {
+    const url = "https://www.fluncle.com/track/mb_x";
+    await dispatchAndSettle(url, { accept: "text/html" });
+    const stored = entries.get(url);
+    if (stored === undefined) {
+      throw new Error("public page missing from cache");
+    }
+    stored.headers.set("x-edge-expires-at", "0");
+    hoisted.routerFetch.mockImplementation(async () => {
+      noteTransientDatabaseFailure();
+      return new Response("redacted error", { status: 500 });
+    });
+
+    const response = await dispatchAndSettle(url, { accept: "text/html" });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-edge-cache")).toBe("stale-if-error");
+    expect(await response.text()).toBe("router-sentinel");
+    expect(entries.get(url)).toBe(stored);
+  });
 
   it("isolates surface-host renders from canonical cache reads and writes", async () => {
     await dispatchAndSettle("https://www.fluncle.com/albums", { accept: "text/html" });

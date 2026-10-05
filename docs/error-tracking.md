@@ -8,7 +8,7 @@ Sentry runs on the Team plan with a 5M-spans/month budget. Capture errors and sa
 
 ### What tracing captures
 
-Database spans cover the recommendation vector scan and other scaling-sensitive queries. The libSQL wrapper retries transient HTTP gateway failures for read-only statements. Treat 4xx responses as non-retryable.
+Database spans cover the recommendation vector scan and other scaling-sensitive queries. The libSQL wrapper retries transient HTTP gateway failures for read-only statements. Treat 4xx responses as non-retryable. Public responses treat database gateway statuses 502, 503, 504, 520, 522, 524, 525, and 530 as transient; 524 is never retried. Public pages and sitemaps that fail after a transient database error serve a cached copy when available or answer 503 with `Retry-After: 60` and `Cache-Control: no-store`.
 
 Retry an ordinary statement only when its read-only shape is known; SQLite permits writes after `WITH`. A run-ledger append has a separate retry path because its deterministic primary key makes replay safe. Gateway status can sit in a nested libSQL cause, and connection-level failures such as 520, 522, 525, and 530 can occur before the statement reaches the database.
 
