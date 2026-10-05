@@ -1826,6 +1826,50 @@ describe("sweep commands surface partial failure", () => {
     },
   );
 
+  testCli("cover-master retry keeps retry=none and the retry cursor on every page", async () => {
+    const calls: Array<{ cursor: string | null; retry: string | null }> = [];
+    const retryCursor = JSON.stringify([0, "z-public"]);
+    await withStubApi(
+      (req, url) => {
+        if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/cover-masters") {
+          calls.push({
+            cursor: url.searchParams.get("cursor"),
+            retry: url.searchParams.get("retry"),
+          });
+          const slugs = calls.length === 1 ? ["z-public"] : ["a-catalogue"];
+          return Response.json({
+            dryRun: true,
+            failed: [],
+            failedCount: 0,
+            kind: "album",
+            nextCursor: calls.length === 1 ? retryCursor : null,
+            none: [],
+            noneCount: 0,
+            ok: true,
+            rateLimited: false,
+            requeued: slugs,
+            requeuedCount: 1,
+            resolved: slugs,
+            resolvedCount: 1,
+          });
+        }
+        return Response.json({ ok: false }, { status: 404 });
+      },
+      async (baseUrl) => {
+        const result = await runCli(
+          ["admin", "backfills", "cover-masters", "--retry-none", "--dry-run", "--json"],
+          { FLUNCLE_API_BASE_URL: baseUrl, FLUNCLE_API_TOKEN: "test-token" },
+        );
+        expect(result.exitCode).toBe(0);
+        expect(calls).toEqual([
+          { cursor: null, retry: "none" },
+          { cursor: retryCursor, retry: "none" },
+        ]);
+        expect(JSON.parse(result.stdout).requeued).toEqual(["z-public", "a-catalogue"]);
+      },
+    );
+  });
+
   testCli(
     "backfills artist-images counts checked artists toward --limit and follows skip-only pages",
     async () => {

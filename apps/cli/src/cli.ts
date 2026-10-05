@@ -3536,7 +3536,7 @@ JSON field reference:
     .option("--dry-run", "Report the eligible worklist without any fetch or write", false)
     .option(
       "--retry-none",
-      "First re-queue a bounded batch of terminal none rows to pending, then run the pass",
+      "Retry sourced terminal none rows after cooldown, published findings first",
       false,
     )
     .option("--limit <limit>", "Max entities to process", "50")
@@ -5428,7 +5428,7 @@ async function runBackfillCoverMasters(
       remaining,
       options.dryRun,
       cursor,
-      retryNone && cursor === undefined,
+      retryNone,
     );
     dryRun = result.dryRun;
     resolved.push(...result.resolved);
