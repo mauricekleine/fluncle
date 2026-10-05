@@ -28,4 +28,12 @@ describe("root head — the inherited X card tags", () => {
       expect(root).toContain(`property: "${property}"`);
     }
   });
+
+  it("declares no og:image:* structured property, which a page's own og:image would strand ahead of it as a url-less image", () => {
+    const structured = [...root.matchAll(/property:\s*"(og:image:[^"]+)"/g)].map(
+      (match) => match[1],
+    );
+
+    expect(structured).toEqual([]);
+  });
 });

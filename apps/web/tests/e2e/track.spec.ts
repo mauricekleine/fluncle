@@ -149,6 +149,10 @@ test("the evidence gate drives BOTH the page's directive and the sitemap, from o
   expectCanonical(rich, DESTINATION_PATH);
   expect(rich).toContain('property="og:title"');
   expect(rich).toContain('property="og:image"');
+  expect(
+    rich.match(/property="og:image[^"]*"/)?.[0],
+    "no og:image:* property precedes the og:image it describes",
+  ).toBe('property="og:image"');
   expect(rich).toContain('name="twitter:card"');
   expect(rich).toContain('"@type":"MusicRecording"');
   expect(rich).toContain('"@type":"BreadcrumbList"');
