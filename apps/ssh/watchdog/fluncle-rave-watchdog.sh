@@ -2,6 +2,16 @@
 
 set -euo pipefail
 
+curl_config() {
+	local key="$1" value="$2"
+	value="${value//\\/\\\\}"
+	value="${value//\"/\\\"}"
+	value="${value//$'\n'/\\n}"
+	value="${value//$'\r'/\\r}"
+	value="${value//$'\t'/\\t}"
+	printf '%s = "%s"\n' "$key" "$value"
+}
+
 log() { printf '[fluncle-rave-watchdog] %s\n' "$*" >&2; }
 
 RAVE01_BEACON_URL="${RAVE01_BEACON_URL:-}"
@@ -28,7 +38,8 @@ ping_beacon() {
 		return 0
 	fi
 
-	if ! "${CURL_BIN}" -sS -o /dev/null --max-time 10 "${RAVE01_BEACON_URL}"; then
+	if ! "${CURL_BIN}" -sS -o /dev/null --max-time 10 --config - \
+		<<<"$(curl_config url "${RAVE01_BEACON_URL}")"; then
 		log "beacon ping failed (best-effort, ignored)"
 	fi
 }
@@ -42,7 +53,8 @@ ping_discord() {
 	fi
 
 	if ! "${CURL_BIN}" -sS -X POST -H "Content-Type: application/json" \
-		-d "{\"content\":\"${content}\"}" --max-time 10 "${DISCORD_ALERT_WEBHOOK}"; then
+		-d "{\"content\":\"${content}\"}" --max-time 10 --config - \
+		<<<"$(curl_config url "${DISCORD_ALERT_WEBHOOK}")"; then
 		log "discord alert POST failed (best-effort, ignored)"
 	fi
 }
@@ -213,8 +225,9 @@ probe_and_post_onion() {
 		http_status=""
 		if http_status="$("${CURL_BIN}" -sS -o /dev/null -w '%{http_code}' -X POST \
 			-H "Content-Type: application/json" \
-			-H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
-			-d "${body}" --max-time 10 "${WATCH_WORKER_URL%/}/api/v1/admin/health" 2>/dev/null)"; then
+			--config - \
+			-d "${body}" --max-time 10 "${WATCH_WORKER_URL%/}/api/v1/admin/health" \
+			<<<"$(curl_config header "Authorization: Bearer ${FLUNCLE_API_TOKEN}")" 2>/dev/null)"; then
 			case "$http_status" in
 			2??) return 0 ;;
 			4??)
@@ -226,9 +239,10 @@ probe_and_post_onion() {
 
 		if ! response="$("${CURL_BIN}" -sS -w $'\n%{http_code}' -X POST \
 			-H "Content-Type: application/json" \
-			-H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
+			--config - \
 			-d "${reconcile_body}" --max-time 10 \
-			"${WATCH_WORKER_URL%/}/api/v1/admin/operation-receipts/resolve" 2>/dev/null)"; then
+			"${WATCH_WORKER_URL%/}/api/v1/admin/operation-receipts/resolve" \
+			<<<"$(curl_config header "Authorization: Bearer ${FLUNCLE_API_TOKEN}")" 2>/dev/null)"; then
 			log "onion record_health reconciliation unavailable; snapshot was not replayed"
 			return 0
 		fi

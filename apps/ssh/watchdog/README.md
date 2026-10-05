@@ -2,6 +2,8 @@
 
 The rave-01 side of Fluncle's monitoring dead-man's switch. A small bash watchdog + a hardened systemd timer that runs ON rave-01 (the public-edge box — the SSH terminal in [`apps/ssh/`](../), the dig DNS server in [`apps/dns/`](../../dns/), and the Tor onion services) every ~10 minutes. rave-01 otherwise runs only `Restart=always` services; this timer is its sole periodic job.
 
+Bearer headers and secret webhook/beacon URLs reach curl through escaped config on stdin (`--config -`), never argv.
+
 ## What it does
 
 Each run does three best-effort jobs and always exits 0 on a completed run:

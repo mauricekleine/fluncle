@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { curlUrlConfig } from "./curl-config";
 import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
 import { resolveSweepPrompt } from "./prompt-fetch";
 
@@ -553,18 +554,25 @@ function pingClaudeAuthFailure(detail: string): void {
   }
 
   try {
-    run("curl", [
-      "-sS",
-      "-X",
-      "POST",
-      "-H",
-      "Content-Type: application/json",
-      "-d",
-      JSON.stringify({ content: "Fluncle newsletter-sweep: claude auth failed, re-auth needed." }),
-      "--max-time",
-      "10",
-      DISCORD_ALERT_WEBHOOK,
-    ]);
+    run(
+      "curl",
+      [
+        "-sS",
+        "-X",
+        "POST",
+        "-H",
+        "Content-Type: application/json",
+        "-d",
+        JSON.stringify({
+          content: "Fluncle newsletter-sweep: claude auth failed, re-auth needed.",
+        }),
+        "--max-time",
+        "10",
+        "--config",
+        "-",
+      ],
+      curlUrlConfig(DISCORD_ALERT_WEBHOOK),
+    );
   } catch {}
 }
 
@@ -583,18 +591,23 @@ function deliverOffer(line: string): void {
   }
 
   try {
-    run("curl", [
-      "-sS",
-      "-X",
-      "POST",
-      "-H",
-      "Content-Type: application/json",
-      "-d",
-      JSON.stringify({ content: line }),
-      "--max-time",
-      "10",
-      DISCORD_ALERT_WEBHOOK,
-    ]);
+    run(
+      "curl",
+      [
+        "-sS",
+        "-X",
+        "POST",
+        "-H",
+        "Content-Type: application/json",
+        "-d",
+        JSON.stringify({ content: line }),
+        "--max-time",
+        "10",
+        "--config",
+        "-",
+      ],
+      curlUrlConfig(DISCORD_ALERT_WEBHOOK),
+    );
   } catch {}
 }
 

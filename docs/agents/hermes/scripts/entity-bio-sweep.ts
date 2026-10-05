@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { curlUrlConfig } from "./curl-config";
 import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
 import {
   databaseAdmissionYieldSummary,
@@ -792,18 +793,23 @@ function pingClaudeAuthFailure(kind: EntityKind, detail: string): void {
     const body = JSON.stringify({
       content: `Fluncle ${kind}-bio-sweep: claude auth failed, re-auth needed.`,
     });
-    const { code } = run("curl", [
-      "-sS",
-      "-X",
-      "POST",
-      "-H",
-      "Content-Type: application/json",
-      "-d",
-      body,
-      "--max-time",
-      "10",
-      DISCORD_ALERT_WEBHOOK,
-    ]);
+    const { code } = run(
+      "curl",
+      [
+        "-sS",
+        "-X",
+        "POST",
+        "-H",
+        "Content-Type: application/json",
+        "-d",
+        body,
+        "--max-time",
+        "10",
+        "--config",
+        "-",
+      ],
+      curlUrlConfig(DISCORD_ALERT_WEBHOOK),
+    );
 
     if (code !== 0) {
       log(`discord alert POST exited ${code} (best-effort, ignored)`);

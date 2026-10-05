@@ -2,6 +2,16 @@
 
 set -euo pipefail
 
+curl_config() {
+	local key="$1" value="$2"
+	value="${value//\\/\\\\}"
+	value="${value//\"/\\\"}"
+	value="${value//$'\n'/\\n}"
+	value="${value//$'\r'/\\r}"
+	value="${value//$'\t'/\\t}"
+	printf '%s = "%s"\n' "$key" "$value"
+}
+
 RELEASE_REPO="${SONARFRESHEN_RELEASE_REPO:-mauricekleine/fluncle}"
 RELEASE_TAG="${SONARFRESHEN_RELEASE_TAG:-sonar-latest}"
 ASSET_BASE="${SONARFRESHEN_ASSET_BASE:-https://github.com/${RELEASE_REPO}/releases/download/${RELEASE_TAG}}"
@@ -100,7 +110,7 @@ record_run_event() {
 		"$(_run_event_json_string "$summary_raw")")"
 	if ! curl -fsS -o /dev/null --max-time "$RUN_EVENT_TIMEOUT_SECS" \
 		-X POST -H 'Content-Type: application/json' \
-		-H "Authorization: Bearer ${token}" \
+		--config - <<<"$(curl_config header "Authorization: Bearer ${token}")" \
 		--data-binary "$body" "${base}${RUN_EVENT_PATH}" >/dev/null 2>&1; then
 		RUN_EVENT_FAILURE_REASON="post-failed"
 		return 1
@@ -159,7 +169,7 @@ alert() {
 	[ -n "${DISCORD_ALERT_WEBHOOK:-}" ] || return 0
 	curl -fsS -m 10 -H 'Content-Type: application/json' \
 		-d "$(printf '{"content":%s}' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')")" \
-		"${DISCORD_ALERT_WEBHOOK}" >/dev/null 2>&1 || true
+		--config - <<<"$(curl_config url "${DISCORD_ALERT_WEBHOOK}")" >/dev/null 2>&1 || true
 }
 
 post_health() {
@@ -183,8 +193,9 @@ post_health() {
 	for attempt in 1 2; do
 		http_status=""
 		if http_status="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' \
-			-H 'Content-Type: application/json' -H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
-			-d "$body" "${WORKER_URL%/}/api/v1/admin/health" 2>/dev/null)"; then
+			-H 'Content-Type: application/json' --config - \
+			-d "$body" "${WORKER_URL%/}/api/v1/admin/health" \
+			<<<"$(curl_config header "Authorization: Bearer ${FLUNCLE_API_TOKEN}")" 2>/dev/null)"; then
 			case "$http_status" in
 			2??) return 0 ;;
 			4??)
@@ -195,8 +206,9 @@ post_health() {
 		fi
 
 		if ! response="$(curl -sS -m 10 -w $'\n%{http_code}' \
-			-H 'Content-Type: application/json' -H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
-			-d "$reconcile_body" "${WORKER_URL%/}/api/v1/admin/operation-receipts/resolve" 2>/dev/null)"; then
+			-H 'Content-Type: application/json' --config - \
+			-d "$reconcile_body" "${WORKER_URL%/}/api/v1/admin/operation-receipts/resolve" \
+			<<<"$(curl_config header "Authorization: Bearer ${FLUNCLE_API_TOKEN}")" 2>/dev/null)"; then
 			log "record_health reconciliation unavailable; snapshot was not replayed"
 			return 0
 		fi

@@ -424,7 +424,7 @@ describe("emit_cron_output — the run-ledger POST", () => {
 
     writeFileSync(
       join(bin, "curl"),
-      `#!/usr/bin/env bash\nprintf '%s\\n' "\${@: -1}" >>${JSON.stringify(log)}\nexit 0\n`,
+      `#!/usr/bin/env bash\nprintf '%s\\n' "\${@: -1}" >>${JSON.stringify(log)}\nprintf '%s\\n' "$@" >>${JSON.stringify(log + ".argv")}\ncat >>${JSON.stringify(log + ".stdin")}\nexit 0\n`,
       "utf8",
     );
     chmodSync(join(bin, "curl"), 0o755);
@@ -448,6 +448,11 @@ describe("emit_cron_output — the run-ledger POST", () => {
     });
 
     expect(recorder.urls()).toEqual([`https://ledger.invalid${RUN_EVENT_ENDPOINT}`]);
+    expect(readFileSync(`${recorder.log}.argv`, "utf8")).not.toContain("fixture-agent-token");
+    expect(readFileSync(`${recorder.log}.argv`, "utf8")).not.toContain("Authorization");
+    expect(readFileSync(`${recorder.log}.stdin`, "utf8")).toContain(
+      'header = "Authorization: Bearer fixture-agent-token"',
+    );
   });
 
   test("an empty base URL ⇒ NO request either — and above all, none at PRODUCTION", async () => {

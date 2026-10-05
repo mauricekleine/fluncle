@@ -402,6 +402,23 @@ function acquireDelay(timeline: string): number {
   return (times[1] ?? 0) - (times[0] ?? 0);
 }
 
+it("keeps admission credentials in curl stdin while preserving successful acquire and release", async () => {
+  fakeCurl(`cat >> "${curlLog}.stdin"
+${STALL_TOLERANT_GRANT(90_000, 30_000)}
+printf '\\n200'`);
+  const token = 'fixture-"quoted"\\token';
+  const result = await run(["true"], { env: { FLUNCLE_API_TOKEN: token } });
+  expect(result.status).toBe(0);
+  const argv = readFileSync(curlLog, "utf8");
+  expect(argv).not.toContain(token);
+  expect(argv).not.toContain("Authorization");
+  expect(argv).toContain("--config -");
+  expect(argv).toContain('"action":"release"');
+  expect(readFileSync(`${curlLog}.stdin`, "utf8")).toContain(
+    'header = "Authorization: Bearer fixture-\\"quoted\\"\\\\token"',
+  );
+});
+
 describe("database admission unit runner", () => {
   it(
     "releases an immediately completed payload with less than 700 ms held",
@@ -1503,7 +1520,13 @@ if printf '%s' "$*" | grep -q '"action":"heartbeat"'; then
 fi
 ${ACQUIRED_RESPONSE}
 `);
-      const result = await run(["bash", "-c", "sleep 6; printf complete"]);
+      const result = await run([
+        "bash",
+        "-c",
+        'while [ "$(grep -c \'"action":"heartbeat"\' "$1")" -lt 3 ]; do sleep 0.1; done; printf complete',
+        "heartbeat-payload",
+        curlLog,
+      ]);
 
       expect(result.status).toBe(0);
       expect(result.stdout).toBe("complete");

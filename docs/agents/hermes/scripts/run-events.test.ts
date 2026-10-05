@@ -108,7 +108,9 @@ describe("record_run_event is mirrored, not re-implemented", () => {
     expect(canonical).toContain(
       '{"unit":"%s","started_at":"%s","ended_at":"%s","exit_code":%s,"summary_raw":"%s"}',
     );
-    expect(canonical).toContain('-H "Authorization: Bearer ${token}"');
+    expect(canonical).toContain(
+      '--config - <<<"$(curl_config header "Authorization: Bearer ${token}")"',
+    );
 
     expect(canonical).toContain('--max-time "$RUN_EVENT_TIMEOUT_SECS"');
 

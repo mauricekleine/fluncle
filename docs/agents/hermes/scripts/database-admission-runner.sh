@@ -2,6 +2,16 @@
 
 set -uo pipefail
 
+curl_config() {
+	local key="$1" value="$2"
+	value="${value//\\/\\\\}"
+	value="${value//\"/\\\"}"
+	value="${value//$'\n'/\\n}"
+	value="${value//$'\r'/\\r}"
+	value="${value//$'\t'/\\t}"
+	printf '%s = "%s"\n' "$key" "$value"
+}
+
 ADMISSION_PATH='/api/v1/admin/database-admission'
 ADMISSION_PROTOCOL_VERSION=2
 LEGACY_LEASE_MS=90000
@@ -464,7 +474,7 @@ admission_post() {
 	ADMISSION_REQUEST_STARTED_MS="$(current_time_ms)"
 	response_with_code="$(curl -sS --max-time "$request_timeout" -w '\n%{http_code}' \
 		-X POST -H 'Content-Type: application/json' \
-		-H "Authorization: Bearer ${api_token}" \
+		--config - <<<"$(curl_config header "Authorization: Bearer ${api_token}")" \
 		--data-binary "$body" "${api_base}${ADMISSION_PATH}" 2>/dev/null)"
 	curl_status=$?
 	if [ "$curl_status" -ne 0 ]; then

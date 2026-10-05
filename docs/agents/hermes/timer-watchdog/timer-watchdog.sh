@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 
+curl_config() {
+	local key="$1" value="$2"
+	value="${value//\\/\\\\}"
+	value="${value//\"/\\\"}"
+	value="${value//$'\n'/\\n}"
+	value="${value//$'\r'/\\r}"
+	value="${value//$'\t'/\\t}"
+	printf '%s = "%s"\n' "$key" "$value"
+}
+
 set -uo pipefail
 
 SELF_TIMER="fluncle-timer-watchdog.timer"
@@ -67,7 +77,7 @@ record_run_event() {
 		"$(_run_event_json_string "$summary_raw")")"
 	if ! curl -fsS -o /dev/null --max-time "$RUN_EVENT_TIMEOUT_SECS" \
 		-X POST -H 'Content-Type: application/json' \
-		-H "Authorization: Bearer ${token}" \
+		--config - <<<"$(curl_config header "Authorization: Bearer ${token}")" \
 		--data-binary "$body" "${base}${RUN_EVENT_PATH}" >/dev/null 2>&1; then
 		RUN_EVENT_FAILURE_REASON="post-failed"
 		return 1
@@ -189,7 +199,7 @@ if [ -n "$webhook" ]; then
 		echo "${stranded[*]}"
 	)"
 	payload="$(printf '{"content": "\\u23f0 timer-watchdog: found %d stranded sweep(s); re-armed %d, failed %d — %s. They were `active` with no next elapse, so they would never have fired again."}' "${#stranded[@]}" "${#healed[@]}" "$ERRORS" "$names")"
-	curl -sS --max-time 20 -H "Content-Type: application/json" -d "$payload" "$webhook" >/dev/null 2>&1 || true
+	curl -sS --max-time 20 -H "Content-Type: application/json" -d "$payload" --config - <<<"$(curl_config url "$webhook")" >/dev/null 2>&1 || true
 fi
 
 [ "${#healed[@]}" -gt 0 ] || exit 1

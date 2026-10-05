@@ -191,6 +191,8 @@ Everything is overridable via the environment; the defaults are the canonical de
 
 Operator env file (`/etc/fluncle/sonar-freshen.env`, optional, `0600`, kept out of the repo): `DISCORD_ALERT_WEBHOOK`, `FLUNCLE_API_TOKEN`.
 
+Bearer headers and secret webhook/beacon URLs reach curl through escaped config on stdin (`--config -`), never argv.
+
 ## The CI half
 
 [`cli-release.yml`](../../../.github/workflows/cli-release.yml). Starts only after the generic Quality Checks run for the exact pushed `main` SHA succeeds and the selector finds `apps/sonar/**` changes since `sonar-latest`; `workflow_dispatch` can re-publish an exact SHA that already has that validation. Nothing is published until `apps/sonar`'s `cargo fmt --check`, `clippy`, release build, and `cargo test` pass — the box only ever self-swaps onto a gated binary. The release leg builds `x86_64-unknown-linux-musl` (native-arch, different-libc on the ubuntu runner, so `rustup target add` + `musl-tools` is the whole story — no cross container) with `RUSTFLAGS: -C target-cpu=x86-64-v3`, which unlocks AVX2 + FMA in the scan kernel. That is not a micro-optimisation here: sonar is a brute-force dot-product scan over the entire corpus, so SIMD width **is** the latency, and rave-01 is AMD EPYC-Rome (Zen 2) with AVX2 + FMA confirmed. If that assumption ever broke — a box migration to older silicon — the binary would `SIGILL` on first execution, and the box-side pre-smoke catches exactly that before any swap.

@@ -159,6 +159,8 @@ docker run --rm --env-file <secret-env-file> --entrypoint fluncle \
 
 ## Security posture & limits
 
+Bearer headers, Cloudflare authentication headers, Discord webhook URLs, and beacon URLs are supplied to curl through escaped config on stdin (`--config -`), never through argv. This keeps credentials out of host process listings while preserving request and timeout behavior.
+
 - The boundary is the **server-side role**: the box holds only the `agent`-scoped token, and publish-/irreversible-class actions are refused at the Worker for that role. The private no-public-TCP box shrinks the network surface.
 - An injected `fluncle admin tracks publish …` (say, from a `claude -p` authoring step steered by fetched content) is refused by the Worker no matter how it is dispatched (the CLI, raw `curl` with the printenv'd token), because the token is `agent`-scoped. There is no local wrapper to bypass; there is nothing the token can do that the server allows.
 - **Residual surface:** the sweeps' scoped token. A fully-compromised root box is bounded to the agent role — reads (incl. `enrich-queue`), analysis write-back (`track update`), a TikTok inbox draft. All reversible/internal, none public without the operator; all publish-class is blocked for everyone but the operator.
