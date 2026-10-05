@@ -160,9 +160,10 @@ describe("resolveCoverMasters — the album ladder", () => {
         artwork_height: 3000,
         artwork_url_template: APPLE_TEMPLATE,
         artwork_width: 3000,
-        cover_url: "https://i.scdn.co/image/ab67616d00001e02abc",
+        caa_cover_url: null,
         image_failures: 0,
         slug: "some-album",
+        spotify_cover_url: "https://i.scdn.co/image/ab67616d00001e02abc",
       },
     ]);
     const fetchMock = stubImageFetch(pngBytes(1200, 1200));
@@ -187,9 +188,10 @@ describe("resolveCoverMasters — the album ladder", () => {
         artwork_height: null,
         artwork_url_template: null,
         artwork_width: null,
-        cover_url: "https://coverartarchive.org/release/mbid-1/front-500",
+        caa_cover_url: "https://coverartarchive.org/release/mbid-1/front-500",
         image_failures: 0,
         slug: "caa-album",
+        spotify_cover_url: null,
       },
     ]);
     const fetchMock = stubImageFetch(pngBytes(1000, 1000));
@@ -212,9 +214,10 @@ describe("resolveCoverMasters — the album ladder", () => {
         artwork_height: null,
         artwork_url_template: null,
         artwork_width: null,
-        cover_url: "https://i.scdn.co/image/ab67616d00001e02deadbeef",
+        caa_cover_url: null,
         image_failures: 0,
         slug: "spotify-album",
+        spotify_cover_url: "https://i.scdn.co/image/ab67616d00001e02deadbeef",
       },
     ]);
     const fetchMock = stubImageFetch(pngBytes(640, 640));
@@ -235,9 +238,10 @@ describe("resolveCoverMasters — the album ladder", () => {
         artwork_height: 3000,
         artwork_url_template: APPLE_TEMPLATE,
         artwork_width: 3000,
-        cover_url: "https://i.scdn.co/image/ab67616d00001e02abc",
+        caa_cover_url: null,
         image_failures: 0,
         slug: "rogue-album",
+        spotify_cover_url: "https://i.scdn.co/image/ab67616d00001e02abc",
       },
     ]);
 
@@ -258,9 +262,10 @@ describe("resolveCoverMasters — the album ladder", () => {
         artwork_height: 1400,
         artwork_url_template: APPLE_TEMPLATE,
         artwork_width: 1400,
-        cover_url: null,
+        caa_cover_url: null,
         image_failures: 0,
         slug: "flaky-album",
+        spotify_cover_url: null,
       },
     ]);
     vi.stubGlobal(
@@ -284,9 +289,10 @@ describe("resolveCoverMasters — the album ladder", () => {
         artwork_height: null,
         artwork_url_template: null,
         artwork_width: null,
-        cover_url: null,
+        caa_cover_url: null,
         image_failures: 0,
         slug: "bare-album",
+        spotify_cover_url: null,
       },
     ]);
 
@@ -378,9 +384,10 @@ describe("resolveCoverMasters — sweep discipline", () => {
           artwork_height: null,
           artwork_url_template: null,
           artwork_width: null,
-          cover_url: "https://i.scdn.co/image/ab67616d00001e02abc",
+          caa_cover_url: null,
           image_failures: 0,
           slug: "dry-album",
+          spotify_cover_url: "https://i.scdn.co/image/ab67616d00001e02abc",
         },
       ],
     });
