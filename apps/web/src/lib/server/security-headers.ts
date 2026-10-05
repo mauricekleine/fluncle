@@ -27,7 +27,6 @@ export const CONTENT_POLICY = [
     "https://scripts.simpleanalyticscdn.com",
     "https://queue.simpleanalyticscdn.com",
     "https://cloudflareinsights.com",
-    "https://*.ingest.de.sentry.io",
   ].join(" "),
 ].join("; ");
 

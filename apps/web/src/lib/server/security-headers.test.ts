@@ -87,7 +87,11 @@ describe("securityHeadersFor", () => {
     expect(CONTENT_POLICY).toContain("https://found.fluncle.com");
     expect(CONTENT_POLICY).toContain("https://i.scdn.co");
     expect(CONTENT_POLICY).toContain("https://cdn-images.dzcdn.net");
-    expect(CONTENT_POLICY).toContain("https://*.ingest.de.sentry.io");
+    const connectDirective = CONTENT_POLICY.split("; ").find((directive) =>
+      directive.startsWith("connect-src "),
+    );
+    expect(connectDirective).toContain("'self'");
+    expect(connectDirective).not.toContain("sentry.io");
     expect(CONTENT_POLICY).toContain("'unsafe-inline'");
     expect(CONTENT_POLICY).not.toContain("upgrade-insecure-requests");
   });
