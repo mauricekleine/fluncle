@@ -31,7 +31,6 @@ import { entityFreshChannel } from "@/lib/fresh-feed-rss";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
-import { bioMetaDescription } from "@/lib/meta-description";
 import { type CoverPreloadLink, albumCoverAtSize, coverPreloadLink } from "@/lib/media";
 import { artistMetaDescription, artistPageTitle } from "@/lib/page-meta";
 import { type CatalogueSort, catalogueSortParam, entityPageHref } from "@/lib/catalogue";

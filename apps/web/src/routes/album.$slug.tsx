@@ -13,7 +13,6 @@ import { jsonLdScript } from "@/lib/json-ld";
 import { albumBreadcrumbsJsonLd, musicAlbumJsonLd } from "@/lib/log-schema";
 import { FINDING_COVER_SIZES } from "@/components/graph-sections";
 import { albumCoverAtSize, coverPreloadLink } from "@/lib/media";
-import { bioMetaDescription } from "@/lib/meta-description";
 import { albumArtistCredit, albumMetaDescription, albumPageTitle } from "@/lib/page-meta";
 import { type AlbumPageData } from "./-album-page-data";
 

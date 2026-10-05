@@ -17,7 +17,6 @@ import { entityFreshChannel } from "@/lib/fresh-feed-rss";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
 import { labelBreadcrumbsJsonLd, recordLabelJsonLd } from "@/lib/log-schema";
-import { bioMetaDescription } from "@/lib/meta-description";
 import { FINDING_COVER_SIZES } from "@/components/graph-sections";
 import { albumCoverAtSize, coverPreloadLink } from "@/lib/media";
 import { labelMetaDescription, labelPageTitle } from "@/lib/page-meta";
