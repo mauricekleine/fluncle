@@ -140,6 +140,8 @@ describe("enforced database admission", () => {
     const request = { action: "acquire" as const, owner: "fluncle-enrich", runId: "flag" };
     const dependencies = { monotonicNow: () => 0, serverNowMs: nowMs };
     expect(await coordinateDatabaseAdmissionFor(db, request, dependencies)).toMatchObject({
+      activeConflictCount: null,
+      aheadCount: null,
       enforced: false,
       outcome: "shadow-acquire",
     });
@@ -148,6 +150,8 @@ describe("enforced database admission", () => {
       `insert into settings (key, value) values ('database_admission_enforced', 'TRUE')`,
     );
     expect(await coordinateDatabaseAdmissionFor(db, request, dependencies)).toMatchObject({
+      activeConflictCount: null,
+      aheadCount: null,
       enforced: false,
       outcome: "shadow-acquire",
     });
@@ -645,8 +649,19 @@ describe("stall-tolerant admission protocol", () => {
       "lost",
       "shadow-yield",
     ]);
+    results.push(
+      await tolerant("fluncle-enrich", "contract-holder", "release", {
+        fencingToken: results[0]?.fencingToken ?? undefined,
+      }),
+    );
+    expect(results.at(-1)?.outcome).toBe("released");
     for (const result of results) {
       expect(DatabaseAdmissionResponseSchema.parse(result)).toEqual(result);
+      if (result.outcome === "queued") {
+        expect(result).toMatchObject({ activeConflictCount: 1, aheadCount: 0 });
+      } else {
+        expect(result).toMatchObject({ activeConflictCount: null, aheadCount: null });
+      }
     }
   });
 
@@ -828,12 +843,22 @@ describe("stall-tolerant admission protocol", () => {
 
   it("lets a queued contender behind the head wait without re-sending the write batch", async () => {
     const { batch, client } = countingClient();
-    await tolerant("fluncle-enrich", "holder", "acquire", { client });
+    expect(await tolerant("fluncle-enrich", "holder", "acquire", { client })).toMatchObject({
+      activeConflictCount: null,
+      aheadCount: null,
+      outcome: "acquired",
+    });
     nowMs += 1;
-    await tolerant("fluncle-note", "head", "acquire", { client });
+    expect(await tolerant("fluncle-note", "head", "acquire", { client })).toMatchObject({
+      activeConflictCount: 1,
+      aheadCount: 0,
+      outcome: "queued",
+    });
     nowMs += 1;
     const behind = await tolerant("fluncle-crawl", "behind", "acquire", { client });
     expect(behind).toMatchObject({
+      activeConflictCount: 1,
+      aheadCount: 1,
       outcome: "queued",
       retryAfterMs: DATABASE_ADMISSION_HEAD_RETRY_AFTER_MS * 2,
       yieldReason: "queue",
@@ -843,10 +868,14 @@ describe("stall-tolerant admission protocol", () => {
     for (let poll = 0; poll < 5; poll += 1) {
       nowMs += 2_000;
       expect(await tolerant("fluncle-crawl", "behind", "acquire", { client })).toMatchObject({
+        activeConflictCount: 1,
+        aheadCount: 1,
         outcome: "queued",
         retryAfterMs: DATABASE_ADMISSION_HEAD_RETRY_AFTER_MS * 2,
       });
       expect(await tolerant("fluncle-note", "head", "acquire", { client })).toMatchObject({
+        activeConflictCount: 1,
+        aheadCount: 0,
         outcome: "queued",
         retryAfterMs: DATABASE_ADMISSION_HEAD_RETRY_AFTER_MS,
       });

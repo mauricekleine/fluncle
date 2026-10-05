@@ -222,10 +222,22 @@ describe("the telemetry-store admission route", () => {
 
     const acquired = await coordinate("fluncle-enrich", "run-a", "acquire", undefined, target);
     expect(DatabaseAdmissionResponseSchema.parse(acquired)).toMatchObject({
+      activeConflictCount: null,
+      aheadCount: null,
       enforced: true,
       outcome: "acquired",
     });
     expect(await control()).toEqual({ epoch: 1, open: 1 });
+    expect(await coordinate("fluncle-note", "waiter", "acquire", undefined, target)).toMatchObject({
+      activeConflictCount: 1,
+      aheadCount: 0,
+      outcome: "queued",
+    });
+    expect(await coordinate("fluncle-note", "waiter", "cancel", undefined, target)).toMatchObject({
+      activeConflictCount: null,
+      aheadCount: null,
+      outcome: "cancelled",
+    });
 
     nowMs += 30_000;
     const renewed = await coordinate(
@@ -247,7 +259,11 @@ describe("the telemetry-store admission route", () => {
       acquired.fencingToken ?? undefined,
       target,
     );
-    expect(released.outcome).toBe("released");
+    expect(released).toMatchObject({
+      activeConflictCount: null,
+      aheadCount: null,
+      outcome: "released",
+    });
     expect(guarded.writes).toEqual([]);
     expect(await contenderCount(primary)).toBe(0);
     expect(await contenderCount(telemetry)).toBe(0);
@@ -294,6 +310,8 @@ describe("the telemetry-store admission route", () => {
       stores({ primary: stalledEverything() }),
     );
     expect(result).toMatchObject({
+      activeConflictCount: null,
+      aheadCount: null,
       enforced: true,
       outcome: "queued",
       yieldReason: "direct-read-latency",
@@ -316,6 +334,8 @@ describe("the telemetry-store admission route", () => {
     );
 
     expect(result).toMatchObject({
+      activeConflictCount: null,
+      aheadCount: null,
       enforced: true,
       outcome: "queued",
       yieldReason: "direct-read-latency",
@@ -384,6 +404,8 @@ describe("the primary to telemetry cutover and its rollback", () => {
     await setRoute("telemetry:1");
     const waiting = await coordinate("fluncle-note", "telemetry-waiter");
     expect(waiting).toMatchObject({
+      activeConflictCount: null,
+      aheadCount: null,
       outcome: "queued",
       retryAfterMs: DATABASE_ADMISSION_MAX_RETRY_AFTER_MS,
       yieldReason: "queue",

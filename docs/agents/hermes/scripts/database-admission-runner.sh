@@ -56,6 +56,7 @@ fi
 
 ADMISSION_MAX_WAIT_SECS="${DATABASE_ADMISSION_MAX_WAIT_SECS:-120}"
 ADMISSION_POLL_SECS="${DATABASE_ADMISSION_POLL_SECS-2}"
+LOCAL_WAKE_MAX_SECS="${DATABASE_ADMISSION_LOCAL_WAKE_MAX_SECS-10}"
 ADMISSION_HTTP_TIMEOUT_SECS="${DATABASE_ADMISSION_HTTP_TIMEOUT_SECS:-10}"
 ADMISSION_KILL_GRACE_SECS="${DATABASE_ADMISSION_KILL_GRACE_SECS:-10}"
 ADMISSION_FAIL_CLOSED="${DATABASE_ADMISSION_FAIL_CLOSED:-false}"
@@ -86,6 +87,8 @@ case "$ADMISSION_POLL_SECS" in
 	;;
 esac
 bounded_uint DATABASE_ADMISSION_POLL_SECS "$ADMISSION_POLL_SECS" 1 30
+bounded_uint DATABASE_ADMISSION_LOCAL_WAKE_MAX_SECS "$LOCAL_WAKE_MAX_SECS" 1 15
+LOCAL_WAKE_MAX_MS=$((LOCAL_WAKE_MAX_SECS * 1000))
 bounded_uint DATABASE_ADMISSION_HTTP_TIMEOUT_SECS "$ADMISSION_HTTP_TIMEOUT_SECS" 1 30
 bounded_uint DATABASE_ADMISSION_KILL_GRACE_SECS "$ADMISSION_KILL_GRACE_SECS" 0 10
 bounded_uint DATABASE_ADMISSION_BACKOFF_CAP_SECS "$ADMISSION_BACKOFF_CAP_SECS" 1 300
@@ -135,6 +138,7 @@ yield_reason=""
 last_wait_yield_reason=""
 recovered=false
 payload_pid=""
+supervision_sleeper_pid=""
 payload_started_ms=""
 terminal_action_started=0
 acquire_attempted=false
@@ -154,6 +158,9 @@ ADMISSION_REQUEST_STARTED_MS=0
 ADMISSION_ERROR_REASON="coordinator-unavailable"
 watchdog_directory=""
 watchdog_state=""
+RELEASE_BEACON=""
+write_beacon_before=""
+heavy_read_beacon_before=""
 
 random_below() {
 	local limit="$1"
@@ -239,6 +246,46 @@ json_boolean() {
 admission_state_ready() {
 	mkdir -p -- "$BREAKER_FAILURE_DIR" "$DEBT_DIR" 2>/dev/null
 }
+
+local_beacons_ready() {
+	mkdir -p -- "$ADMISSION_STATE_DIR" 2>/dev/null &&
+		[ -r "$ADMISSION_STATE_DIR" ] && [ -w "$ADMISSION_STATE_DIR" ] && [ -x "$ADMISSION_STATE_DIR" ]
+}
+
+read_release_beacon() {
+	RELEASE_BEACON=""
+	read -r RELEASE_BEACON 2>/dev/null <"${ADMISSION_STATE_DIR}/released-$1" || true
+}
+
+snapshot_release_beacons() {
+	read_release_beacon write
+	write_beacon_before="$RELEASE_BEACON"
+	read_release_beacon heavy-read
+	heavy_read_beacon_before="$RELEASE_BEACON"
+}
+
+publish_release_beacons() (
+	local resource temporary content
+	local resources=()
+	local_beacons_ready || return 0
+	case "$lane" in
+	write)
+		resources+=(write)
+		[ "$heavy_read" != true ] || resources+=(heavy-read)
+		;;
+	heavy-read) resources+=(heavy-read) ;;
+	*) resources+=(write heavy-read) ;;
+	esac
+	umask 077
+	content="$(current_time_ms) $run_id $$"
+	for resource in "${resources[@]}"; do
+		temporary="$(mktemp "${ADMISSION_STATE_DIR}/.released-${resource}.XXXXXX" 2>/dev/null)" || continue
+		if ! { printf '%s\n' "$content" >"$temporary" && mv -f -- "$temporary" "${ADMISSION_STATE_DIR}/released-${resource}"; } 2>/dev/null; then
+			rm -f -- "$temporary" 2>/dev/null || true
+		fi
+	done
+	return 0
+)
 
 emit_breaker_event() {
 	local state="$1"
@@ -547,7 +594,7 @@ flush_admission_debts() {
 }
 
 terminal_admission() {
-	local token action attempt attempts="$TERMINAL_ADMISSION_ATTEMPTS"
+	local token action attempt settled=false attempts="$TERMINAL_ADMISSION_ATTEMPTS"
 	[ "$terminal_action_started" -eq 0 ] || return 0
 	terminal_action_started=1
 	token="$fencing_token"
@@ -559,14 +606,17 @@ terminal_admission() {
 		attempts=1
 	fi
 	for ((attempt = 1; attempt <= attempts; attempt += 1)); do
-		admission_post "$action" "$token" && return 0
-		transient_admission_failure || return 0
+		if admission_post "$action" "$token" || ! transient_admission_failure; then
+			settled=true
+			break
+		fi
 		if [ "$attempt" -lt "$attempts" ]; then
 			full_jitter_ms "$attempt" "$((ADMISSION_POLL_SECS * 2000))"
 			sleep "$(duration_ms_as_seconds "$JITTER_MS")"
 		fi
 	done
-	record_admission_debt "$action" "$token"
+	[ "$settled" = true ] || record_admission_debt "$action" "$token"
+	publish_release_beacons || true
 	return 0
 }
 
@@ -640,6 +690,58 @@ sleep_within_acquisition() {
 	if [ "$delay_ms" -gt 0 ]; then
 		sleep "$(duration_ms_as_seconds "$delay_ms")"
 	fi
+}
+
+sleep_for_queued_answer() {
+	local retry_after_ms="$1" ahead_count active_conflict_count required_changes deadline_ms remaining_ms tick_ms resource seen known changes=0
+	local resources=() observed=("$write_beacon_before" "$heavy_read_beacon_before")
+	ahead_count="$(json_number "$response" aheadCount)"
+	active_conflict_count="$(json_number "$response" activeConflictCount)"
+	if [ "$outcome" != queued ] || [ -z "$ahead_count" ] || [ -z "$active_conflict_count" ] ||
+		[ "$((ahead_count + active_conflict_count))" -lt 1 ] || ! local_beacons_ready; then
+		equal_jitter_ms "$retry_after_ms"
+		sleep_within_acquisition "$JITTER_MS"
+		return 0
+	fi
+	required_changes=$((ahead_count + active_conflict_count))
+	case "$lane" in
+	write)
+		resources+=(write)
+		[ "$heavy_read" != true ] || resources+=(heavy-read)
+		;;
+	heavy-read) resources+=(heavy-read) ;;
+	*)
+		equal_jitter_ms "$retry_after_ms"
+		sleep_within_acquisition "$JITTER_MS"
+		return 0
+		;;
+	esac
+	[ "$retry_after_ms" -ge "$LOCAL_WAKE_MAX_MS" ] || retry_after_ms="$LOCAL_WAKE_MAX_MS"
+	equal_jitter_ms "$retry_after_ms"
+	deadline_ms=$(($(current_time_ms) + JITTER_MS))
+	[ "$deadline_ms" -le "$acquisition_deadline_ms" ] || deadline_ms="$acquisition_deadline_ms"
+	while :; do
+		for resource in "${resources[@]}"; do
+			read_release_beacon "$resource"
+			[ -n "$RELEASE_BEACON" ] || continue
+			known=false
+			for seen in "${observed[@]}"; do
+				if [ "$RELEASE_BEACON" = "$seen" ]; then
+					known=true
+					break
+				fi
+			done
+			[ "$known" = false ] || continue
+			observed+=("$RELEASE_BEACON")
+			changes=$((changes + 1))
+			[ "$changes" -lt "$required_changes" ] || return 0
+		done
+		remaining_ms=$((deadline_ms - $(current_time_ms)))
+		[ "$remaining_ms" -gt 0 ] || return 0
+		tick_ms=100
+		[ "$tick_ms" -le "$remaining_ms" ] || tick_ms="$remaining_ms"
+		sleep "$(duration_ms_as_seconds "$tick_ms")"
+	done
 }
 
 lease_deadline_from_response() {
@@ -724,6 +826,23 @@ payload_is_running() {
 	return 1
 }
 
+cleanup_supervision_sleeper() {
+	local sleeper="$supervision_sleeper_pid"
+	supervision_sleeper_pid=""
+	[ -n "$sleeper" ] || return 0
+	kill "$sleeper" 2>/dev/null || true
+	wait "$sleeper" 2>/dev/null || true
+}
+
+wait_for_payload_or_tick() {
+	sleep 1 &
+	supervision_sleeper_pid="$!"
+	if kill -0 "$payload_pid" 2>/dev/null; then
+		wait -n "$payload_pid" "$supervision_sleeper_pid" 2>/dev/null || true
+	fi
+	cleanup_supervision_sleeper
+}
+
 elapsed_hold_ms() {
 	if [ -z "$payload_started_ms" ]; then
 		printf '0'
@@ -734,6 +853,7 @@ elapsed_hold_ms() {
 
 # shellcheck disable=SC2329
 on_signal() {
+	cleanup_supervision_sleeper
 	stop_payload
 	terminal_admission
 	cleanup_watchdog
@@ -750,6 +870,7 @@ while :; do
 	fi
 	breaker_admits || stand_aside_for_breaker
 	acquire_attempted=true
+	snapshot_release_beacons
 	if ! admission_post acquire "" "$(acquisition_request_timeout)"; then
 
 		case "$ADMISSION_ERROR_REASON" in
@@ -840,8 +961,7 @@ while :; do
 	fi
 	retry_after_ms="$(json_number "$response" retryAfterMs)"
 	[ -n "$retry_after_ms" ] || retry_after_ms=$((ADMISSION_POLL_SECS * 1000))
-	equal_jitter_ms "$retry_after_ms"
-	sleep_within_acquisition "$JITTER_MS"
+	sleep_for_queued_answer "$retry_after_ms"
 done
 
 if ! command -v setsid >/dev/null 2>&1; then
@@ -960,7 +1080,7 @@ while payload_is_running; do
 				heartbeat_failures=$((heartbeat_failures + 1))
 				full_jitter_ms "$heartbeat_failures" "$HEARTBEAT_BACKOFF_CAP_MS"
 				next_heartbeat_ms=$(($(current_time_ms) + JITTER_MS))
-				sleep 1
+				wait_for_payload_or_tick
 				continue
 			fi
 			fence_lost=1
@@ -994,7 +1114,7 @@ while payload_is_running; do
 		heartbeat_after_ms="$(bounded_heartbeat_interval "$(json_number "$response" heartbeatAfterMs)")"
 		next_heartbeat_ms=$(($(current_time_ms) + heartbeat_after_ms))
 	fi
-	sleep 1
+	wait_for_payload_or_tick
 done
 
 if [ -r "$watchdog_state" ] && [ "$(sed -n '1p' "$watchdog_state")" = "expired" ]; then
