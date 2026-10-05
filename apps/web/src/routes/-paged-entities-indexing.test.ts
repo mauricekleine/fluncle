@@ -388,6 +388,22 @@ describe.each(entities)("$name entity head", (entity) => {
   );
 });
 
+describe("entity head track counts", () => {
+  it("counts upcoming releases on a page whose only tracks are still to come", () => {
+    const futureOnly = {
+      catalogue: { groups: [], page: 1, pageCount: 1, totalGroups: 0, totalTracks: 0 },
+      upcoming: { ...upcoming, pageCount: 1, total: 5 },
+    };
+
+    expect(description(artistHead(artistData(futureOnly)))).toBe(
+      "Drum & bass by Drift: 5 tracks, with the releases and labels behind them.",
+    );
+    expect(description(labelHead(labelData(futureOnly)))).toBe(
+      "Drum & bass released on Depth: 5 tracks.",
+    );
+  });
+});
+
 describe("paged names in head metadata", () => {
   it("skips unnamed artist records and describes up to three named groups with the remaining count", () => {
     const data = artistData();

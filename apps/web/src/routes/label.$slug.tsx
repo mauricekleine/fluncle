@@ -126,7 +126,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
             bio,
             findingCount: findings.length,
             name,
-            trackCount: catalogue.totalTracks + findings.length,
+            trackCount: catalogue.totalTracks + findings.length + upcoming.total,
           }),
           title: labelPageTitle(name),
         };

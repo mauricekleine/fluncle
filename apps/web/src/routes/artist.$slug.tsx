@@ -166,7 +166,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
             bio,
             findingCount: dossier.findingCount,
             name,
-            trackCount: catalogue.totalTracks + dossier.findingCount,
+            trackCount: catalogue.totalTracks + dossier.findingCount + upcoming.total,
           }),
           title: artistPageTitle(name),
         };
