@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BASE_URL } from "./tests/e2e/stack";
+import { BASE_URL, PRODUCTION_HOST_LAUNCH_ARGS } from "./tests/e2e/stack";
 
 const webRoot = dirname(fileURLToPath(import.meta.url));
 
@@ -29,6 +29,7 @@ export default defineConfig({
   timeout: 90_000,
   use: {
     baseURL: BASE_URL,
+    launchOptions: { args: PRODUCTION_HOST_LAUNCH_ARGS },
     screenshot: "only-on-failure",
 
     trace: "retain-on-failure",

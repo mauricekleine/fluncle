@@ -40,6 +40,10 @@ export const LIBSQL_URL = `http://127.0.0.1:${LIBSQL_PORT}`;
 export const SONAR_URL = `http://127.0.0.1:${SONAR_PORT}`;
 export const MAIL_URL = `http://127.0.0.1:${MAIL_PORT}`;
 
+export const PRODUCTION_HOST_LAUNCH_ARGS = [
+  "--host-resolver-rules=MAP fluncle.com ~NOTFOUND, MAP *.fluncle.com ~NOTFOUND",
+];
+
 const DEV_VARS = join(WEB_ROOT, ".dev.vars");
 const DEV_VARS_TEMPLATE = join(WEB_ROOT, ".dev.vars.e2e.tpl");
 

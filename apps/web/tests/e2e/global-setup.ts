@@ -1,5 +1,5 @@
 import { chromium } from "@playwright/test";
-import { BASE_URL } from "./stack";
+import { BASE_URL, PRODUCTION_HOST_LAUNCH_ARGS } from "./stack";
 
 const MAX_ATTEMPTS = 5;
 
@@ -8,7 +8,7 @@ const WARM_UP_PATHS = ["/", "/findings", "/log", "/tracks", "/artists", "/accoun
 const WARM_UP_TIMEOUT_MS = 150_000;
 
 export default async function globalSetup(): Promise<void> {
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ args: PRODUCTION_HOST_LAUNCH_ARGS });
 
   try {
     const page = await browser.newPage();
