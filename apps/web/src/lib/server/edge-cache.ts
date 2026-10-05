@@ -312,20 +312,30 @@ export async function withEdgeCache(
     return tagHit(hit, "stale", cachePolicy);
   }
 
-  let response: Response;
-  try {
-    response = await render();
-  } catch (error) {
-    if (hit) {
-      return tagHit(hit, "stale-if-error", cachePolicy);
-    }
-    throw error;
+  const { response, servedStale } = await renderOrServeStale(render, hit, cachePolicy);
+
+  if (servedStale) {
+    return response;
   }
 
-  if (hit && response.status >= 500) {
-    return tagHit(hit, "stale-if-error", cachePolicy);
-  }
+  await storeRendered(
+    cache,
+    cacheKey,
+    response,
+    cachePolicy,
+    hit !== undefined && !withinRetention,
+  );
 
+  return tagResponse(response, "miss", cachePolicy);
+}
+
+async function storeRendered(
+  cache: Cache,
+  cacheKey: Request,
+  response: Response,
+  cachePolicy: EdgeCachePolicy,
+  evictExpiredHit: boolean,
+): Promise<void> {
   if (isStorable(response, cachePolicy)) {
     void runServerEffect(
       keepAlive(
@@ -336,11 +346,28 @@ export async function withEdgeCache(
         }),
       ),
     );
-  } else if (hit && !withinRetention) {
+  } else if (evictExpiredHit) {
     await cache.delete(cacheKey);
   }
+}
 
-  return tagResponse(response, "miss", cachePolicy);
+async function renderOrServeStale(
+  render: () => Promise<Response>,
+  hit: Response | undefined,
+  cachePolicy: EdgeCachePolicy,
+): Promise<{ response: Response; servedStale: boolean }> {
+  if (!hit) {
+    return { response: await render(), servedStale: false };
+  }
+
+  try {
+    const response = await render();
+    if (response.status < 500) {
+      return { response, servedStale: false };
+    }
+  } catch {}
+
+  return { response: tagHit(hit, "stale-if-error", cachePolicy), servedStale: true };
 }
 
 async function refresh(
@@ -378,7 +405,10 @@ function toStoredResponse(
   const storedPolicy = releaseSensitivePath(new URL(cacheKey.url).pathname)
     ? releaseBoundPolicy(cachePolicy, new Date(storedAt))
     : cachePolicy;
-  stored.headers.set("Cache-Control", `public, s-maxage=${storedPolicy.retainSeconds + STALE_IF_ERROR_SECONDS}`);
+  stored.headers.set(
+    "Cache-Control",
+    `public, s-maxage=${storedPolicy.retainSeconds + STALE_IF_ERROR_SECONDS}`,
+  );
   stored.headers.set(STAMP_HEADER, String(storedAt));
   stored.headers.set(BUILD_HEADER, SENTRY_RELEASE ?? "dev");
   stored.headers.set(FRESH_UNTIL_HEADER, String(storedAt + storedPolicy.freshSeconds * 1_000));

@@ -636,41 +636,44 @@ describe("withEdgeCache", () => {
   it.each([
     { age: 7_200_000, build: "current-build", reason: "past its browser window" },
     { age: 0, build: "new-build", reason: "from another build" },
-  ])("serves the retained entry when a browser replacement $reason fails", async ({ age, build }) => {
-    const fake = installFakeCache();
-    const url = "https://www.fluncle.com/track/mb_abc";
-    const browser = new Request(url, { headers: { "sec-fetch-mode": "navigate" } });
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-07-20T00:00:00Z"));
-    try {
-      await withEdgeCache(new Request(url), async () => html("stored"));
-      await Promise.all(takeWaitUntilPromises());
-      vi.setSystemTime(Date.now() + age);
-      release.id = build;
-      const failed = await withEdgeCache(
-        browser,
-        async () =>
-          new Response("unavailable", {
-            headers: { "content-type": "text/html" },
-            status: 503,
-          }),
-      );
-      expect(failed.status).toBe(200);
-      expect(failed.headers.get("x-edge-cache")).toBe("stale-if-error");
-      expect(await failed.text()).toBe("stored");
-      const render = vi.fn(async () => html("recovered"));
-      const crawler = await withEdgeCache(new Request(url), render);
-      expect(crawler.headers.get("x-edge-cache")).toBe("fresh");
-      expect(await crawler.text()).toBe("stored");
-      expect(takeWaitUntilPromises()).toHaveLength(0);
-      expect(render).not.toHaveBeenCalled();
-      const recovered = await withEdgeCache(browser, render);
-      expect(recovered.headers.get("x-edge-cache")).toBe("miss");
-      expect(await recovered.text()).toBe("recovered");
-    } finally {
-      fake.restore();
-    }
-  });
+  ])(
+    "serves the retained entry when a browser replacement $reason fails",
+    async ({ age, build }) => {
+      const fake = installFakeCache();
+      const url = "https://www.fluncle.com/track/mb_abc";
+      const browser = new Request(url, { headers: { "sec-fetch-mode": "navigate" } });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-07-20T00:00:00Z"));
+      try {
+        await withEdgeCache(new Request(url), async () => html("stored"));
+        await Promise.all(takeWaitUntilPromises());
+        vi.setSystemTime(Date.now() + age);
+        release.id = build;
+        const failed = await withEdgeCache(
+          browser,
+          async () =>
+            new Response("unavailable", {
+              headers: { "content-type": "text/html" },
+              status: 503,
+            }),
+        );
+        expect(failed.status).toBe(200);
+        expect(failed.headers.get("x-edge-cache")).toBe("stale-if-error");
+        expect(await failed.text()).toBe("stored");
+        const render = vi.fn(async () => html("recovered"));
+        const crawler = await withEdgeCache(new Request(url), render);
+        expect(crawler.headers.get("x-edge-cache")).toBe("fresh");
+        expect(await crawler.text()).toBe("stored");
+        expect(takeWaitUntilPromises()).toHaveLength(0);
+        expect(render).not.toHaveBeenCalled();
+        const recovered = await withEdgeCache(browser, render);
+        expect(recovered.headers.get("x-edge-cache")).toBe("miss");
+        expect(await recovered.text()).toBe("recovered");
+      } finally {
+        fake.restore();
+      }
+    },
+  );
 
   it.each([200, 404])("replaces or deletes an expired entry after rendering %s", async (status) => {
     const fake = installFakeCache();
