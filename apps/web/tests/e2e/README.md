@@ -97,6 +97,10 @@ bun run --cwd apps/web test:e2e -- tests/e2e/search.spec.ts
 SEARCH_SHOT_DIR=/tmp/shots bun run --cwd apps/web test:e2e -- tests/e2e/search.spec.ts   # elsewhere
 ```
 
+## The browser cannot resolve production
+
+Seeded rows carry realistic `https://found.fluncle.com/e2e/...` media URLs, because the CSP and the media helpers expect that host. The browser must never fetch them: before this rail, every run asked the production bucket for those fixtures and earned a 404 each time. `PRODUCTION_HOST_LAUNCH_ARGS` in `stack.ts` launches Chromium with `--host-resolver-rules` mapping `fluncle.com` and `*.fluncle.com` to `~NOTFOUND`, in both `playwright.config.ts` and the warm-up in `global-setup.ts`. A request to a production host fails with `ERR_NAME_NOT_RESOLVED` before it leaves the machine, which the app treats like a missing cover. `page.route` still intercepts first, so a spec can fulfil a production URL itself. `production-isolation.spec.ts` gates the rail. A new browser launch in this suite takes the same args.
+
 ## The tier-4 rail: no OpenRouter key, on purpose
 
 `.dev.vars.e2e.tpl` deliberately carries NO `OPENROUTER_API_KEY`, and that absence is a rail rather than an omission. A FAKE key is worse than none: `translateQuery` only short-circuits on "unprovisioned", so a key of any shape makes search's fourth tier issue a real request to openrouter.ai **from the Worker** — which `blockExternalRequests` cannot see, because it stubs the browser's requests and never the server's. With the key absent, tier 4 returns `null` immediately and the resolver degrades to full text, which is the documented degradation contract (`docs/search.md`) and the local-dev steady state. Search still answers, deterministically, and nothing leaves the machine — which is what makes a natural-language query testable here at all rather than something specs have to route around.
