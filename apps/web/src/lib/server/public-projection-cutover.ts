@@ -130,6 +130,13 @@ export async function isPublicProjectionCutoverEnabledFor(
 }
 
 function nonNegativeInteger(value: unknown): number | undefined {
+  if (
+    typeof value !== "number" &&
+    typeof value !== "bigint" &&
+    (typeof value !== "string" || value.trim() === "")
+  ) {
+    return undefined;
+  }
   const number = Number(value);
   return Number.isSafeInteger(number) && number >= 0 ? number : undefined;
 }
@@ -197,13 +204,28 @@ const AGGREGATE_READY = `aggregate.state = 'complete'
     where projection = 'public_aggregates'
   )`;
 
-const PUBLIC_AGGREGATE_DURATION_READY = `${AGGREGATE_READY}
-  and exists (select 1 from settings visibility
+const PUBLIC_AGGREGATE_VISIBILITY_READY = `exists (select 1 from settings visibility
     where visibility.key = '${PUBLIC_AGGREGATE_DURATION_GENERATION_KEY}'
       and visibility.value = aggregate.generation || ':' || aggregate.completed_at)
   and exists (select 1 from settings visibility_version
     where visibility_version.key = '${PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY}'
       and visibility_version.value = '${PUBLIC_AGGREGATE_VISIBILITY_VERSION}')`;
+
+const PUBLIC_AGGREGATE_DURATION_READY = `${AGGREGATE_READY}
+  and ${PUBLIC_AGGREGATE_VISIBILITY_READY}`;
+
+const MAX_PUBLIC_AGGREGATE_READ_REPAIRS = 500;
+
+const PUBLIC_AGGREGATE_PENDING_SUBJECTS = `select subject_id
+  from projection_repairs indexed by projection_repairs_order_idx
+  where projection = 'public_aggregates'
+  order by source_epoch, subject_type, subject_id
+  limit ${MAX_PUBLIC_AGGREGATE_READ_REPAIRS + 1}`;
+
+const PUBLIC_AGGREGATE_CORRECTABLE_READY = `aggregate.state = 'complete'
+  and ${PUBLIC_AGGREGATE_VISIBILITY_READY}
+  and ((coalesce(debt.marker_count, 0) = 0 and aggregate.aggregate_epoch = aggregate.source_epoch)
+    or debt.marker_count between 1 and ${MAX_PUBLIC_AGGREGATE_READ_REPAIRS})`;
 
 async function isAggregateDurationReady(client: PublicProjectionReadClient): Promise<boolean> {
   const result = await client.execute(`select 1 from public_aggregate_state aggregate
@@ -227,9 +249,18 @@ export async function readProjectedDefaultTrackTotal(
   }
 
   try {
-    const result = await client.execute(`select aggregate.default_track_total as total
+    const result =
+      await client.execute(`select aggregate.default_track_total + debt.correction as total
       from public_aggregate_state as aggregate
-      where aggregate.scope = 'tracks' and ${PUBLIC_AGGREGATE_DURATION_READY}
+      cross join (
+        select count(*) as marker_count, coalesce(sum(
+          case when t.track_id is not null and ${publicTrackWhere("t")} then 1 else 0 end
+          - case when membership.track_id is not null then 1 else 0 end), 0) as correction
+        from (${PUBLIC_AGGREGATE_PENDING_SUBJECTS}) pending
+        left join tracks t on t.track_id = pending.subject_id
+        left join public_aggregate_membership membership on membership.track_id = pending.subject_id
+      ) debt
+      where aggregate.scope = 'tracks' and ${PUBLIC_AGGREGATE_CORRECTABLE_READY}
       limit 1`);
     return nonNegativeInteger(result.rows[0]?.total);
   } catch {
@@ -248,22 +279,44 @@ export async function readProjectedAggregateBuckets(
 
   try {
     const order = kind === "release_date_bucket" ? "desc" : "asc";
+    const liveBucket = kind === "key" ? "t.key" : "substr(t.release_date, 1, 4)";
+    const membershipBucket =
+      kind === "key" ? "membership.key_bucket" : "membership.release_date_bucket";
     const futureAdjustment =
       kind === "release_date_bucket" && today !== undefined
         ? ` - (select count(*) from tracks indexed by tracks_release_date_track_id_idx
             where ${upcomingAfterTodaySql("tracks.release_date")}
               and ${publicTrackWhere("tracks")}
-              and tracks.release_date >= counts.bucket
-              and tracks.release_date < counts.bucket || '~')`
+              and tracks.release_date >= debt.bucket
+              and tracks.release_date < debt.bucket || '~')`
         : "";
     const result = await client.execute({
-      args: today !== undefined && kind === "release_date_bucket" ? [today, kind] : [kind],
-      sql: `select counts.bucket, counts.track_count${futureAdjustment} as track_count
+      args: today !== undefined && kind === "release_date_bucket" ? [kind, today] : [kind],
+      sql: `with bucket_changes as (
+          select bucket, track_count, 0 as marker_count
+          from public_aggregate_counts where aggregate_kind = ?
+          union all
+          select case direction.delta when 1 then subjects.live_bucket else subjects.membership_bucket end,
+            direction.delta, subjects.marker_count
+          from (
+            select count(*) over () as marker_count,
+              case when t.track_id is not null and ${publicTrackWhere("t")} then ${liveBucket} end as live_bucket,
+              ${membershipBucket} as membership_bucket
+            from (${PUBLIC_AGGREGATE_PENDING_SUBJECTS}) pending
+            left join tracks t on t.track_id = pending.subject_id
+            left join public_aggregate_membership membership on membership.track_id = pending.subject_id
+          ) subjects
+          cross join (select 1 as delta union all select -1) direction
+        ), corrected_counts as (
+          select bucket, sum(track_count) as track_count,
+            max(max(marker_count)) over () as marker_count
+          from bucket_changes group by bucket
+        )
+        select debt.bucket, debt.track_count${futureAdjustment} as track_count
         from public_aggregate_state as aggregate
-        left join public_aggregate_counts as counts
-          on counts.aggregate_kind = ?
-        where aggregate.scope = 'tracks' and ${PUBLIC_AGGREGATE_DURATION_READY}
-        order by counts.bucket ${order}`,
+        left join corrected_counts debt on 1 = 1
+        where aggregate.scope = 'tracks' and ${PUBLIC_AGGREGATE_CORRECTABLE_READY}
+        order by debt.bucket ${order}`,
     });
     if (result.rows.length === 0) {
       return undefined;
@@ -277,7 +330,9 @@ export async function readProjectedAggregateBuckets(
       if (typeof row.bucket !== "string" || count === undefined) {
         return undefined;
       }
-      buckets.push({ bucket: row.bucket, count });
+      if (count > 0) {
+        buckets.push({ bucket: row.bucket, count });
+      }
     }
     return buckets;
   } catch {
