@@ -15,14 +15,24 @@ afterEach(() => {
   }
 });
 
-async function renderBriefs(script: string, research: Verdict[]): Promise<string[]> {
+async function runWorkflow(
+  script: string,
+  research: Verdict[],
+  extra: Record<string, unknown> = {},
+): Promise<{ briefs: string[]; peak: number }> {
   const source = readFileSync(join(import.meta.dir, script), "utf8").replace(
     "export const meta",
     "const meta",
   );
   const briefs: string[] = [];
+  let inFlight = 0;
+  let peak = 0;
   const agent = async (prompt: string, options: { phase?: string }) => {
     briefs.push(prompt);
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    inFlight -= 1;
 
     return { verdicts: options.phase === "Research" ? research : [] };
   };
@@ -46,11 +56,16 @@ async function renderBriefs(script: string, research: Verdict[]): Promise<string
     file: "/u.json",
     rules: "/r.txt",
     total: 3,
+    ...extra,
   };
 
   await run(JSON.stringify(args), agent, parallel, noop, noop);
 
-  return briefs;
+  return { briefs, peak };
+}
+
+async function renderBriefs(script: string, research: Verdict[]): Promise<string[]> {
+  return (await runWorkflow(script, research)).briefs;
 }
 
 const mixed: Verdict = {
@@ -71,6 +86,7 @@ describe("worker briefs", () => {
       expect(brief).toContain(SKILL_PATH);
       expect(brief).toContain("fluncle admin labels evidence <mb_label_id>");
       expect(brief).toContain("Do not write fetchers.");
+      expect(brief).toContain("A call that times out is a queue, not evidence");
       expect(brief).not.toContain("ws/2/release?label=");
     }
     expect(briefs.at(-1)).toContain("--census --json");
@@ -83,7 +99,18 @@ describe("worker briefs", () => {
     for (const brief of briefs) {
       expect(brief).toContain(SKILL_PATH);
       expect(brief).toContain("fluncle admin labels evidence <mb_label_id> --census --json");
+      expect(brief).toContain("A call that times out is a queue, not evidence");
       expect(brief).not.toContain("ws/2/release?label=");
     }
   });
+
+  test.each(["triage-workflow.js", "verify-workflow.js"])(
+    "%s never runs more workers at once than its concurrency cap",
+    async (script) => {
+      const { briefs, peak } = await runWorkflow(script, [], { batch: 1, concurrency: 2, total: 7 });
+
+      expect(briefs.length).toBe(7);
+      expect(peak).toBe(2);
+    },
+  );
 });
