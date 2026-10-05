@@ -112,6 +112,30 @@ describe("post-deploy event handling", () => {
     expect(result).toEqual({ served: DESCENDANT, waitSeconds: 15 });
   });
 
+  test("correlates a deployment through database failures but ignores unrelated errors", async () => {
+    let clock = 0;
+    const replies = [
+      new Response("gateway unavailable", { status: 503 }),
+      Response.json({ ok: false }, { status: 503 }),
+      Response.json({ sha: SHA }, { status: 500 }),
+      Response.json({ database: { status: "down" }, ok: false, sha: DESCENDANT }, { status: 503 }),
+    ];
+    const result = await pollForDeployment({
+      deadlineSeconds: 60,
+      fetchImpl: Object.assign(async () => replies.shift() ?? Response.json({}), {
+        preconnect: fetch.preconnect,
+      }),
+      intervalSeconds: 15,
+      isAncestor: (target: string, candidate: string) => target === SHA && candidate === DESCENDANT,
+      now: () => clock,
+      sleep: async (milliseconds) => {
+        clock += milliseconds;
+      },
+      target: SHA,
+    });
+    expect(result).toEqual({ served: DESCENDANT, waitSeconds: 45 });
+  });
+
   test("bounded polling fails after the deadline", async () => {
     let clock = 0;
     try {

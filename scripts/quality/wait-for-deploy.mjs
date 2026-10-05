@@ -49,7 +49,7 @@ export async function pollForDeployment({
   while (now() <= deadline) {
     try {
       const response = await fetchImpl(healthUrl, { signal: AbortSignal.timeout(10_000) });
-      if (response.ok) {
+      if (response.ok || response.status === 503) {
         const body = await response.json();
         lastServed =
           typeof body === "object" && body !== null && typeof body.sha === "string"

@@ -1,5 +1,6 @@
 import { isContractProcedure } from "@orpc/contract";
 export { AnchorCandidateSchema } from "./admin-catalogue";
+export { HealthDatabaseDownSchema } from "./health";
 export { ReleaseLinkProbeSchema } from "./admin-catalogue";
 import { adminAlbumsContract } from "./admin-albums";
 import { adminArtifactsContract } from "./admin-artifacts";

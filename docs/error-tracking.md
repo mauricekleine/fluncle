@@ -1,6 +1,6 @@
 # Error tracking
 
-Fluncle's web app (`apps/web`) reports unexpected errors to **Sentry** for private diagnostics — the stack traces and context an operator needs to fix a break, visible only to the operator. This is deliberately separate from the **public liveness** surface: the `/status` + `/health` stack (and the on-box `record_health` layer described in [docs/agents/hermes-agent.md](./agents/hermes-agent.md)) answers "is Fluncle up?" for anyone; Sentry answers "what exactly threw, and where?" for the operator. The two never overlap — the health stack is untouched by this wiring, and Sentry never renders on a public surface.
+Fluncle's web app (`apps/web`) reports unexpected errors to **Sentry** for private diagnostics — the stack traces and context an operator needs to fix a break, visible only to the operator. This is deliberately separate from the **public health** surface: the `/status` + `/health` stack (and the on-box `record_health` layer described in [docs/agents/hermes-agent.md](./agents/hermes-agent.md)) answers "is Fluncle up?" for anyone; Sentry answers "what exactly threw, and where?" for the operator. The two never overlap — the health stack is untouched by this wiring, and Sentry never renders on a public surface.
 
 ## The posture: errors, sampled DB queries, and browser web vitals
 
@@ -40,6 +40,10 @@ Environment follows the serving host, independently of CI or the build machine: 
 These are estimates from the 2026-10 baseline, not measured post-deploy volumes. Accepted spans total 12.73M over 30 days against the Team plan's 5M/month budget. The seven-day breakdown is 3.40M: Turso `http.client` 1.58M, database-admission 0.538M, other admin 0.427M, `/track/*` 0.516M (77% bot traffic), artist + album 0.227M (about 73% bots), and the remainder about 0.11M.
 
 The policy projects Turso and admission spans to zero, other admin to about 0.02M/week, human track pages to about 0.12M/week, artist + album to about 0.06M/week, and the remainder to about 0.1M/week: roughly 0.3M/week or 1.3M/month server-side. At about 1.8k browser sessions/month, 0.5 sampling adds an estimated worst-case 0.1–0.2M spans/month. The total is roughly 1.5M/month, 30% of budget. Watch accepted spans after deploy to validate the projection. The p95 slow-load alert is configured operator-side in Sentry.
+
+### The uptime monitor
+
+The external Sentry uptime monitor should target `/api/v1/health`, not the edge-cached `/`, so it measures the Worker and the primary database rather than the edge cache. The endpoint runs `select 1` through the primary database instrumentation and the worker concurrency gate under the `health.database.probe` statement span within a 2500ms budget that includes admission, and answers with `Cache-Control: no-store`. A 200 means the Worker and database answered: `database.status` is `ok`, or `degraded` when queue wait reached 500ms or total latency reached 1000ms. A 503 means the probe failed or timed out: `database.status` is `down`, and `queueWaitMs` is null when unknown.
 
 ## What is covered today
 

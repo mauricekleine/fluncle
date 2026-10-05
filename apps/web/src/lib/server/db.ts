@@ -44,6 +44,8 @@ const DATABASE_OPERATION_METADATA = Symbol("fluncle.database-operation");
 
 export type DatabaseOperationMetadata = {
   accessClass?: DatabaseAccessClass;
+  admissionSignal?: AbortSignal;
+  onAdmission?: (queueWaitMs: number) => void;
   operationId: string;
 };
 
@@ -152,11 +154,17 @@ async function acquireDatabaseLease(
   accessClass: DatabaseAccessClass,
   span: Span | undefined,
   startedAt: number,
+  admissionSignal?: AbortSignal,
 ): Promise<WorkerDatabaseConcurrencyLease> {
   try {
+    admissionSignal?.throwIfAborted();
     const lease =
       getRequestScopedTransactionLease(gate) ??
-      (await gate.acquire(accessClass, () => getRequestScopedTransactionLease(gate)));
+      (await gate.acquire(
+        accessClass,
+        () => getRequestScopedTransactionLease(gate),
+        admissionSignal,
+      ));
     recordAdmission(span, lease);
     return lease;
   } catch (error) {
@@ -474,14 +482,24 @@ function instrument(
             },
             async (span) => {
               const startedAt = Date.now();
-              const lease = await acquireDatabaseLease(gate, accessClass, span, startedAt);
+              const metadata = statementMetadata(statement);
+              const lease = await acquireDatabaseLease(
+                gate,
+                accessClass,
+                span,
+                startedAt,
+                metadata?.admissionSignal,
+              );
               const requestOperation = enterDatabaseRequestOperation();
-              const run = () =>
-                args !== undefined && typeof statement === "string"
+              const run = () => {
+                metadata?.admissionSignal?.throwIfAborted();
+                return args !== undefined && typeof statement === "string"
                   ? target.execute(statement, args)
                   : target.execute(statement);
+              };
 
               try {
+                metadata?.onAdmission?.(lease.queueWaitMs);
                 const result = await invalidateSettingsOnWrite(writesSettings(sql), () =>
                   isRetryableRead(sql) ? runWithRetry(run, span) : run(),
                 );
