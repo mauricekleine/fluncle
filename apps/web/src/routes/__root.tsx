@@ -145,18 +145,6 @@ export const Route = createRootRoute({
         property: "og:image",
       },
       {
-        content: "512",
-        property: "og:image:width",
-      },
-      {
-        content: "512",
-        property: "og:image:height",
-      },
-      {
-        content: "Fluncle cover art",
-        property: "og:image:alt",
-      },
-      {
         content: `${siteUrl}/`,
         property: "og:url",
       },
