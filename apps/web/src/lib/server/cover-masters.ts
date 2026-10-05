@@ -171,6 +171,7 @@ export function appleCoverMasterUrl(
 
 const CAA_URL_RE = /^https?:\/\/coverartarchive\.org\/release\/[^/]+\/front(?:-\d+)?$/i;
 const SPOTIFY_IMAGE_HOST = "https://i.scdn.co/image/";
+const DEEZER_IMAGE_HOSTNAME = "cdn-images.dzcdn.net";
 
 export function caaCoverMasterUrl(coverUrl: string | null): string | undefined {
   if (!coverUrl || !CAA_URL_RE.test(coverUrl)) {
@@ -200,7 +201,7 @@ function artistCoverMasterSource(
   if (url.protocol !== "https:") {
     return undefined;
   }
-  if (url.hostname === "cdn-images.dzcdn.net") {
+  if (url.hostname === DEEZER_IMAGE_HOSTNAME) {
     return { source: "deezer", url: url.href };
   }
   const spotifyUrl = spotifyCoverMasterUrl(imageUrl);
@@ -249,6 +250,63 @@ type ArtistWorkRow = {
   slug: string;
 };
 
+const CAA_SOURCE_SQL = `(t.album_image_url glob 'http*://coverartarchive.org/release/*/front'
+  or (t.album_image_url glob 'http*://coverartarchive.org/release/*/front-[0-9]*'
+    and t.album_image_url not glob '*/front-*[^0-9]*'))`;
+const SPOTIFY_SOURCE_SQL = `t.album_image_url glob '${SPOTIFY_IMAGE_HOST}*'`;
+const ALBUM_COVER_SQL = `(select t.album_image_url from tracks t
+  where t.album_id = albums.id and (${CAA_SOURCE_SQL} or ${SPOTIFY_SOURCE_SQL})
+  order by case when ${CAA_SOURCE_SQL} then 0 else 1 end, t.track_id asc limit 1)`;
+
+type RetryPosition = { slug: string; tier: number };
+
+function decodeRetryCursor(cursor: string | undefined): RetryPosition | undefined {
+  if (cursor === undefined) {
+    return undefined;
+  }
+  const position: unknown = JSON.parse(cursor);
+  if (
+    !Array.isArray(position) ||
+    position.length !== 2 ||
+    (position[0] !== 0 && position[0] !== 1) ||
+    typeof position[1] !== "string"
+  ) {
+    throw new Error("Invalid cover-master retry cursor");
+  }
+  return { slug: position[1], tier: position[0] };
+}
+
+async function loadCoverMasterRows(kind: "album", slugs: string[]): Promise<AlbumWorkRow[]>;
+async function loadCoverMasterRows(kind: "artist", slugs: string[]): Promise<ArtistWorkRow[]>;
+async function loadCoverMasterRows(
+  kind: CoverMasterKind,
+  slugs: string[],
+): Promise<AlbumWorkRow[] | ArtistWorkRow[]>;
+async function loadCoverMasterRows(
+  kind: CoverMasterKind,
+  slugs: string[],
+): Promise<AlbumWorkRow[] | ArtistWorkRow[]> {
+  if (slugs.length === 0) {
+    return [];
+  }
+  const db = await getDb();
+  const placeholders = slugs.map(() => "?").join(", ");
+  if (kind === "album") {
+    const result = await db.execute({
+      args: slugs,
+      sql: `select slug, artwork_url_template, artwork_width, artwork_height, image_failures,
+                   ${ALBUM_COVER_SQL} as cover_url
+            from albums where slug in (${placeholders})`,
+    });
+    return restoreCoverMasterOrder(typedRows<AlbumWorkRow>(result.rows), slugs);
+  }
+  const result = await db.execute({
+    args: slugs,
+    sql: `select slug, image_url, image_failures from artists where slug in (${placeholders})`,
+  });
+  return restoreCoverMasterOrder(typedRows<ArtistWorkRow>(result.rows), slugs);
+}
+
 function coverMasterContinuation(
   cursor: string | undefined,
 ): { sortKey: string; subjectId: string } | undefined {
@@ -287,17 +345,7 @@ async function listProjectedAlbums(
     return [];
   }
 
-  const placeholders = page.subjectIds.map(() => "?").join(", ");
-  const cover = `(select t.album_image_url from tracks t
-                   where t.album_id = albums.id and t.album_image_url is not null limit 1) as cover_url`;
-  const result = await db.execute({
-    args: page.subjectIds,
-    sql: `select slug, artwork_url_template, artwork_width, artwork_height, image_failures, ${cover}
-          from albums
-          where slug in (${placeholders})`,
-  });
-
-  return restoreCoverMasterOrder(typedRows<AlbumWorkRow>(result.rows), page.subjectIds);
+  return loadCoverMasterRows("album", page.subjectIds);
 }
 
 async function listProjectedArtists(
@@ -331,8 +379,7 @@ async function listPendingAlbums(
 ): Promise<AlbumWorkRow[]> {
   const db = await getDb();
   const cooldownBefore = new Date(Date.now() - COOLDOWN_MS).toISOString();
-  const cover = `(select t.album_image_url from tracks t
-                   where t.album_id = albums.id and t.album_image_url is not null limit 1) as cover_url`;
+  const cover = `${ALBUM_COVER_SQL} as cover_url`;
 
   const result = await db.execute({
     args: cursor ? [cooldownBefore, cursor, limit] : [cooldownBefore, limit],
@@ -471,20 +518,39 @@ async function requeueTerminalNone(
   kind: CoverMasterKind,
   limit: number,
   dryRun: boolean,
-): Promise<string[]> {
+  cursor: string | undefined,
+): Promise<RetryPosition[]> {
   const db = await getDb();
   const table = kind === "album" ? "albums" : "artists";
-
+  const source =
+    kind === "album"
+      ? `((artwork_url_template is not null and artwork_url_template <> '' and artwork_width > 0 and artwork_height > 0)
+        or ${ALBUM_COVER_SQL} is not null)`
+      : `(image_url glob '${SPOTIFY_IMAGE_HOST}*' or lower(image_url) glob 'https://${DEEZER_IMAGE_HOSTNAME}/*')`;
+  const publishedFinding =
+    kind === "album"
+      ? `exists (select 1 from tracks t join findings f on f.track_id = t.track_id
+               where t.album_id = albums.id and f.log_id is not null)`
+      : `exists (select 1 from track_artists ta join findings f on f.track_id = ta.track_id
+               where ta.artist_id = artists.id and f.log_id is not null)`;
+  const position = decodeRetryCursor(cursor);
+  const cooldownBefore = new Date(Date.now() - COOLDOWN_MS).toISOString();
   const selected = await db.execute({
-    args: [limit],
-    sql: `select slug from ${table}
-          where image_state = 'none'
-          order by slug asc limit ?`,
+    args: position
+      ? [cooldownBefore, position.tier, position.tier, position.slug, limit]
+      : [cooldownBefore, limit],
+    sql: `select slug, case when ${publishedFinding} then 0 else 1 end as tier
+          from ${table}
+          where image_state = 'none' and ${source}
+            and (image_attempted_at is null or image_attempted_at < ?)
+            ${position ? "and (tier > ? or (tier = ? and slug > ?))" : ""}
+          order by tier asc, slug asc limit ?`,
   });
-  const slugs = typedRows<{ slug: string }>(selected.rows).map((row) => row.slug);
+  const positions = typedRows<RetryPosition>(selected.rows);
+  const slugs = positions.map((row) => row.slug);
 
   if (dryRun || slugs.length === 0) {
-    return slugs;
+    return positions;
   }
 
   const placeholders = slugs.map(() => "?").join(", ");
@@ -510,7 +576,7 @@ async function requeueTerminalNone(
   );
   logEvent("info", "cover-masters.requeued", { count: slugs.length, kind });
 
-  return slugs;
+  return positions;
 }
 
 async function storeMaster(
@@ -605,14 +671,13 @@ export async function resolveCoverMasters(
 ): Promise<CoverMastersResult> {
   const batchLimit = Math.max(1, Math.min(limit, MAX_BATCH));
   let requeued: string[] = [];
+  let retryPositions: RetryPosition[] = [];
   let rows: AlbumWorkRow[] | ArtistWorkRow[];
 
   if (retryNone) {
-    requeued = await requeueTerminalNone(kind, batchLimit, dryRun);
-    rows =
-      kind === "album"
-        ? await listPendingAlbums(batchLimit, cursor)
-        : await listPendingArtists(batchLimit, cursor);
+    retryPositions = await requeueTerminalNone(kind, batchLimit, dryRun, cursor);
+    requeued = retryPositions.map((position) => position.slug);
+    rows = await loadCoverMasterRows(kind, requeued);
   } else if (await isDueWorkCutoverEnabled()) {
     rows =
       kind === "album"
@@ -664,7 +729,14 @@ export async function resolveCoverMasters(
   }
 
   const lastSlug = rows.at(-1)?.slug ?? null;
-  const nextCursor = rows.length < batchLimit ? null : lastSlug;
+  const lastPosition = retryPositions.at(-1);
+  const nextCursor = retryNone
+    ? retryPositions.length === batchLimit && lastPosition
+      ? JSON.stringify([lastPosition.tier, lastPosition.slug])
+      : null
+    : rows.length < batchLimit
+      ? null
+      : lastSlug;
 
   return {
     dryRun,
