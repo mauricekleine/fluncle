@@ -1,4 +1,5 @@
-import { Link, useRouterState } from "@tanstack/react-router";
+import { NavLink } from "@/components/nav/nav-links";
+import { useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
 import { BrowseMenu } from "@/components/nav/browse-menu";
 import { CrewSlot } from "@/components/nav/crew-slot";
@@ -67,9 +68,9 @@ export function PublicChrome({
         </a>
         <header className="nav-topbar">
           <div className="nav-topbar-inner">
-            <Link aria-label="Fluncle home" className="nav-wordmark" to="/">
+            <NavLink aria-label="Fluncle home" className="nav-wordmark" to="/">
               FLUNCLE
-            </Link>
+            </NavLink>
             <NavBreadcrumb pathname={pathname} tail={tail} />
 
             <BrowseMenu />

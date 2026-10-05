@@ -1,8 +1,7 @@
-import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { HomeStatusPill } from "@/components/home/status-pill";
 import { navIcon } from "@/components/nav/nav-icons";
-import { NavItemLink } from "@/components/nav/nav-links";
+import { NavItemLink, NavLink } from "@/components/nav/nav-links";
 import {
   navFollow,
   navNerds,
@@ -43,9 +42,9 @@ export function NavFooter({ galaxiesLive }: { galaxiesLive: boolean }): ReactNod
 
       <div className="nav-footer-inner">
         <div className="nav-footer-brand">
-          <Link aria-label="Fluncle home" className="nav-wordmark" to="/">
+          <NavLink aria-label="Fluncle home" className="nav-wordmark" to="/">
             FLUNCLE
-          </Link>
+          </NavLink>
           <p className="nav-footer-tagline">Drum &amp; bass bangers from another dimension.</p>
         </div>
 
@@ -88,14 +87,14 @@ export function NavFooter({ galaxiesLive }: { galaxiesLive: boolean }): ReactNod
                 {nerd.label}
               </a>
             ) : (
-              <Link
+              <NavLink
                 className="nav-nerd-link"
                 key={nerd.id}
                 params={{ _splat: nerd.splat }}
                 to="/docs/$"
               >
                 {nerd.label}
-              </Link>
+              </NavLink>
             ),
           )}
         </nav>
@@ -103,13 +102,13 @@ export function NavFooter({ galaxiesLive }: { galaxiesLive: boolean }): ReactNod
       </div>
 
       <nav aria-label="Legal and credits" className="nav-footer-legal">
-        <Link className="nav-footer-legal-link" to="/privacy">
+        <NavLink className="nav-footer-legal-link" to="/privacy">
           Privacy
-        </Link>
+        </NavLink>
         <span aria-hidden="true">·</span>
-        <Link className="nav-footer-legal-link" to="/terms">
+        <NavLink className="nav-footer-legal-link" to="/terms">
           Terms
-        </Link>
+        </NavLink>
         <span aria-hidden="true">·</span>
         <a
           className="nav-footer-legal-link"

@@ -9,6 +9,8 @@ import {
 import { renderToString } from "react-dom/server";
 import { beforeAll, describe, expect, it } from "vitest";
 import { NavFooter } from "./nav-footer";
+import { NavBreadcrumb } from "./nav-breadcrumb";
+import { subdomainRewrite } from "@/router-rewrite";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -29,11 +31,12 @@ const INTERNAL_PATHS = [
   "/docs/$",
 ];
 
-async function renderFooter(): Promise<string> {
+async function renderFooter(origin = "https://www.fluncle.com"): Promise<string> {
   const rootRoute = createRootRoute({
     component: () => (
       <QueryClientProvider client={queryClient}>
         <NavFooter galaxiesLive={true} />
+        <NavBreadcrumb pathname="/album/example" />
       </QueryClientProvider>
     ),
   });
@@ -42,6 +45,8 @@ async function renderFooter(): Promise<string> {
   );
   const router = createRouter({
     history: createMemoryHistory({ initialEntries: ["/"] }),
+    origin,
+    rewrite: subdomainRewrite,
     routeTree: rootRoute.addChildren(children),
   });
 
@@ -55,6 +60,37 @@ describe("NavFooter SSR anchors", () => {
 
   beforeAll(async () => {
     html = await renderFooter();
+  });
+
+  it.each(["status", "radio", "galaxy"])(
+    "renders every internal anchor on %s as a canonical absolute URL",
+    async (host) => {
+      const surfaceHtml = await renderFooter(`https://${host}.fluncle.com`);
+      const hrefs = [...surfaceHtml.matchAll(/href="([^"]+)"/g)].map((match) => match[1]);
+      expect(hrefs.some((href) => href?.startsWith("/"))).toBe(false);
+      for (const path of [
+        "/",
+        "/albums",
+        "/privacy",
+        "/terms",
+        "/docs/cli",
+        "/docs/ssh",
+        "/status",
+      ]) {
+        expect(hrefs).toContain(`https://www.fluncle.com${path}`);
+      }
+      expect(surfaceHtml).toContain('href="https://t.me/fluncle"');
+      expect(surfaceHtml).toContain('aria-label="Fluncle home"');
+      expect(surfaceHtml).toContain('aria-label="Breadcrumb"');
+    },
+  );
+
+  it("keeps onion chrome links relative", async () => {
+    const onionHtml = await renderFooter("http://status.mirror.onion");
+    expect(onionHtml).toContain('href="/"');
+    expect(onionHtml).toContain('href="/albums"');
+    expect(onionHtml).toContain('href="/docs/cli"');
+    expect(onionHtml).toContain('href="/status"');
   });
 
   it("renders real <a href> anchors for every internal index", () => {

@@ -1,25 +1,29 @@
 const SUBDOMAIN_ROUTES: ReadonlyArray<{ host: string; route: string }> = [
-  { host: "galaxy.", route: "/galaxy" },
-  { host: "radio.", route: "/radio" },
-  { host: "status.", route: "/status" },
+  { host: "galaxy.fluncle.com", route: "/galaxy" },
+  { host: "radio.fluncle.com", route: "/radio" },
+  { host: "status.fluncle.com", route: "/status" },
 ];
+
+export function subdomainSurfaceRoute(hostname: string): string | undefined {
+  return SUBDOMAIN_ROUTES.find(({ host }) => host === hostname)?.route;
+}
 
 export const subdomainRewrite = {
   input: ({ url }: { url: URL }): URL => {
-    for (const { host, route } of SUBDOMAIN_ROUTES) {
-      if (url.hostname.startsWith(host) && url.pathname === "/") {
-        url.pathname = route;
-      }
+    const route = subdomainSurfaceRoute(url.hostname);
+
+    if (route && url.pathname === "/") {
+      url.pathname = route;
     }
 
     return url;
   },
 
   output: ({ url }: { url: URL }): URL => {
-    for (const { host, route } of SUBDOMAIN_ROUTES) {
-      if (url.hostname.startsWith(host) && url.pathname === route) {
-        url.pathname = "/";
-      }
+    const route = subdomainSurfaceRoute(url.hostname);
+
+    if (route && url.pathname === route) {
+      url.pathname = "/";
     }
 
     return url;

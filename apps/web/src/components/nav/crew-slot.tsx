@@ -1,5 +1,5 @@
+import { NavLink } from "@/components/nav/nav-links";
 import { CaretDownIcon, UserCircleIcon, UsersThreeIcon } from "@phosphor-icons/react";
-import { Link } from "@tanstack/react-router";
 import { type ReactNode, Suspense, useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import { DropdownMenu, DropdownMenuTrigger } from "@fluncle/ui/components/dropdown-menu";
@@ -19,7 +19,7 @@ function JoinButton({ glow }: { glow: boolean }): ReactNode {
     <Button
       className={glow ? "crew-glow" : undefined}
       nativeButton={false}
-      render={<Link aria-label="Join the crew" to="/account" />}
+      render={<NavLink aria-label="Join the crew" to="/account" />}
       size="sm"
       variant="outline"
     >

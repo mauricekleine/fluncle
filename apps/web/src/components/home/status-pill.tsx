@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { NavLink } from "@/components/nav/nav-links";
 import { cn } from "@/lib/utils";
 
 export type StatusService = { status: "degraded" | "down" | "ok" };
@@ -89,7 +89,7 @@ export function HomeStatusPill() {
   const pinging = tone === "ok" || tone === "degraded" || tone === "down";
 
   return (
-    <Link
+    <NavLink
       aria-label={`System status: ${pillLabel(state)}`}
       className="inline-flex items-center gap-2 rounded-full border border-border bg-secondary/40 px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-[color-mix(in_oklch,var(--primary)_40%,transparent)] hover:text-accent-foreground"
       to="/status"
@@ -110,6 +110,6 @@ export function HomeStatusPill() {
         />
       </span>
       {pillLabel(state)}
-    </Link>
+    </NavLink>
   );
 }

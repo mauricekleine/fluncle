@@ -23,6 +23,23 @@ describe("subdomain root rewrite (input)", () => {
     expect(rewriteIn("https://www.fluncle.com/")).toBe("/");
   });
 
+  it("matches only the registered hostnames and preserves origins in both directions", () => {
+    for (const host of [
+      "status.example.com",
+      "radio.fluncle.com.example.com",
+      "galaxy.mirror.onion",
+    ]) {
+      expect(rewriteIn(`https://${host}/`)).toBe("/");
+    }
+    for (const host of ["status", "radio", "galaxy"]) {
+      const origin = `https://${host}.fluncle.com`;
+      const input = subdomainRewrite.input({ url: new URL(`${origin}/?page=2`) });
+      expect(input.origin).toBe(origin);
+      const output = subdomainRewrite.output({ url: input });
+      expect(output.href).toBe(`${origin}/?page=2`);
+    }
+  });
+
   it("only rewrites the root, never a deeper path on the subdomain", () => {
     expect(rewriteIn("https://status.fluncle.com/about")).toBe("/about");
   });
