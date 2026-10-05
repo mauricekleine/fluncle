@@ -22,6 +22,7 @@ import {
   databaseAdmissionYieldSummary,
   runDatabaseAdmissionPhase,
 } from "./database-admission-phase";
+import { scrubProxyUserinfo, withYtDlpProxyConfig } from "./yt-dlp-proxy";
 import {
   dueWorkRepairPendingSummary,
   failureBodyUnlessRepairPending,
@@ -913,11 +914,63 @@ async function signS3Request(options: {
   };
 }
 
-export type CaptureFailureKind = "proxy" | "r2" | "track-update" | "unknown" | "yt-dlp";
+export type ProxyWallKind = "proxy_auth_failed" | "proxy_quota_exhausted";
+export type ProxyWall = { kind: ProxyWallKind; proxyStatus: string };
+type ProxyWallState = { value?: ProxyWall };
+export type CaptureFailureKind =
+  | ProxyWallKind
+  | "proxy"
+  | "r2"
+  | "track-update"
+  | "unknown"
+  | "yt-dlp";
+
+function proxyWallFor(error: unknown): ProxyWall | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  const kind = classifyCaptureFailure(error);
+  if (kind === "proxy_quota_exhausted") {
+    return {
+      kind,
+      proxyStatus: /407\s+TRAFFIC_EXHAUSTED/i.test(message)
+        ? "407 TRAFFIC_EXHAUSTED"
+        : "TRAFFIC_EXHAUSTED",
+    };
+  }
+  if (kind === "proxy_auth_failed") {
+    return { kind, proxyStatus: "407 Proxy Authentication Required" };
+  }
+  return undefined;
+}
+
+function throwIfProxyWall(error: unknown): void {
+  if (proxyWallFor(error)) {
+    throw error;
+  }
+}
+
+function hasProxyBudgetRoom(state: ProxyWallState, remaining: number): boolean {
+  return remaining > 0 && state.value === undefined;
+}
+
+function latchProxyWall(
+  state: ProxyWallState,
+  failures: CaptureFailureMeter,
+  error: unknown,
+): boolean {
+  const wall = proxyWallFor(error);
+  if (!wall) {
+    return false;
+  }
+  noteCaptureFailure(failures, error);
+  state.value ??= wall;
+  return true;
+}
 
 export type CaptureFailureMeter = {
   failureRecording: number;
   proxy: number;
+  proxyAuthFailed: number;
+  proxyQuotaExhausted: number;
   r2: number;
   trackUpdate: number;
   unknown: number;
@@ -928,6 +981,8 @@ export function createCaptureFailureMeter(): CaptureFailureMeter {
   return {
     failureRecording: 0,
     proxy: 0,
+    proxyAuthFailed: 0,
+    proxyQuotaExhausted: 0,
     r2: 0,
     trackUpdate: 0,
     unknown: 0,
@@ -939,6 +994,8 @@ export function classifyCaptureFailure(error: unknown): CaptureFailureKind {
   const tagged = (error as { captureFailureKind?: unknown } | null)?.captureFailureKind;
   if (
     tagged === "proxy" ||
+    tagged === "proxy_auth_failed" ||
+    tagged === "proxy_quota_exhausted" ||
     tagged === "r2" ||
     tagged === "track-update" ||
     tagged === "unknown" ||
@@ -948,8 +1005,14 @@ export function classifyCaptureFailure(error: unknown): CaptureFailureKind {
   }
 
   const message = error instanceof Error ? error.message : String(error);
+  if (/TRAFFIC_EXHAUSTED/i.test(message)) {
+    return "proxy_quota_exhausted";
+  }
+  if (/407\s+Proxy Authentication Required/i.test(message)) {
+    return "proxy_auth_failed";
+  }
   if (
-    /Unable to connect to proxy|ProxyError|Tunnel connection failed|Proxy Authentication Required|HTTP Error 407|status code 407|407 TRAFFIC_EXHAUSTED/i.test(
+    /Unable to connect to proxy|ProxyError|Tunnel connection failed|HTTP Error 407|status code 407/i.test(
       message,
     )
   ) {
@@ -975,7 +1038,11 @@ function tagCaptureFailure(kind: CaptureFailureKind, error: unknown): Error {
 
 export function noteCaptureFailure(meter: CaptureFailureMeter, error: unknown): CaptureFailureKind {
   const kind = classifyCaptureFailure(error);
-  if (kind === "track-update") {
+  if (kind === "proxy_auth_failed") {
+    meter.proxyAuthFailed += 1;
+  } else if (kind === "proxy_quota_exhausted") {
+    meter.proxyQuotaExhausted += 1;
+  } else if (kind === "track-update") {
     meter.trackUpdate += 1;
   } else if (kind === "yt-dlp") {
     meter.ytDlp += 1;
@@ -1070,7 +1137,10 @@ async function fetchTrackWork(options: {
   scope: "all" | "catalogue" | "findings";
 
   withCapabilities?: boolean;
-}): Promise<CaptureFinding[] | { capabilities?: unknown; tracks: CaptureFinding[] }> {
+}): Promise<
+  | CaptureFinding[]
+  | { capabilities?: unknown; catalogueCapture?: unknown; tracks: CaptureFinding[] }
+> {
   const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=${options.kind}&scope=${options.scope}&limit=${options.limit}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
@@ -1081,9 +1151,15 @@ async function fetchTrackWork(options: {
     const failure = await failureBodyUnlessRepairPending(res, `${options.kind} queue read`);
     throw new Error(`${options.kind} queue read failed (${res.status}): ${failure.slice(0, 200)}`);
   }
-  const body = (await res.json()) as { capabilities?: unknown; tracks?: CaptureFinding[] };
+  const body = (await res.json()) as {
+    capabilities?: unknown;
+    catalogueCapture?: unknown;
+    tracks?: CaptureFinding[];
+  };
   const tracks = Array.isArray(body.tracks) ? body.tracks : [];
-  return options.withCapabilities === true ? { capabilities: body.capabilities, tracks } : tracks;
+  return options.withCapabilities === true
+    ? { capabilities: body.capabilities, catalogueCapture: body.catalogueCapture, tracks }
+    : tracks;
 }
 
 async function fetchCaptureQueue(): Promise<CaptureFinding[]> {
@@ -1178,7 +1254,18 @@ export async function runJournaledCaptureProvider<T>(options: {
     trackId: options.finding.trackId,
   } satisfies CaptureAttemptProgress);
   await options.beforeProvider?.();
-  const value = await options.provider(workDirectory);
+  let value: T;
+  try {
+    value = await options.provider(workDirectory);
+  } catch (error) {
+    if (proxyWallFor(error)) {
+      const progress = readProgress(path);
+      if (isCaptureAttemptProgress(progress)) {
+        removeCaptureAttempt(path, progress);
+      }
+    }
+    throw error;
+  }
   await options.afterProvider?.(value);
   if (options.completion) {
     const completion = options.completion(value, workDirectory);
@@ -1595,7 +1682,31 @@ export function prepareTickSnapshots(
   return { elapsedMs, prepared, reserved, unreached };
 }
 
+export type CatalogueCaptureAdmission = {
+  open: false;
+  closedReason: "paused" | "bytes_spent" | "tracks_spent";
+};
+
+export function parseCatalogueCaptureAdmission(
+  value: unknown,
+): CatalogueCaptureAdmission | undefined {
+  if (
+    !isRecord(value) ||
+    value.open !== false ||
+    (value.closedReason !== "paused" &&
+      value.closedReason !== "bytes_spent" &&
+      value.closedReason !== "tracks_spent")
+  ) {
+    return undefined;
+  }
+  return {
+    closedReason: value.closedReason as CatalogueCaptureAdmission["closedReason"],
+    open: false,
+  };
+}
+
 function admittedWorkList(options: {
+  catalogueCapture?: { value?: CatalogueCaptureAdmission };
   capabilities?: { value?: CaptureCapabilities };
   kind: "capture" | "youtube-provenance" | "youtube-reverdict";
   limit: number;
@@ -1612,11 +1723,15 @@ function admittedWorkList(options: {
   }
   const response = JSON.parse(readFileSync(`${path}.result`, "utf8")) as {
     capabilities?: unknown;
+    catalogueCapture?: unknown;
     dueWorkRepairPending?: boolean;
     tracks?: CaptureFinding[];
   };
   rmSync(path, { force: true });
   rmSync(`${path}.result`, { force: true });
+  if (options.catalogueCapture) {
+    options.catalogueCapture.value ??= parseCatalogueCaptureAdmission(response.catalogueCapture);
+  }
   if (options.capabilities) {
     options.capabilities.value = parseCaptureCapabilities(response.capabilities);
   }
@@ -2365,33 +2480,42 @@ class FailedCaptureCommitError extends Error {
   }
 }
 
+function ytDlpFailure(operation: string, stderr: string): Error {
+  const safeStderr = scrubProxyUserinfo(stderr);
+  const wall = proxyWallFor(new Error(safeStderr));
+  return new Error(
+    `yt-dlp ${operation} failed: ${safeStderr.slice(0, 200)}${wall ? ` (${wall.proxyStatus})` : ""}`,
+  );
+}
+
 function runYtSearch(
   proxyUrl: string,
   query: string,
   source: CaptureSearchSource = "youtube",
 ): YtCandidate[] {
   const target = buildCaptureSearchTarget(source, query);
-  const result = spawnSync(
-    YT_DLP_BIN,
-    [
-      "--proxy",
-      proxyUrl,
-      "--socket-timeout",
-      "30",
-      "--no-warnings",
+  const result = withYtDlpProxyConfig(proxyUrl, (configArgs) =>
+    spawnSync(
+      YT_DLP_BIN,
+      [
+        ...configArgs,
+        "--socket-timeout",
+        "30",
+        "--no-warnings",
 
-      ...(FLAT_SEARCH ? ["--flat-playlist"] : []),
+        ...(FLAT_SEARCH ? ["--flat-playlist"] : []),
 
-      "--print",
-      "%(duration)s\t%(id)s\t%(channel)s\t%(channel_id)s\t%(channel_is_verified)s\t%(title)s",
-      ...target,
-    ],
-    { encoding: "utf8", maxBuffer: 8 * 1024 * 1024, timeout: YT_SEARCH_TIMEOUT_MS },
+        "--print",
+        "%(duration)s\t%(id)s\t%(channel)s\t%(channel_id)s\t%(channel_is_verified)s\t%(title)s",
+        ...target,
+      ],
+      { encoding: "utf8", maxBuffer: 8 * 1024 * 1024, timeout: YT_SEARCH_TIMEOUT_MS },
+    ),
   );
 
   if (result.status !== 0) {
-    const stderr = result.stderr || "";
-    const err = new Error(`yt-dlp search failed: ${stderr.slice(0, 200)}`);
+    const stderr = scrubProxyUserinfo(result.stderr || "");
+    const err = ytDlpFailure("search", stderr);
     (err as { isBotChallenge?: boolean }).isBotChallenge = isBotChallengeStderr(stderr);
     throw err;
   }
@@ -2428,8 +2552,6 @@ function runYtDownload(
   const source = candidate.source ?? "youtube";
   const base = join(dir, "audio");
   const args = [
-    "--proxy",
-    proxyUrl,
     "--socket-timeout",
     "30",
     "--no-warnings",
@@ -2444,15 +2566,17 @@ function runYtDownload(
   }
   args.push(buildCaptureDownloadUrl(source, candidate.id));
 
-  const result = spawnSync(YT_DLP_BIN, args, {
-    encoding: "utf8",
-    maxBuffer: 8 * 1024 * 1024,
-    timeout: YT_DOWNLOAD_TIMEOUT_MS,
-  });
+  const result = withYtDlpProxyConfig(proxyUrl, (configArgs) =>
+    spawnSync(YT_DLP_BIN, [...configArgs, ...args], {
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      timeout: YT_DOWNLOAD_TIMEOUT_MS,
+    }),
+  );
 
-  const stderr = result.stderr || "";
+  const stderr = scrubProxyUserinfo(result.stderr || "");
   if (result.status !== 0) {
-    const err = new Error(`yt-dlp download failed: ${stderr.slice(0, 200)}`);
+    const err = ytDlpFailure("download", stderr);
     Object.assign(err, classifyDownloadFailure(stderr));
     throw err;
   }
@@ -2474,8 +2598,6 @@ function runYtSection(
   const source = candidate.source ?? "youtube";
   const base = join(dir, "section");
   const args = [
-    "--proxy",
-    proxyUrl,
     "--socket-timeout",
     "30",
     "--no-warnings",
@@ -2494,15 +2616,18 @@ function runYtSection(
 
   args.push(buildCaptureDownloadUrl(source, candidate.id));
 
-  const result = spawnSync(YT_DLP_BIN, args, {
-    encoding: "utf8",
-    maxBuffer: 8 * 1024 * 1024,
-    timeout: YT_DOWNLOAD_TIMEOUT_MS,
-  });
+  const result = withYtDlpProxyConfig(proxyUrl, (configArgs) =>
+    spawnSync(YT_DLP_BIN, [...configArgs, ...args], {
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      timeout: YT_DOWNLOAD_TIMEOUT_MS,
+    }),
+  );
 
+  const stderr = scrubProxyUserinfo(result.stderr || "");
   if (result.status !== 0) {
-    const err = new Error(`yt-dlp section failed: ${(result.stderr || "").slice(0, 200)}`);
-    Object.assign(err, classifyDownloadFailure(result.stderr || ""));
+    const err = ytDlpFailure("section", stderr);
+    Object.assign(err, classifyDownloadFailure(stderr));
     throw err;
   }
 
@@ -3091,6 +3216,7 @@ async function captureFinding(
   snapshotToken: string,
   botChallenges: BotChallengeMeter,
   failures: CaptureFailureMeter,
+  proxyWall: ProxyWallState,
 ): Promise<FindingOutcome> {
   const { logId, trackId } = finding;
 
@@ -3215,6 +3341,10 @@ async function captureFinding(
 
     return captureOutcomeFor(disposition, "done");
   } catch (error) {
+    if (latchProxyWall(proxyWall, failures, error)) {
+      log(`capture proxy wall: ${proxyWall.value?.proxyStatus}`);
+      return "skipped";
+    }
     const update: Record<string, unknown> = {
       captureStatus: "failed",
       sourceAudioAttemptedAt: new Date().toISOString(),
@@ -3397,6 +3527,7 @@ async function proveCatalogueProvenance(
         try {
           section = downloadSection(session, candidate, dir);
         } catch (error) {
+          throwIfProxyWall(error);
           transient = error;
           log(`section for ${candidate.id} unusable (DRM/bot-wall/403) — trying next`);
           continue;
@@ -3462,6 +3593,7 @@ async function proveCatalogueProvenance(
 
     return "none";
   } catch (error) {
+    throwIfProxyWall(error);
     if (error instanceof PendingCaptureCommitError) {
       return "pending";
     }
@@ -3493,12 +3625,15 @@ type ProvenanceOutcome =
   | "failed-write"
   | "found"
   | "none"
-  | "pending";
+  | "pending"
+  | "skipped";
 
 async function proveTrackProvenance(
   row: CaptureFinding,
   snapshotToken: string,
   meter: BotChallengeMeter,
+  proxyWall: ProxyWallState,
+  failures: CaptureFailureMeter,
 ): Promise<ProvenanceOutcome> {
   const { logId, trackId } = row;
 
@@ -3546,6 +3681,9 @@ async function proveTrackProvenance(
 
     return "found";
   } catch (error) {
+    if (latchProxyWall(proxyWall, failures, error)) {
+      return "skipped";
+    }
     if (error instanceof PendingCaptureCommitError) {
       return "pending";
     }
@@ -3583,6 +3721,9 @@ export type ProvenanceCounts = {
 };
 
 function noteProvenanceOutcome(counts: ProvenanceCounts, outcome: ProvenanceOutcome): void {
+  if (outcome === "skipped") {
+    return;
+  }
   if (outcome === "found" || outcome === "none") {
     counts[outcome] += 1;
     counts.writesConfirmed = (counts.writesConfirmed ?? 0) + 1;
@@ -3610,7 +3751,10 @@ export function splitProvenanceBudget(
 
 async function runProvenancePhase(
   meter: BotChallengeMeter,
-  protectedTrackIds: Set<string> = new Set(),
+  protectedTrackIds: Set<string>,
+  proxyWall: ProxyWallState,
+  failures: CaptureFailureMeter,
+  catalogueCapture: { value?: CatalogueCaptureAdmission },
 ): Promise<{ counts: ProvenanceCounts; ladder: ProvenanceLadderCounts }> {
   const counts = {
     failed: 0,
@@ -3624,7 +3768,7 @@ async function runProvenancePhase(
   const ladder = createLadderCounts();
   const budget = splitProvenanceBudget(PROVENANCE_LIMIT, PROVENANCE_CATALOGUE_LIMIT);
 
-  if (budget.findings === 0) {
+  if (!hasProxyBudgetRoom(proxyWall, budget.findings)) {
     return { counts, ladder };
   }
 
@@ -3640,10 +3784,13 @@ async function runProvenancePhase(
   const rows = withoutProtectedTracks(queuedRows, protectedTrackIds);
 
   for (const row of rows) {
+    if (proxyWall.value) {
+      break;
+    }
     try {
       const prepared = prepareCurrentSnapshot(row.trackId, "youtube-provenance");
       if (prepared === "yielded") {
-        counts.pending = (counts.pending ?? 0) + 1;
+        counts.pending += 1;
         continue;
       }
       if (!prepared.prepared) {
@@ -3651,7 +3798,13 @@ async function runProvenancePhase(
         continue;
       }
       const currentRow = preparedCaptureFinding(row, prepared.track);
-      const outcome = await proveTrackProvenance(currentRow, prepared.snapshotToken, meter);
+      const outcome = await proveTrackProvenance(
+        currentRow,
+        prepared.snapshotToken,
+        meter,
+        proxyWall,
+        failures,
+      );
       noteProvenanceOutcome(counts, outcome);
       if (outcome === "pending") {
         protectedTrackIds.add(row.trackId);
@@ -3666,7 +3819,7 @@ async function runProvenancePhase(
 
   const catalogueRoom = Math.min(budget.catalogue, budget.findings - rows.length);
 
-  if (catalogueRoom <= 0) {
+  if (!hasProxyBudgetRoom(proxyWall, catalogueRoom)) {
     return { counts, ladder };
   }
 
@@ -3674,6 +3827,7 @@ async function runProvenancePhase(
   let queuedCatalogueRows: CaptureFinding[] | "due-work-repair-pending" | "yielded";
   try {
     queuedCatalogueRows = admittedWorkList({
+      catalogueCapture,
       kind: "youtube-provenance",
       limit: catalogueRoom * Math.max(1, Math.trunc(PROVENANCE_SEARCH_FACTOR) || 1),
       scope: "catalogue",
@@ -3693,10 +3847,13 @@ async function runProvenancePhase(
   const catalogueRows = withoutProtectedTracks(queuedCatalogueRows, protectedTrackIds);
 
   for (const row of catalogueRows) {
+    if (proxyWall.value) {
+      break;
+    }
     try {
       const prepared = prepareCurrentSnapshot(row.trackId, "youtube-provenance");
       if (prepared === "yielded") {
-        counts.pending = (counts.pending ?? 0) + 1;
+        counts.pending += 1;
         continue;
       }
       if (!prepared.prepared) {
@@ -3742,6 +3899,9 @@ async function runProvenancePhase(
         protectedTrackIds.add(row.trackId);
       }
     } catch (error) {
+      if (latchProxyWall(proxyWall, failures, error)) {
+        break;
+      }
       counts.failed += 1;
       log(
         `catalogue provenance row failed for ${row.trackId}: ${
@@ -3912,6 +4072,23 @@ export function summariseItemTiming(
   };
 }
 
+function captureRunVerdict(
+  blind: CaptureBlindVerdict | null,
+  wall?: ProxyWall,
+  admission?: CatalogueCaptureAdmission,
+): Record<string, unknown> {
+  const verdict = wall?.kind ?? blind;
+  const closedReason = admission?.closedReason;
+  const reason = verdict ?? (closedReason ? "capture_budget_closed" : undefined);
+  return {
+    ...(closedReason ? { captureBudgetClosedReason: closedReason } : {}),
+    errors: verdict === null ? 0 : 1,
+    ok: verdict === null,
+    ...(wall ? { proxyStatus: wall.proxyStatus } : {}),
+    ...(reason === undefined ? {} : { reason }),
+  };
+}
+
 export function buildCaptureSummary(options: {
   anchoring?: CaptureAnchoringCounts;
   batch: number;
@@ -3922,6 +4099,8 @@ export function buildCaptureSummary(options: {
   itemTiming?: readonly number[];
   elapsedMs: number;
   failures?: CaptureFailureMeter;
+  proxyWall?: ProxyWall;
+  catalogueCapture?: CatalogueCaptureAdmission;
 
   ladder?: ProvenanceLadderCounts;
 
@@ -3957,12 +4136,11 @@ export function buildCaptureSummary(options: {
     done: counts.done,
     elapsedMs: options.elapsedMs,
 
-    errors: blind === null ? 0 : 1,
+    ...captureRunVerdict(blind, options.proxyWall, options.catalogueCapture),
     failed: counts.failed,
     failureRecordingFailures: failures.failureRecording,
     ...timing,
     ...(options.leases === undefined ? {} : { leases: options.leases }),
-    ok: blind === null,
     produced: counts.done,
 
     provenanceFailed: provenance.failed,
@@ -3977,9 +4155,11 @@ export function buildCaptureSummary(options: {
     provenanceLadderTopicServed: ladder?.topicServed ?? 0,
     provenanceNone: provenance.none,
     provenancePending: provenance.pending ?? 0,
+    proxyAuthFailed: failures.proxyAuthFailed,
     proxyFailures: failures.proxy,
+    proxyQuotaExhausted: failures.proxyQuotaExhausted,
+
     r2Failures: failures.r2,
-    ...(blind === null ? {} : { reason: blind }),
     reverdictAsked: reverdict.asked,
     reverdictFailed: reverdict.failed,
     reverdictPending: reverdict.pending ?? 0,
@@ -4118,8 +4298,10 @@ async function main(): Promise<void> {
   }
 
   const capabilities: { value?: CaptureCapabilities } = {};
+  const catalogueCapture: { value?: CatalogueCaptureAdmission } = {};
   const queue = admittedWorkList({
     capabilities,
+    catalogueCapture,
     kind: "capture",
     limit: QUEUE_LIMIT,
     scope: "all",
@@ -4195,6 +4377,7 @@ async function main(): Promise<void> {
 
   const botChallenges = createBotChallengeMeter();
   const failures = createCaptureFailureMeter();
+  const proxyWall: ProxyWallState = {};
 
   const countOutcome = (outcome: FindingOutcome, trackId: string): void => {
     if (outcome === "done") {
@@ -4230,7 +4413,7 @@ async function main(): Promise<void> {
 
   let cursor = 0;
   const worker = async (): Promise<void> => {
-    while (cursor < batch.length) {
+    while (cursor < batch.length && !proxyWall.value) {
       const finding = batch[cursor];
       cursor += 1;
 
@@ -4266,6 +4449,7 @@ async function main(): Promise<void> {
           prepared.snapshotToken,
           botChallenges,
           failures,
+          proxyWall,
         );
         if (isDeferredOutcome(outcome)) {
           deferredRows.push({ outcome, trackId: finding.trackId });
@@ -4306,13 +4490,17 @@ async function main(): Promise<void> {
     }
   }
 
-  const currentProvenance = await runProvenancePhase(botChallenges, protectedTrackIds).catch(
-    (error: unknown): { counts: ProvenanceCounts; ladder: ProvenanceLadderCounts } => {
-      log(`provenance phase failed: ${error instanceof Error ? error.message : String(error)}`);
+  const currentProvenance = await runProvenancePhase(
+    botChallenges,
+    protectedTrackIds,
+    proxyWall,
+    failures,
+    catalogueCapture,
+  ).catch((error: unknown): { counts: ProvenanceCounts; ladder: ProvenanceLadderCounts } => {
+    log(`provenance phase failed: ${error instanceof Error ? error.message : String(error)}`);
 
-      return { counts: { failed: 0, found: 0, none: 0 }, ladder: createLadderCounts() };
-    },
-  );
+    return { counts: { failed: 0, found: 0, none: 0 }, ladder: createLadderCounts() };
+  });
   const provenance: ProvenanceCounts = {
     failed: currentProvenance.counts.failed + recoveredProvenance.failed,
     found: currentProvenance.counts.found + recoveredProvenance.found,
@@ -4347,17 +4535,17 @@ async function main(): Promise<void> {
   const summary = buildCaptureSummary({
     anchoring,
     batch: batch.length,
-
     botChallenges: botChallenges.total,
     botChallengesUncleared: botChallenges.uncleared,
+    catalogueCapture: catalogueCapture.value,
     counts,
     elapsedMs: Date.now() - started,
     failures,
-
     itemTiming,
     ladder: currentProvenance.ladder,
     leases: admittedPhaseCount,
     provenance,
+    proxyWall: proxyWall.value,
     reverdict,
     writes: {
       confirmed:

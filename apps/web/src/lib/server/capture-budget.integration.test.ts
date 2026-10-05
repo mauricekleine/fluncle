@@ -216,7 +216,11 @@ describe("isCatalogueCaptureOpen — the brake asks the cheap question first", (
 
     const paused = vi.spyOn(db, "execute");
 
-    expect(await readCatalogueCaptureAdmission(NOW)).toEqual({ open: false, remainingTracks: 0 });
+    expect(await readCatalogueCaptureAdmission(NOW)).toEqual({
+      closedReason: "paused",
+      open: false,
+      remainingTracks: 0,
+    });
     expect(spendStatements(paused.mock.calls)).toEqual([]);
 
     paused.mockRestore();
@@ -233,7 +237,11 @@ describe("isCatalogueCaptureOpen — the brake asks the cheap question first", (
 
     const readout = await getCatalogueCaptureState(NOW);
 
-    expect(admission).toEqual({ open: true, remainingTracks: 2 });
-    expect(admission).toEqual({ open: readout.open, remainingTracks: readout.remainingTracks });
+    expect(admission).toEqual({ closedReason: null, open: true, remainingTracks: 2 });
+    expect(admission).toEqual({
+      closedReason: readout.closedReason,
+      open: readout.open,
+      remainingTracks: readout.remainingTracks,
+    });
   });
 });

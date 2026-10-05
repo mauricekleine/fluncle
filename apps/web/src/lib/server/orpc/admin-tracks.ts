@@ -35,6 +35,7 @@ import {
   updateTrack,
 } from "../track-update";
 import { isDueWorkMaintenancePending } from "../due-work";
+import { readCatalogueCaptureAdmission } from "../capture-budget";
 import { countTrackWork, listTrackWork, oldestQueuedEmbedCaptureOver24h } from "../track-work";
 import {
   authorizeCaptureReconciliation,
@@ -628,12 +629,18 @@ export function adminTracksHandlers(os: Implementer) {
   const listTrackWorkHandler = os.list_track_work.use(adminAuth).handler(async ({ input }) => {
     try {
       const counting = input.count === "true";
+      const captureState =
+        (input.kind === "capture" || input.kind === "youtube-provenance") &&
+        input.scope !== "findings"
+          ? await readCatalogueCaptureAdmission()
+          : undefined;
 
       const debtAware = counting && input.debtAware === "true";
       let tracks: Awaited<ReturnType<typeof listTrackWork>> = [];
       let debtPending = false;
       try {
         tracks = await listTrackWork({
+          captureState,
           kind: input.kind,
           limit: input.limit,
           paidMode: input.paidMode,
@@ -647,7 +654,12 @@ export function adminTracksHandlers(os: Implementer) {
       }
 
       const queued = counting
-        ? await countTrackWork({ kind: input.kind, paidMode: input.paidMode, scope: input.scope })
+        ? await countTrackWork({
+            captureState,
+            kind: input.kind,
+            paidMode: input.paidMode,
+            scope: input.scope,
+          })
         : undefined;
       const oldestQueuedCaptureOver24h =
         counting && input.kind === "embed" && input.scope === "all" && input.age === "true"
@@ -656,6 +668,10 @@ export function adminTracksHandlers(os: Implementer) {
 
       return {
         capabilities: TRACK_WORK_CAPABILITIES,
+        catalogueCapture:
+          captureState?.closedReason && !captureState.open
+            ? { closedReason: captureState.closedReason, open: false as const }
+            : undefined,
         debtPending: debtAware ? debtPending : undefined,
         ok: true,
         oldestQueuedCaptureOver24h,

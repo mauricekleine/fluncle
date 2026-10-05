@@ -172,19 +172,23 @@ export async function isCatalogueCaptureOpen(nowMs: number = Date.now()): Promis
 
 export async function readCatalogueCaptureAdmission(
   nowMs: number = Date.now(),
-): Promise<{ open: boolean; remainingTracks: number }> {
+): Promise<Pick<CatalogueCaptureState, "closedReason" | "open" | "remainingTracks">> {
   const values = await getSettings([
     CATALOGUE_CAPTURE_PAUSED_KEY,
     CATALOGUE_CAPTURE_DAILY_TRACKS_KEY,
     CATALOGUE_CAPTURE_DAILY_BYTES_KEY,
   ]);
   if (values.get(CATALOGUE_CAPTURE_PAUSED_KEY) !== "false") {
-    return { open: false, remainingTracks: 0 };
+    return { closedReason: "paused", open: false, remainingTracks: 0 };
   }
 
   const budget = captureBudgetFromSettings(values);
   const spend = await readCatalogueCaptureSpend(nowMs);
-  const { open, remainingTracks } = catalogueCaptureVerdict({ budget, paused: false, spend });
+  const { closedReason, open, remainingTracks } = catalogueCaptureVerdict({
+    budget,
+    paused: false,
+    spend,
+  });
 
-  return { open, remainingTracks };
+  return { closedReason, open, remainingTracks };
 }

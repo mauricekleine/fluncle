@@ -55,7 +55,7 @@
     "fluncle-ledger": {
       "source": "./packages/skills/fluncle-ledger",
       "sourceType": "local",
-      "computedHash": "2f20eba098cbbe8063c9e0f6af81c62c71b5de0b3f8ede6a6bf37e2543efc9a6"
+      "computedHash": "ee4fd2bb795a1774b5395e329d4513b67d134b14dcdc9a29d13e1eb4facc8405"
     },
     "fluncle-maintenance": {
       "source": "./packages/skills/fluncle-maintenance",

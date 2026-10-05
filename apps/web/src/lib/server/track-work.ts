@@ -301,16 +301,19 @@ async function hydrateWorkRows(db: DueWorkClient, trackIds: readonly string[]): 
 }
 
 export async function listTrackWork(options: {
+  captureState?: Pick<CatalogueCaptureState, "open">;
   kind: TrackWorkKind;
   limit?: number;
   paidMode?: "prior" | "quota" | "unasked";
   scope?: TrackWorkScope;
 }): Promise<TrackWorkItem[]> {
-  const { kind, limit = 50, paidMode, scope = "all" } = options;
+  const { captureState, kind, limit = 50, paidMode, scope = "all" } = options;
   const page = Math.min(Math.max(1, Math.trunc(limit)), MAX_WORK_LIMIT);
 
   const catalogueShut =
-    METERED_KINDS.has(kind) && scope !== "findings" ? !(await isCatalogueCaptureOpen()) : false;
+    METERED_KINDS.has(kind) && scope !== "findings"
+      ? !(captureState ? captureState.open : await isCatalogueCaptureOpen())
+      : false;
 
   if (catalogueShut && scope === "catalogue") {
     return [];
@@ -486,7 +489,7 @@ export async function oldestQueuedEmbedCaptureOver24h(): Promise<boolean> {
 }
 
 export async function countTrackWork(options: {
-  captureState?: CatalogueCaptureState;
+  captureState?: Pick<CatalogueCaptureState, "open">;
   kind: TrackWorkKind;
   paidMode?: "prior" | "quota" | "unasked";
   scope?: TrackWorkScope;

@@ -102,6 +102,7 @@ import {
   isDeferredOutcome,
   MAX_CAPTURE_BATCH_CAP,
   parseCaptureCapabilities,
+  parseCatalogueCaptureAdmission,
   prepareTickSnapshots,
   resolveCaptureBatchCap,
   resolveDeferredOutcome,
@@ -122,6 +123,8 @@ describe("capture sweep canonical counters", () => {
       failures: {
         failureRecording: 1,
         proxy: 1,
+        proxyAuthFailed: 0,
+        proxyQuotaExhausted: 0,
         r2: 0,
         trackUpdate: 0,
         unknown: 0,
@@ -152,11 +155,13 @@ describe("capture sweep canonical counters", () => {
     const wall =
       "yt-dlp search failed: ERROR: query page 1: Unable to download API page: ('Unable to connect to proxy', OSError('Tunnel connection failed: 407 TRAFFIC_EXHAUSTED'))";
 
-    expect(classifyCaptureFailure(new Error(wall))).toBe("proxy");
-    expect(noteCaptureFailure(meter, new Error(wall))).toBe("proxy");
+    expect(classifyCaptureFailure(new Error(wall))).toBe("proxy_quota_exhausted");
+    expect(noteCaptureFailure(meter, new Error(wall))).toBe("proxy_quota_exhausted");
     expect(meter).toEqual({
       failureRecording: 0,
-      proxy: 1,
+      proxy: 0,
+      proxyAuthFailed: 0,
+      proxyQuotaExhausted: 1,
       r2: 0,
       trackUpdate: 0,
       unknown: 0,
@@ -197,6 +202,8 @@ describe("capture sweep canonical counters", () => {
       failures: {
         failureRecording: 1,
         proxy: 0,
+        proxyAuthFailed: 0,
+        proxyQuotaExhausted: 0,
         r2: 0,
         trackUpdate: 0,
         unknown: 0,
@@ -2477,18 +2484,6 @@ describe("the provenance phase's tick budget", () => {
 
 describe("the provenance and re-verdict phases ride the tick without distorting it", () => {
   const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
-
-  test("both phases run AFTER the capture batch and cannot abort the tick", () => {
-    const main = source.slice(source.indexOf("async function main("));
-    const batchEnd = main.indexOf("Array.from({ length: Math.min(CONCURRENCY");
-    const provenanceAt = main.indexOf("runProvenancePhase(botChallenges, protectedTrackIds)");
-
-    expect(provenanceAt).toBeGreaterThan(batchEnd);
-
-    expect(main).toContain("runProvenancePhase(botChallenges, protectedTrackIds).catch(");
-    expect(main).toContain("runReverdictPhase(protectedTrackIds).catch(");
-  });
-
   test("the phases report their OWN counters, never the capture gauges /status reads as a rate", () => {
     const summary = buildCaptureSummary({
       batch: 4,
@@ -2887,14 +2882,6 @@ describe("the catalogue tier's budget accounting", () => {
     expect(splitProvenanceBudget(2, 0).catalogue).toBe(0);
   });
 
-  test("the FINDINGS tier keeps the full fingerprint — the cheap ladder is catalogue-only", () => {
-    expect(phase).toContain("proveTrackProvenance(currentRow, prepared.snapshotToken, meter)");
-    expect(phase).toContain('scope: "findings"');
-    expect(phase).toContain("proveCatalogueProvenance(");
-    expect(phase).toContain("prepared.snapshotToken");
-    expect(phase).toContain("segmentBudget");
-  });
-
   test("a deferral is not folded into the phase's outcome gauges", () => {
     expect(phase).toContain('if (outcome !== "deferred")');
   });
@@ -2951,6 +2938,8 @@ describe("the catalogue tier's budget accounting", () => {
 const NO_FAILURES = {
   failureRecording: 0,
   proxy: 0,
+  proxyAuthFailed: 0,
+  proxyQuotaExhausted: 0,
   r2: 0,
   trackUpdate: 0,
   unknown: 0,
@@ -4547,4 +4536,286 @@ describe("the consensus check — independent uploads agreeing where the preview
     );
     expect(contract).toContain('"consensus-verified"');
   });
+});
+
+describe("proxy account walls", () => {
+  const base = {
+    batch: 1,
+    botChallenges: 0,
+    botChallengesUncleared: 0,
+    counts: { done: 0, failed: 0, skipped: 1, unmatched: 0 },
+    elapsedMs: 1,
+    provenance: { failed: 0, found: 0, none: 0 },
+    reverdict: { asked: 0, failed: 0 },
+    writes: { confirmed: 0, failed: 0, pending: 0 },
+  };
+  const walls = [
+    { kind: "proxy_quota_exhausted", proxyStatus: "407 TRAFFIC_EXHAUSTED" },
+    { kind: "proxy_auth_failed", proxyStatus: "407 Proxy Authentication Required" },
+  ] as const;
+
+  test.each([
+    ["TRAFFIC_EXHAUSTED", "proxy_quota_exhausted"],
+    ["Tunnel connection failed: 407 TRAFFIC_EXHAUSTED", "proxy_quota_exhausted"],
+    ["Tunnel connection failed: 407 Proxy Authentication Required", "proxy_auth_failed"],
+    ["HTTP Error 407", "proxy"],
+    ["status code 407", "proxy"],
+    ["Unable to connect to proxy", "proxy"],
+  ] as const)("classifies %s as %s", (message, kind) => {
+    expect(classifyCaptureFailure(new Error(message))).toBe(kind);
+  });
+
+  test.each([...walls])(
+    "a single $kind overrides the blind threshold and closed budget",
+    (wall) => {
+      const failures = createCaptureFailureMeter();
+      noteCaptureFailure(
+        failures,
+        new Error(
+          `http://user:secret@proxy.example ${"diagnostic ".repeat(30)}${wall.proxyStatus}`,
+        ),
+      );
+      const summary = buildCaptureSummary({
+        ...base,
+        catalogueCapture: { closedReason: "tracks_spent", open: false },
+        failures,
+        proxyWall: wall,
+      });
+      expect(summary).toMatchObject({
+        captureBudgetClosedReason: "tracks_spent",
+        errors: 1,
+        ok: false,
+        proxyAuthFailed: wall.kind === "proxy_auth_failed" ? 1 : 0,
+        proxyQuotaExhausted: wall.kind === "proxy_quota_exhausted" ? 1 : 0,
+        proxyStatus: wall.proxyStatus,
+        reason: wall.kind,
+      });
+      expect(JSON.stringify(summary)).not.toMatch(/user|secret|proxy\.example/);
+    },
+  );
+
+  test.each(["paused", "bytes_spent", "tracks_spent"] as const)(
+    "a %s budget is a visible successful state",
+    (closedReason) => {
+      const admission = parseCatalogueCaptureAdmission({ closedReason, open: false });
+      expect(admission).toEqual({ closedReason, open: false });
+      expect(buildCaptureSummary({ ...base, catalogueCapture: admission })).toMatchObject({
+        captureBudgetClosedReason: closedReason,
+        errors: 0,
+        ok: true,
+        reason: "capture_budget_closed",
+      });
+      expect(
+        buildCaptureSummary({
+          ...base,
+          catalogueCapture: admission,
+          counts: { done: 0, failed: 4, skipped: 0, unmatched: 0 },
+          failures: { ...createCaptureFailureMeter(), ytDlp: 4 },
+        }),
+      ).toMatchObject({
+        captureBudgetClosedReason: closedReason,
+        errors: 1,
+        ok: false,
+        reason: "ytdlp_failing",
+      });
+    },
+  );
+
+  test.each([
+    undefined,
+    null,
+    {},
+    { closedReason: "paused", open: true },
+    { closedReason: "unknown", open: false },
+    { closedReason: { toString: (): string => "paused" }, open: false },
+  ])("ignores absent or malformed budget admission %#", (value) => {
+    expect(parseCatalogueCaptureAdmission(value)).toBeUndefined();
+  });
+
+  for (const wall of walls) {
+    test.each([
+      "capture",
+      "capture-concurrent",
+      "capture-download",
+      "findings-provenance",
+      "findings-download",
+      "catalogue-provenance",
+      "catalogue-section",
+    ] as const)(
+      `${wall.kind} in %s stops provider work without receipts or recoverable journals`,
+      async (phase) => {
+        const directory = mkdtempSync(join(tmpdir(), "capture-wall-"));
+        const progressDirectory = join(directory, "progress");
+        const requests: { kind?: string; path: string; scope?: string }[] = [];
+        const tracks = Array.from({ length: 4 }, (_, index) => ({
+          artists: ["Artist"],
+          certified: !phase.startsWith("catalogue"),
+          durationMs: 120_000,
+          ...(phase === "catalogue-section" ? { sourceAudioKey: "catalogue/reference.webm" } : {}),
+          ...(phase.startsWith("catalogue") ? {} : { logId: `log-${index}` }),
+          sourceAudioFailures: 3,
+          title: "Track",
+          trackId: `track-${index}`,
+        }));
+        const server = Bun.serve({
+          fetch(request) {
+            const url = new URL(request.url);
+            const kind = url.searchParams.get("kind") ?? undefined;
+            const scope = url.searchParams.get("scope") ?? undefined;
+            requests.push({ kind, path: url.pathname, scope });
+            if (url.pathname.endsWith("/work")) {
+              const capture = phase.startsWith("capture") && kind === "capture";
+              const provenance =
+                kind === "youtube-provenance" &&
+                (phase.startsWith("findings")
+                  ? scope === "findings"
+                  : phase.startsWith("catalogue") && scope === "catalogue");
+              return Response.json({
+                catalogueCapture: { closedReason: "tracks_spent", open: false },
+                tracks: capture || provenance ? tracks : [],
+              });
+            }
+            if (url.pathname.startsWith("/api/preview/")) {
+              return new Response(null, { status: 404 });
+            }
+            if (url.pathname.endsWith("/prepare")) {
+              const track = tracks.find((row) => url.pathname.includes(`/${row.trackId}/`));
+              return Response.json({ ok: true, prepared: true, snapshotToken: "snapshot", track });
+            }
+            return Response.json({ error: "unexpected write" }, { status: 500 });
+          },
+          hostname: "127.0.0.1",
+          port: 0,
+        });
+        try {
+          const runner = join(directory, "runner.sh");
+          writeFileSync(runner, 'while [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n');
+          const preload = join(directory, "archive-fixture.ts");
+          writeFileSync(
+            preload,
+            'const originalFetch = globalThis.fetch; globalThis.fetch = ((input, init) => String(input).startsWith("https://test-account.r2.cloudflarestorage.com/") ? Promise.resolve(new Response("archived audio")) : originalFetch(input, init)) as typeof fetch;',
+          );
+          const fingerprint = join(directory, "fpcalc.sh");
+          writeFileSync(fingerprint, `#!/bin/sh\nprintf '%s\\n' '{"fingerprint":[1,2,3]}'\n`, {
+            mode: 0o700,
+          });
+          const providerCalls = join(directory, "provider-calls");
+          const provider = join(directory, "yt-dlp.sh");
+          writeFileSync(
+            provider,
+            `#!/bin/sh
+printf '%s\\n' "$*" >> "${providerCalls}"
+${
+  phase.endsWith("download") || phase === "catalogue-section"
+    ? `case " $* " in *" --print "*) printf '120\\tvideo-id\\tUploads\\tchannel-id\\tFalse\\tArtist - Track\\n'; exit 0;; esac
+`
+    : ""
+}printf '%s\\n' 'http://user:secret@proxy.example ${"diagnostic ".repeat(30)}${wall.proxyStatus}' >&2
+exit 1
+`,
+            { mode: 0o700 },
+          );
+          const child = Bun.spawn(
+            [
+              process.execPath,
+              "--preload",
+              preload,
+              new URL("./capture-sweep.ts", import.meta.url).pathname,
+            ],
+            {
+              env: {
+                ...process.env,
+                BUN_BIN: process.execPath,
+                DATABASE_ADMISSION_RUNNER: runner,
+                FLUNCLE_API_BASE_URL: server.url.origin,
+                FLUNCLE_API_TOKEN: "test-token",
+                FLUNCLE_CAPTURE_BATCH_CAP: "4",
+                FLUNCLE_CAPTURE_BATCH_PHASES: "0",
+                FLUNCLE_CAPTURE_CONCURRENCY: phase === "capture-concurrent" ? "2" : "1",
+                FLUNCLE_CAPTURE_PROGRESS_DIR: progressDirectory,
+                FLUNCLE_CAPTURE_PROVENANCE_CATALOGUE_LIMIT: "4",
+                FLUNCLE_CAPTURE_PROVENANCE_LIMIT: "4",
+                FLUNCLE_CAPTURE_REVERDICT_LIMIT: "1",
+                FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID: "test-key",
+                FLUNCLE_SOURCE_AUDIO_R2_SECRET_ACCESS_KEY: "test-secret",
+                FLUNCLE_YTDLP_PROXY_HOST: "proxy.example",
+                FLUNCLE_YTDLP_PROXY_PASSWORD: "secret",
+                FLUNCLE_YTDLP_PROXY_PORT: "8080",
+                FLUNCLE_YTDLP_PROXY_USERNAME: "user",
+                FPCALC_BIN: fingerprint,
+                R2_ACCOUNT_ID: "test-account",
+                YT_DLP_BIN: provider,
+              },
+              stderr: "pipe",
+              stdout: "pipe",
+            },
+          );
+          const [exit, stdout, stderr] = await Promise.all([
+            child.exited,
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+          ]);
+          expect(exit).toBe(1);
+          expect(JSON.parse(stdout)).toMatchObject({
+            captureBudgetClosedReason: "tracks_spent",
+            errors: 1,
+            failed: 0,
+            ok: false,
+            provenanceFailed: 0,
+            proxyAuthFailed:
+              wall.kind === "proxy_auth_failed" ? (phase === "capture-concurrent" ? 2 : 1) : 0,
+            proxyQuotaExhausted:
+              wall.kind === "proxy_quota_exhausted" ? (phase === "capture-concurrent" ? 2 : 1) : 0,
+            proxyStatus: wall.proxyStatus,
+            reason: wall.kind,
+            writesConfirmed: 0,
+            writesFailed: 0,
+          });
+          expect(stderr).not.toContain("secret");
+          const calls = readFileSync(providerCalls, "utf8").trim().split("\n");
+          expect(calls).toHaveLength(
+            phase.endsWith("download") ||
+              phase === "catalogue-section" ||
+              phase === "capture-concurrent"
+              ? 2
+              : 1,
+          );
+          expect(
+            calls.every(
+              (call) =>
+                call.includes("--config-locations") &&
+                !call.includes("--proxy") &&
+                !call.includes("secret"),
+            ),
+          ).toBe(true);
+          if (phase === "catalogue-section") {
+            expect(calls[1]).toContain("--download-sections");
+          }
+          expect(requests.filter((request) => request.path.endsWith("/prepare"))).toHaveLength(
+            phase === "capture-concurrent" ? 2 : 1,
+          );
+          expect(
+            requests.every(
+              (request) =>
+                request.path.endsWith("/prepare") ||
+                request.path.endsWith("/work") ||
+                request.path.startsWith("/api/preview/"),
+            ),
+          ).toBe(true);
+          if (phase.startsWith("capture")) {
+            expect(requests.some((request) => request.kind === "youtube-provenance")).toBe(false);
+          }
+          expect(requests.some((request) => request.kind === "youtube-reverdict")).toBe(true);
+          expect(
+            readdirSync(progressDirectory).filter((name) =>
+              /^[0-9a-f]{64}\.json(?:\.work)?$/.test(name),
+            ),
+          ).toEqual([]);
+        } finally {
+          await server.stop(true);
+          rmSync(directory, { force: true, recursive: true });
+        }
+      },
+    );
+  }
 });

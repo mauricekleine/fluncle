@@ -805,6 +805,12 @@ export const listTrackWork = oc
   .output(
     z.object({
       capabilities: TrackWorkCapabilitiesSchema.optional(),
+      catalogueCapture: z
+        .object({
+          closedReason: z.enum(["paused", "bytes_spent", "tracks_spent"]),
+          open: z.literal(false),
+        })
+        .optional(),
 
       debtPending: z.boolean().optional(),
       ok: z.literal(true),
