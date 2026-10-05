@@ -101,7 +101,7 @@ The run ledger stays in a separate telemetry database so a stalled primary write
 
 The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build still runs separately as the Build command). Prod `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` and `TURSO_TELEMETRY_DATABASE_URL` / `TURSO_TELEMETRY_AUTH_TOKEN` come from the Cloudflare build/deploy environment, so the two migration steps inspect and migrate their disjoint production databases there.
 
-`deploy:cf` ends with the projection activation and does not purge the edge cache. Every cached HTML entry is stamped with the build that rendered it (`SENTRY_RELEASE`, the production commit SHA), so a browser navigation never reuses an entry from another build; per-write targeted purges still evict the pages a content write changes. To wipe the store by hand, run `CF_CACHE_PURGE_TOKEN=... bun run --cwd apps/web cache:purge` (paths as arguments purge only those pages).
+`deploy:cf` ends with the projection activation and does not purge the edge cache. Every cached HTML entry records its referenced `/assets/` paths, and every client reuses it only when all those paths exist in the current client build output. Incompatible or headerless entries never serve, including stale-if-error; per-write targeted purges still evict the pages a content write changes. To wipe the store by hand, run `CF_CACHE_PURGE_TOKEN=... bun run --cwd apps/web cache:purge` (paths as arguments purge only those pages).
 
 ## Files
 

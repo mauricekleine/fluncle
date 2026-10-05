@@ -89,6 +89,41 @@ function clientNodeCryptoStub(): Plugin {
   };
 }
 
+function clientAssetsPlugin(): Plugin {
+  const moduleId = "virtual:fluncle-client-assets";
+  const resolvedId = `\0${moduleId}`;
+  let clientAssets: string[] | undefined;
+
+  return {
+    enforce: "post",
+    generateBundle(_options, bundle) {
+      if (this.environment.name === "client") {
+        clientAssets = Object.values(bundle)
+          .map((file) => `/${file.fileName}`)
+          .sort();
+      }
+    },
+    load(id) {
+      if (id !== resolvedId) {
+        return;
+      }
+      if (this.environment.config.command === "serve") {
+        return "export const clientAssetPaths = [];";
+      }
+      if (this.environment.name !== "ssr" || !clientAssets?.length) {
+        throw new Error("Client asset inventory must be captured before the SSR build loads it");
+      }
+      return `export const clientAssetPaths = ${JSON.stringify(clientAssets)};`;
+    },
+    name: "fluncle-client-assets",
+    resolveId(id) {
+      if (id === moduleId) {
+        return resolvedId;
+      }
+    },
+  };
+}
+
 function crawlerBannerPlugin(): Plugin {
   return {
     apply: "build",
@@ -183,6 +218,7 @@ export default defineConfig({
     tanstackStart(),
     viteReact(),
     crawlerBannerPlugin(),
+    clientAssetsPlugin(),
 
     clientChunkPurityGate(),
 
