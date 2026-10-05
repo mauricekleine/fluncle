@@ -1,5 +1,5 @@
 import { logEvent } from "./log";
-import { getSetting, setSetting } from "./settings";
+import { getSettings, setSetting } from "./settings";
 import { clearSpotifyQuotaHold, readSpotifyQuotaHoldUntil } from "./spotify-budget";
 
 export const SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY = "spotify_anchor_breaker_tripped_at";
@@ -9,9 +9,19 @@ export const SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY = "spotify_anchor_breaker_failu
 export const SPOTIFY_ANCHOR_BREAKER_REASON_KEY = "spotify_anchor_breaker_reason";
 
 const SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY = "spotify_anchor_breaker_last_failure_at";
-export async function getSpotifyAnchorQuotaUntil(now: number): Promise<null | string> {
-  return readSpotifyQuotaHoldUntil(now);
+export async function getSpotifyAnchorQuotaUntil(
+  now: number,
+  settings?: ReadonlyMap<string, string | undefined>,
+): Promise<null | string> {
+  return readSpotifyQuotaHoldUntil(now, settings);
 }
+
+export const SPOTIFY_ANCHOR_BREAKER_KEYS = [
+  SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY,
+  SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY,
+  SPOTIFY_ANCHOR_BREAKER_REASON_KEY,
+  SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY,
+] as const;
 
 export const SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES = 5;
 
@@ -88,13 +98,13 @@ export type SpotifyAnchorBreakerState = {
 
 export async function getSpotifyAnchorBreakerState(
   now: number = Date.now(),
+  settings?: ReadonlyMap<string, string | undefined>,
 ): Promise<SpotifyAnchorBreakerState> {
-  const [trippedAt, failures, reason, lastFailureAt] = await Promise.all([
-    getSetting(SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY),
-    getSetting(SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY),
-    getSetting(SPOTIFY_ANCHOR_BREAKER_REASON_KEY),
-    getSetting(SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY),
-  ]);
+  const values = settings ?? (await getSettings(SPOTIFY_ANCHOR_BREAKER_KEYS));
+  const trippedAt = values.get(SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY);
+  const failures = values.get(SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY);
+  const reason = values.get(SPOTIFY_ANCHOR_BREAKER_REASON_KEY);
+  const lastFailureAt = values.get(SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY);
 
   const verdict = spotifyAnchorBreakerVerdict({ now, trippedAt: trippedAt ?? null });
   const lastMs = parseStamp(lastFailureAt);
@@ -127,11 +137,14 @@ export async function recordSpotifyThrottle(
   quotaExceeded = false,
 ): Promise<void> {
   try {
-    const [trippedAt, failures, lastFailureAt] = await Promise.all([
-      getSetting(SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY),
-      getSetting(SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY),
-      getSetting(SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY),
+    const values = await getSettings([
+      SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY,
+      SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY,
+      SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY,
     ]);
+    const trippedAt = values.get(SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY);
+    const failures = values.get(SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY);
+    const lastFailureAt = values.get(SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY);
 
     const verdict = spotifyAnchorBreakerVerdict({ now, trippedAt: trippedAt ?? null });
 

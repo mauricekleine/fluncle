@@ -12,6 +12,12 @@ vi.mock("./settings", () => ({
 
     return store.get(key);
   },
+  getSettings: async (keys: readonly string[]) => {
+    if (getFails) {
+      throw new Error("settings store unavailable");
+    }
+    return new Map(keys.map((key) => [key, store.get(key)]));
+  },
   setSetting: async (key: string, value: string) => {
     if (setFails) {
       throw new Error("settings store unavailable");

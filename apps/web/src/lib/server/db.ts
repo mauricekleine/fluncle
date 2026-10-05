@@ -29,6 +29,7 @@ import {
   type DatabaseOutcome,
 } from "./database-observability";
 import {
+  clearRequestScopedSettingsMemo,
   enterDatabaseRequestOperation,
   getRequestScopedDatabaseClient,
   type DatabaseRequestOperationLease,
@@ -73,6 +74,26 @@ function statementMetadata(statement: InStatement): DatabaseOperationMetadata | 
 
 function batchStatementSql(statement: InStatement | [string, InArgs?]): string {
   return Array.isArray(statement) ? statement[0] : statementSql(statement);
+}
+
+function writesSettings(sql: string): boolean {
+  return /\bsettings\b/i.test(sql) && classifyDatabaseAccess(sql) === "write";
+}
+
+async function invalidateSettingsOnWrite<Result>(
+  invalidates: boolean,
+  run: () => Promise<Result>,
+): Promise<Result> {
+  if (invalidates) {
+    clearRequestScopedSettingsMemo();
+  }
+  try {
+    return await run();
+  } finally {
+    if (invalidates) {
+      clearRequestScopedSettingsMemo();
+    }
+  }
 }
 
 function accessClassForStatement(statement: InStatement): DatabaseAccessClass {
@@ -286,12 +307,24 @@ function instrumentTransaction(
 ): Transaction {
   let failed = false;
   let finished = false;
+  let settingsWritten = false;
+
+  const runStatement = <Result>(
+    invalidates: boolean,
+    run: () => Promise<Result>,
+  ): Promise<Result> => {
+    settingsWritten ||= invalidates;
+    return invalidateSettingsOnWrite(invalidates, run);
+  };
 
   const finish = (outcome: DatabaseOutcome) => {
     if (finished) {
       return;
     }
     finished = true;
+    if (settingsWritten) {
+      clearRequestScopedSettingsMemo();
+    }
     finishSpan(span, startedAt, outcome, requestOperation);
     requestOperation.release();
     lease.release();
@@ -312,7 +345,9 @@ function instrumentTransaction(
       if (property === "execute") {
         return async (statement: InStatement) => {
           try {
-            return await target.execute(statement);
+            return await runStatement(writesSettings(statementSql(statement)), () =>
+              target.execute(statement),
+            );
           } catch (error) {
             return fail(target, error);
           }
@@ -321,7 +356,10 @@ function instrumentTransaction(
       if (property === "batch") {
         return async (statements: InStatement[]) => {
           try {
-            return await target.batch(statements);
+            return await runStatement(
+              statements.some((statement) => writesSettings(statementSql(statement))),
+              () => target.batch(statements),
+            );
           } catch (error) {
             return fail(target, error);
           }
@@ -330,7 +368,7 @@ function instrumentTransaction(
       if (property === "executeMultiple") {
         return async (sql: string) => {
           try {
-            return await target.executeMultiple(sql);
+            return await runStatement(/\bsettings\b/i.test(sql), () => target.executeMultiple(sql));
           } catch (error) {
             return fail(target, error);
           }
@@ -344,13 +382,17 @@ function instrumentTransaction(
           } catch (error) {
             finish("failure");
             throw error;
+          } finally {
+            if (settingsWritten) {
+              clearRequestScopedSettingsMemo();
+            }
           }
         };
       }
       if (property === "commit" || property === "rollback") {
         return async () => {
           try {
-            await target[property]();
+            await invalidateSettingsOnWrite(settingsWritten, () => target[property]());
             finish(failed ? "failure" : "success");
           } catch (error) {
             return fail(target, error);
@@ -392,7 +434,9 @@ function instrument(
                   : target.execute(statement);
 
               try {
-                const result = await (isRetryableRead(sql) ? runWithRetry(run, span) : run());
+                const result = await invalidateSettingsOnWrite(writesSettings(sql), () =>
+                  isRetryableRead(sql) ? runWithRetry(run, span) : run(),
+                );
                 finishSpan(span, startedAt, "success", requestOperation);
                 return result;
               } catch (error) {
@@ -452,9 +496,10 @@ function instrument(
               const run = () => target.batch(stmts, mode);
 
               try {
-                const result = await (isRetryableReadBatch(stmts, mode)
-                  ? runWithRetry(run, span)
-                  : run());
+                const result = await invalidateSettingsOnWrite(
+                  stmts.some((statement) => writesSettings(batchStatementSql(statement))),
+                  () => (isRetryableReadBatch(stmts, mode) ? runWithRetry(run, span) : run()),
+                );
                 finishSpan(span, startedAt, "success", requestOperation);
                 return result;
               } catch (error) {
@@ -467,6 +512,19 @@ function instrument(
             },
           );
         };
+      }
+
+      if (property === "executeMultiple") {
+        return (sql: string) =>
+          invalidateSettingsOnWrite(/\bsettings\b/i.test(sql), () => target.executeMultiple(sql));
+      }
+
+      if (property === "migrate") {
+        return (statements: InStatement[]) =>
+          invalidateSettingsOnWrite(
+            statements.some((statement) => writesSettings(statementSql(statement))),
+            () => target.migrate(statements),
+          );
       }
 
       if (property === "transaction") {
