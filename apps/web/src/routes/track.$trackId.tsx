@@ -1,6 +1,7 @@
 import { Link, createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { FrontDoorSection } from "@/components/front-door/section";
+import { FindingsGrid } from "@/components/graph-sections";
 import { TrackNotFoundState } from "@/components/stories/stories-states";
 import { TrackArtwork } from "@/components/track-artwork";
 import {
@@ -168,7 +169,7 @@ function TrackPage() {
     return null;
   }
 
-  const { neighbours, track } = data;
+  const { neighbours, related, track } = data;
 
   return (
     <main className="log-plate-stage">
@@ -195,6 +196,8 @@ function TrackPage() {
             <SonicNeighbours neighbours={neighbours} />
           </FrontDoorSection>
         ) : undefined}
+
+        <FindingsGrid findings={related} priority={false} />
 
         <footer className="log-plate-footer">
           <Link to="/tracks">All tracks</Link>

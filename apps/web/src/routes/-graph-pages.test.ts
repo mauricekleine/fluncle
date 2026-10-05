@@ -14,6 +14,7 @@ const getFindingsByAlbum = vi.hoisted(() => vi.fn());
 const listLabelCatalogue = vi.hoisted(() => vi.fn());
 const listLabelUpcoming = vi.hoisted(() => vi.fn());
 const listCatalogueTracksByAlbum = vi.hoisted(() => vi.fn());
+const listRelatedFindings = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/server/labels", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/labels")>()),
@@ -45,6 +46,7 @@ vi.mock("@/lib/server/tracks", async (importOriginal) => ({
   getFindingsByAlbum,
   getFindingsByLabel,
   listCatalogueTracksByAlbum,
+  listRelatedFindings,
 }));
 
 const { Route: LabelRoute } = await import("./label.$slug");
@@ -144,6 +146,7 @@ beforeEach(() => {
   listArtistsByAlbum.mockResolvedValue([]);
   getFindingsByLabel.mockResolvedValue([]);
   getFindingsByAlbum.mockResolvedValue([]);
+  listRelatedFindings.mockResolvedValue([]);
   listLabelCatalogue.mockResolvedValue(NO_LABEL_CATALOGUE);
   listLabelUpcoming.mockResolvedValue({
     findings: [],
@@ -335,6 +338,39 @@ describe("the album page", () => {
     expect(data).toMatchObject({ indexable: true, status: "found" });
 
     expect(data.status === "found" && data.findings).toEqual([]);
+  });
+
+  it("closes a findings-free album with related findings, and an album with findings without them", async () => {
+    getAlbumBySlug.mockResolvedValue({ ...ALBUM, renderableTrackCount: 12 });
+    listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(12));
+    listRelatedFindings.mockResolvedValue(findings(2));
+
+    const bare = await resolveAlbumPageData("wormhole");
+
+    expect(listRelatedFindings).toHaveBeenCalledWith(
+      { albumId: ALBUM.id, kind: "album" },
+      expect.objectContaining({ today: expect.any(String) }),
+    );
+    expect(bare.status === "found" && bare.related.map((row) => row.logId)).toEqual([
+      "001.1.0A",
+      "001.1.1A",
+    ]);
+
+    getFindingsByAlbum.mockResolvedValue(findings(1));
+
+    const lit = await resolveAlbumPageData("wormhole");
+
+    expect(lit.status === "found" && lit.related).toEqual([]);
+  });
+
+  it("serves the page when the related findings read fails", async () => {
+    getAlbumBySlug.mockResolvedValue({ ...ALBUM, renderableTrackCount: 12 });
+    listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(12));
+    listRelatedFindings.mockRejectedValue(new Error("turso 502"));
+
+    const data = await resolveAlbumPageData("wormhole");
+
+    expect(data).toMatchObject({ related: [], status: "found" });
   });
 
   it("keeps a 1-row findings-free album OUT of the index (thin is still thin)", async () => {

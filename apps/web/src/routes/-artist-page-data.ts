@@ -20,7 +20,7 @@ import {
 } from "@/lib/catalogue";
 import { listArtistCatalogue, listArtistUpcoming } from "@/lib/server/catalogue-groups";
 import { releaseTodayUtc } from "@/lib/server/release-day";
-import { getFindingsByArtist, type TrackListItem } from "@/lib/server/tracks";
+import { getFindingsByArtist, listRelatedFindings, type TrackListItem } from "@/lib/server/tracks";
 
 export type { ArtistSocialLink };
 
@@ -44,6 +44,7 @@ export type ArtistPageData =
       imageUrl: string | undefined;
       indexable: boolean;
       name: string;
+      related: TrackListItem[];
       slug: string;
       socials: ArtistSocialLink[];
       sort: CatalogueSort;
@@ -80,22 +81,26 @@ export async function resolveArtistPageData(
     },
   );
 
-  const [catalogue, findings, socials, neighbours, alternateNames, upcoming] = await Promise.all([
-    cataloguePromise,
-    getFindingsByArtist(artist.id, artist.name, today),
-    getPublicArtistSocials(artist.id),
-    getArtistNeighbours(artist.id),
+  const [catalogue, findings, socials, neighbours, alternateNames, upcoming, related] =
+    await Promise.all([
+      cataloguePromise,
+      getFindingsByArtist(artist.id, artist.name, today),
+      getPublicArtistSocials(artist.id),
+      getArtistNeighbours(artist.id),
 
-    getPublicArtistAliasNames(artist.id),
-    listArtistUpcoming(artist.id, today, upcomingPage).catch(
-      (error: unknown): UpcomingTrackPage | null => {
-        if (error instanceof CataloguePageOutOfRangeError) {
-          return null;
-        }
-        throw error;
-      },
-    ),
-  ]);
+      getPublicArtistAliasNames(artist.id),
+      listArtistUpcoming(artist.id, today, upcomingPage).catch(
+        (error: unknown): UpcomingTrackPage | null => {
+          if (error instanceof CataloguePageOutOfRangeError) {
+            return null;
+          }
+          throw error;
+        },
+      ),
+      listRelatedFindings({ artistId: artist.id, kind: "artist" }, { today }).catch(
+        (): TrackListItem[] => [],
+      ),
+    ]);
 
   if (catalogue === null || upcoming === null) {
     return { status: "missing" };
@@ -124,6 +129,7 @@ export async function resolveArtistPageData(
     lastfmUrl: artist.lastfmUrl,
     mbid: artist.mbid,
     name: artist.name,
+    related: gridFindings.length > 0 ? [] : related,
     slug: artist.slug,
     socials,
     sort,

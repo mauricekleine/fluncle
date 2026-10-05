@@ -678,6 +678,122 @@ async function findingsByEntity(
   return typedRows<TrackRow>(result.rows).map(toGraphFindingItem);
 }
 
+export const RELATED_FINDINGS_LIMIT = 4;
+
+export type RelatedFindingsScope =
+  | { albumId: string; kind: "album" }
+  | { artistId: string; kind: "artist" }
+  | { kind: "label"; labelId: string }
+  | { kind: "track"; trackId: string };
+
+type AffinityTier = { args: string[]; sql: string };
+
+function findingByArtistInSql(artistIdsSql: string): string {
+  return `exists (select 1 from track_artists fa
+                   where fa.track_id = tracks.track_id and fa.artist_id in (${artistIdsSql}))`;
+}
+
+function relatedFindingTiers(scope: RelatedFindingsScope): AffinityTier[] {
+  switch (scope.kind) {
+    case "track":
+      return [
+        {
+          args: [scope.trackId],
+          sql: `tracks.album_id = (select ct.album_id from tracks ct where ct.track_id = ?)`,
+        },
+        {
+          args: [scope.trackId],
+          sql: findingByArtistInSql(
+            `select ca.artist_id from track_artists ca where ca.track_id = ?`,
+          ),
+        },
+        {
+          args: [scope.trackId],
+          sql: `tracks.label_id = (select ct.label_id from tracks ct where ct.track_id = ?)`,
+        },
+      ];
+    case "album":
+      return [
+        {
+          args: [scope.albumId],
+          sql: findingByArtistInSql(
+            `select ca.artist_id from tracks ct
+             join track_artists ca on ca.track_id = ct.track_id
+             where ct.album_id = ?`,
+          ),
+        },
+        {
+          args: [scope.albumId],
+          sql: `tracks.label_id in (select ct.label_id from tracks ct where ct.album_id = ?)`,
+        },
+      ];
+    case "artist":
+      return [
+        {
+          args: [scope.artistId],
+          sql: findingByArtistInSql(
+            `select s.neighbour_artist_id from artist_similar s where s.artist_id = ?`,
+          ),
+        },
+        {
+          args: [scope.artistId],
+          sql: `tracks.label_id in (select ct.label_id from track_artists ca
+                 join tracks ct on ct.track_id = ca.track_id
+                 where ca.artist_id = ?)`,
+        },
+      ];
+    case "label":
+      return [
+        {
+          args: [scope.labelId],
+          sql: findingByArtistInSql(
+            `select la.artist_id from tracks lt
+             cross join track_artists la on la.track_id = lt.track_id
+             where lt.label_id = ?`,
+          ),
+        },
+      ];
+  }
+}
+
+export async function listRelatedFindings(
+  scope: RelatedFindingsScope,
+  options: { excludeTrackIds?: string[]; limit?: number; today?: string } = {},
+): Promise<GraphFindingItem[]> {
+  const limit = options.limit ?? RELATED_FINDINGS_LIMIT;
+
+  if (limit <= 0) {
+    return [];
+  }
+
+  const exclude = [...new Set(options.excludeTrackIds ?? [])];
+  const tiers = relatedFindingTiers(scope);
+  const affinity = `case ${tiers
+    .map((tier, index) => `when ${tier.sql} then ${tiers.length - index}`)
+    .join(" ")} else 0 end`;
+  const db = await getDb();
+  const result = await db.execute({
+    args: [
+      ...(options.today === undefined ? [] : [options.today]),
+      ...exclude,
+      ...tiers.flatMap((tier) => tier.args),
+      limit,
+    ],
+    sql: `select ${GRAPH_TRACK_SELECT}
+          from findings cross join tracks on tracks.track_id = findings.track_id
+          where findings.log_id is not null
+            and tracks.dismissed_at is null and tracks.duplicate_of_track_id is null
+            ${options.today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
+            ${exclude.length === 0 ? "" : `and tracks.track_id not in (${exclude.map(() => "?").join(", ")})`}
+          order by ${affinity} desc, findings.added_at desc, tracks.track_id desc
+          limit ?`,
+  });
+
+  return typedRows<TrackRow>(result.rows).map((row) =>
+    toPublicTrackListItem(toGraphFindingItem(row)),
+  );
+}
+
 export type LogIndexEntry = {
   addedAt: string;
   artists: string[];
