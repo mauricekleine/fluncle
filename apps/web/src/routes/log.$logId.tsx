@@ -48,70 +48,18 @@ import {
 import { mixtapeSetVideoUrl, albumCoverAtSize, trackMedia } from "@/lib/media";
 import { bioMetaDescription } from "@/lib/meta-description";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
-import { resolveLogPageTarget } from "@/lib/server/log-resolver";
-import {
-  getSimilarFindings,
-  getTrackNeighbors,
-  type TrackListItem,
-  type TrackNeighbor,
-} from "@/lib/server/tracks";
-import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
-import { getArtistSlugMap } from "@/lib/server/artists";
+import { type LogPageData } from "./-log-page-data";
 import { fold } from "@/lib/server/track-match";
 import { FindingsGridList } from "@/components/graph-sections";
 
 export const MEASURED_FAQ_ANCHOR = "how-does-fluncle-measure-bpm-and-key";
 
-type LogPageData =
-  | {
-      status: "found";
-
-      artistSlugs: Record<string, string>;
-
-      galaxyReady: boolean;
-      newer?: TrackNeighbor;
-      older?: TrackNeighbor;
-      similar: TrackListItem[];
-      track: TrackListItem;
-    }
-  | {
-      mixtape: MixtapeDTO;
-      status: "found-mixtape";
-    }
-  | { status: "missing" }
-  | { status: "moved"; logId: string };
-
 const fetchLogPage = createServerFn({ method: "GET" })
   .validator((data: { logId: string }) => data)
   .handler(async ({ data: { logId } }): Promise<LogPageData> => {
-    const target = await resolveLogPageTarget(logId);
+    const { resolveLogPageData } = await import("./-log-page-data");
 
-    if (!target) {
-      return { status: "missing" };
-    }
-
-    if (target.kind === "mixtape") {
-      return { mixtape: target.mixtape, status: "found-mixtape" };
-    }
-
-    const { track } = target;
-
-    if (!track.logId) {
-      return { status: "missing" };
-    }
-
-    if (track.logId !== logId) {
-      return { logId: track.logId, status: "moved" };
-    }
-
-    const [neighbors, similar, artistSlugs, galaxyReady] = await Promise.all([
-      getTrackNeighbors(track),
-      getSimilarFindings(track.logId).catch(() => []),
-      getArtistSlugMap(track.trackId),
-      isGalaxyMapFullyNamed(),
-    ]);
-
-    return { ...neighbors, artistSlugs, galaxyReady, similar, status: "found", track };
+    return resolveLogPageData(logId);
   });
 
 function logHead(loaderData: LogPageData | undefined) {
