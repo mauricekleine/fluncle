@@ -142,7 +142,15 @@ function FindingGridTile({
 
 const FINDINGS_HEADING = "Recommended by Fluncle";
 
-export function FindingsGrid({ findings, label }: { findings: TrackListItem[]; label?: string }) {
+export function FindingsGrid({
+  findings,
+  label,
+  priority = label === undefined,
+}: {
+  findings: TrackListItem[];
+  label?: string;
+  priority?: boolean;
+}) {
   const grid = findings.filter((finding) => finding.logId);
 
   if (grid.length === 0) {
@@ -162,7 +170,7 @@ export function FindingsGrid({ findings, label }: { findings: TrackListItem[]; l
         findings={grid}
         label={label}
         labelledBy={label === undefined ? "findings-grid-heading" : undefined}
-        priorityFirst={label === undefined}
+        priorityFirst={priority}
         size="medium"
       />
     </section>

@@ -15,7 +15,7 @@ import {
   type LabelLineageEdge,
   resolveLabelAliasRedirect,
 } from "@/lib/server/labels";
-import { getFindingsByLabel, type TrackListItem } from "@/lib/server/tracks";
+import { getFindingsByLabel, listRelatedFindings, type TrackListItem } from "@/lib/server/tracks";
 
 export type LabelPageData =
   | {
@@ -43,6 +43,7 @@ export type LabelPageData =
       name: string;
 
       parentLabel: LabelLineageEdge | undefined;
+      related: TrackListItem[];
       slug: string;
       sort: CatalogueSort;
       status: "found";
@@ -84,7 +85,7 @@ export async function resolveLabelPageData(
     },
   );
 
-  const [catalogue, findings, artists, alternateNames, upcoming] = await Promise.all([
+  const [catalogue, findings, artists, alternateNames, upcoming, related] = await Promise.all([
     cataloguePromise,
     getFindingsByLabel(label.id, today),
     listArtistsByLabel(label.id),
@@ -96,6 +97,9 @@ export async function resolveLabelPageData(
         }
         throw error;
       },
+    ),
+    listRelatedFindings({ kind: "label", labelId: label.id }, { today }).catch(
+      (): TrackListItem[] => [],
     ),
   ]);
 
@@ -123,6 +127,7 @@ export async function resolveLabelPageData(
     mbLabelId: label.mbLabelId,
     name: label.name,
     parentLabel: label.parentLabel,
+    related: findings.length > 0 ? [] : related,
     slug: label.slug,
     sort,
     status: "found",

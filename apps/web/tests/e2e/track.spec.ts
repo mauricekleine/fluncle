@@ -99,6 +99,12 @@ test("the destination SSRs every fact the archive holds, and names no tier", asy
 
   expect(raw).not.toContain("Close in sound");
 
+  expect(raw).toContain("Recommended by Fluncle");
+  expect(
+    SEEDED_FINDING_LOG_IDS.some((logId) => raw.includes(`href="/log/${logId}"`)),
+    "the destination links forward to a finding",
+  ).toBe(true);
+
   for (const word of TIER_WORDS) {
     expect(raw.toLowerCase(), `the SSR HTML must not contain "${word}"`).not.toContain(word);
   }
@@ -121,6 +127,9 @@ test("the destination SSRs every fact the archive holds, and names no tier", asy
   await page.goto(DESTINATION_PATH, { waitUntil: "networkidle" });
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(SEEDED_DESTINATION_TRACK.title);
   await expect(page.getByRole("link", { name: "Listen on Spotify" })).toBeVisible();
+  await expect(
+    page.getByRole("list", { name: "Recommended by Fluncle" }).locator('a[href^="/log/"]').first(),
+  ).toBeVisible();
 
   expect(problems, `no console/page errors: ${problems.join(" | ")}`).toEqual([]);
 });
@@ -199,6 +208,31 @@ test("the archive links INTO the destination rather than straight back out", asy
     "href",
     /open\.spotify\.com/,
   );
+});
+
+test("a findings-free album closes on findings to continue into", async ({ page }) => {
+  await blockExternalRequests(page);
+
+  const problems = watchForErrors(page);
+  const raw = decoded(await (await page.request.get("/album/undertow-ledger")).text());
+  const tracklist = raw.indexOf(`href="${DESTINATION_PATH}"`);
+  const band = raw.indexOf("Recommended by Fluncle");
+
+  expect(tracklist, "the album's own tracklist renders").toBeGreaterThan(-1);
+  expect(band, "the findings band follows the album's own tracklist").toBeGreaterThan(tracklist);
+
+  await page.goto("/album/undertow-ledger", { waitUntil: "networkidle" });
+
+  const finding = page
+    .getByRole("list", { name: "Recommended by Fluncle" })
+    .locator('a[href^="/log/"]')
+    .first();
+
+  await expect(finding).toBeVisible();
+  mkdirSync(SHOT_DIR, { recursive: true });
+  await page.screenshot({ fullPage: true, path: join(SHOT_DIR, "album-findings-band.png") });
+
+  expect(problems, `no console/page errors: ${problems.join(" | ")}`).toEqual([]);
 });
 
 test.describe("the cold-arrival journey", () => {
@@ -314,7 +348,7 @@ test("a page with nowhere to send you promises nothing, in the markup or the sni
 
   expect(raw).not.toContain("Listen on Spotify");
   expect(raw).not.toContain("Listen on Apple Music");
-  expect(raw).not.toContain("Play the preview");
+  expect(raw).not.toMatch(/>Play the preview</);
   expect(raw).not.toContain("Close in sound");
 
   const description = /<meta content="([^"]*)" name="description"\/>/.exec(raw)?.[1] ?? "";
@@ -327,6 +361,7 @@ test("a page with nowhere to send you promises nothing, in the markup or the sni
 
   await page.goto(BARE_PATH, { waitUntil: "networkidle" });
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(SEEDED_BARE_TRACK.title);
+  await expect(page.getByRole("button", { exact: true, name: "Play the preview" })).toHaveCount(0);
 
   expect(problems, `no console/page errors: ${problems.join(" | ")}`).toEqual([]);
 });

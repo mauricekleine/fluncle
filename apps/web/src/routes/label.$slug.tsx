@@ -271,6 +271,7 @@ function LabelPage() {
     foundingDate,
     id,
     name,
+    related,
     slug,
     sort,
     upcoming,
@@ -343,6 +344,8 @@ function LabelPage() {
             />
           </section>
         ) : undefined}
+
+        <FindingsGrid findings={related} priority={false} />
 
         <footer className="log-plate-footer">
           <Link to="/labels">All labels</Link>

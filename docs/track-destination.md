@@ -86,6 +86,7 @@ Spotify `sameAs` values in structured data remain direct Spotify identity URLs e
 This page is the first surface that both renders a Beatport link _and_ composes a `sameAs` array from its outbound destinations, so it needs an explicit exclusion rather than an absence. The seam is `SAME_AS_EXCLUDED_LISTEN_KINDS` / `sameAsUrls` in [`apps/web/src/lib/track-page.ts`](../apps/web/src/lib/track-page.ts): the route's `head()` builds its `sameAs` input through it rather than mapping the destinations itself, the exclusion is keyed on the destination **kind** so it survives a rename or a URL-shape change, and `track-page.test.ts` fails if a future edit lets the kind through. The rendered control is untouched.
 
 - **"Close in sound"** — the neighbours, and the half of the page that makes the archive traversable.
+- **"Recommended by Fluncle"** — the closing band of [related findings](./album-entity.md#a-findings-free-page-closes-on-related-findings): findings on the same record, then by the same artists, then on the same label, filled with the newest, leaving out any finding "Close in sound" already shows. It is the page's forward route into `/log` when the recording has no embedding and so no neighbours.
 
 ## Sonic neighbours
 

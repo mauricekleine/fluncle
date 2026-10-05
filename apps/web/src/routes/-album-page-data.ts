@@ -1,10 +1,12 @@
 import { ALBUM_INDEX_MIN_TRACKS, getAlbumBySlug } from "@/lib/server/albums";
 import { type ArtistChip, listArtistsByAlbum } from "@/lib/server/artists";
 import { getLabelForAlbum, type LabelRecord } from "@/lib/server/labels";
+import { releaseTodayUtc } from "@/lib/server/release-day";
 import {
   type CatalogueTrackItem,
   getFindingsByAlbum,
   listCatalogueTracksByAlbum,
+  listRelatedFindings,
   type TrackListItem,
 } from "@/lib/server/tracks";
 
@@ -22,6 +24,7 @@ export type AlbumPageData =
       indexable: boolean;
       label: LabelRecord | undefined;
       name: string;
+      related: TrackListItem[];
 
       releaseDate: string | undefined;
 
@@ -40,11 +43,15 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     return { status: "missing" };
   }
 
-  const [findings, catalogue, artists, label] = await Promise.all([
+  const [findings, catalogue, artists, label, related] = await Promise.all([
     getFindingsByAlbum(album.id),
     listCatalogueTracksByAlbum(album.id),
     listArtistsByAlbum(album.id),
     getLabelForAlbum(album.id),
+    listRelatedFindings(
+      { albumId: album.id, kind: "album" },
+      { today: releaseTodayUtc(new Date()) },
+    ).catch((): TrackListItem[] => []),
   ]);
 
   if (album.renderableTrackCount === 0) {
@@ -63,6 +70,7 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     indexable: album.renderableTrackCount >= ALBUM_INDEX_MIN_TRACKS,
     label,
     name: album.name,
+    related: findings.length > 0 ? [] : related,
 
     releaseDate: album.releaseDate,
     releaseGroupMbid: album.releaseGroupMbid,

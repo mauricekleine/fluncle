@@ -316,8 +316,20 @@ function ArtistPage() {
     return null;
   }
 
-  const { bio, catalogue, dossier, findings, id, imageUrl, name, slug, socials, sort, upcoming } =
-    data;
+  const {
+    bio,
+    catalogue,
+    dossier,
+    findings,
+    id,
+    imageUrl,
+    name,
+    related,
+    slug,
+    socials,
+    sort,
+    upcoming,
+  } = data;
 
   const findingsBandLeads = leadGridCoverUrl(findings) !== undefined;
 
@@ -442,6 +454,8 @@ function ArtistPage() {
             />
           </section>
         ) : undefined}
+
+        <FindingsGrid findings={related} priority={false} />
 
         <footer className="log-plate-footer">
           <Link to="/artists">All artists</Link>

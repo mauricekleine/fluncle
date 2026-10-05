@@ -137,7 +137,7 @@ function AlbumPage() {
     return null;
   }
 
-  const { artists, bio, catalogNumber, catalogue, findings, label, name } = data;
+  const { artists, bio, catalogNumber, catalogue, findings, label, name, related } = data;
 
   return (
     <main className="log-plate-stage">
@@ -168,6 +168,8 @@ function AlbumPage() {
         <ArtistChips artists={artists} title={`Artists on ${name}`} />
 
         <UnlitTracks label={`More tracks on ${name}`} tracks={catalogue} />
+
+        <FindingsGrid findings={related} priority={false} />
 
         <footer className="log-plate-footer">
           <Link to="/albums">All albums</Link>
