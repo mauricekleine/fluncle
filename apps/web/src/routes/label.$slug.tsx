@@ -27,6 +27,12 @@ import {
   flattenArtistGroups,
   parseCatalogueSort,
 } from "@/lib/catalogue";
+import {
+  formatNameList,
+  formatNameRange,
+  pagedCanonical,
+  shouldNoindexPage,
+} from "@/lib/paged-indexing";
 import { pageParam } from "@/lib/search-params";
 import { type LabelPageData } from "./-label-page-data";
 
@@ -41,6 +47,31 @@ const fetchLabel = createServerFn({ method: "GET" })
 
     return resolveLabelPageData(slug, sort, page, upcomingPage);
   });
+
+function labelArtistGroupRange(
+  groups: Extract<LabelPageData, { status: "found" }>["catalogue"]["groups"],
+): string {
+  const names = groups.map((group) => group.name);
+
+  return formatNameRange(names[0], names[names.length - 1]);
+}
+
+function labelArtistGroupDescription(
+  name: string,
+  groups: Extract<LabelPageData, { status: "found" }>["catalogue"]["groups"],
+  page: number,
+  pageCount: number,
+): string {
+  const groupNames = groups.map((group) => group.name);
+  const listed = groupNames.slice(0, 3);
+  const remaining = groupNames.length - listed.length;
+  const nameSnippet = formatNameList(listed, remaining);
+  const position = `page ${page} of ${pageCount}`;
+
+  return nameSnippet
+    ? `Drum & bass on ${name} by ${nameSnippet}, ${position}.`
+    : `Page ${page} of the drum & bass artists released on ${name} that Fluncle holds.`;
+}
 
 function labelHead(loaderData: LabelPageData | undefined) {
   if (loaderData?.status !== "found") {
@@ -63,16 +94,11 @@ function labelHead(loaderData: LabelPageData | undefined) {
     name,
     parentLabel,
     slug,
+    sort,
     subLabels,
   } = loaderData;
 
-  const pageUrl = entityPageHref(
-    `${siteUrl}/label/${slug}`,
-    catalogue.page,
-    CATALOGUE_SORT_DEFAULT,
-    CATALOGUE_SORT_DEFAULT,
-    upcoming.page,
-  );
+  const pageUrl = pagedCanonical(`${siteUrl}/label/${slug}`, catalogue.page);
 
   const baseTitle = `${name} · Fluncle`;
 
@@ -83,11 +109,20 @@ function labelHead(loaderData: LabelPageData | undefined) {
         ? `Drum & bass tracks on ${name} that Fluncle recommends, ${findings.length} so far, with the artists behind them.`
         : `Drum & bass records released on ${name}, with the artists behind them.`;
 
+  const artistRange = catalogue.page > 1 ? labelArtistGroupRange(catalogue.groups) : "";
+
   const { description, title } =
     catalogue.page > 1
       ? {
-          description: `Page ${catalogue.page} of the drum & bass artists released on ${name} that Fluncle holds.`,
-          title: `${name}, page ${catalogue.page} · Fluncle`,
+          description: labelArtistGroupDescription(
+            name,
+            catalogue.groups,
+            catalogue.page,
+            catalogue.pageCount,
+          ),
+          title: artistRange
+            ? `${name}, page ${catalogue.page}: ${artistRange} · Fluncle`
+            : `${name}, page ${catalogue.page} · Fluncle`,
         }
       : { description: baseDescription, title: baseTitle };
 
@@ -120,7 +155,14 @@ function labelHead(loaderData: LabelPageData | undefined) {
       { title },
       { content: description, name: "description" },
 
-      ...(indexable ? [] : [{ content: "noindex, follow", name: "robots" }]),
+      ...(!indexable ||
+      shouldNoindexPage({
+        nonDefaultSort: sort !== CATALOGUE_SORT_DEFAULT,
+        page: catalogue.page,
+        upcomingPage: upcoming.page,
+      })
+        ? [{ content: "noindex, follow", name: "robots" }]
+        : []),
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
       { content: imageUrl, property: "og:image" },

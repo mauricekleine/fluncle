@@ -12,6 +12,12 @@ import { tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumCoverAtSize, hubCoverSrcSet } from "@/lib/media";
 import { type HubOrder, hubHref, hubOrderParam } from "@/lib/hub-order";
+import {
+  formatHubTitleSnippet,
+  formatNameList,
+  pagedCanonical,
+  shouldNoindexPage,
+} from "@/lib/paged-indexing";
 import { pageParam, textParam } from "@/lib/search-params";
 import {
   albumsHaveRecentActivity,
@@ -73,19 +79,36 @@ const fetchAlbumsPage = createServerFn({ method: "GET" })
       resolveAlbumsPage(data.page, data.q, data.order ?? "most"),
   );
 
-const title = "Every drum & bass album · Fluncle";
-const description =
+const page1Title = "Every drum & bass album · Fluncle";
+const page1Description =
   "Every drum & bass album, EP and single Fluncle holds, with the artists and labels behind them.";
 
-function pagedMeta(page: number): { description: string; title: string } {
+function albumsPagedContent(
+  page: number,
+  order: HubOrder,
+  albums: AlbumHubEntry[],
+  pageCount: number,
+): { description: string; title: string } {
   if (page <= 1) {
-    return { description, title };
+    return { description: page1Description, title: page1Title };
   }
 
-  return {
-    description: `Page ${page} of every drum & bass album, EP and single Fluncle holds, with the artists and labels behind them.`,
-    title: `Every drum & bass album, page ${page} · Fluncle`,
-  };
+  const names = albums.map((a) => a.name);
+  const titleSnippet = formatHubTitleSnippet(names, order);
+
+  const title = titleSnippet
+    ? `Every drum & bass album, page ${page}: ${titleSnippet} · Fluncle`
+    : `Every drum & bass album, page ${page} · Fluncle`;
+
+  const descListed = names.slice(0, 3);
+  const descRemaining = names.length - descListed.length;
+  const descSnippet = formatNameList(descListed, descRemaining);
+
+  const description = descSnippet
+    ? `Drum & bass albums, EPs and singles Fluncle holds, page ${page} of ${pageCount}: ${descSnippet}.`
+    : `Page ${page} of every drum & bass album, EP and single Fluncle holds, with the artists and labels behind them.`;
+
+  return { description, title };
 }
 
 function albumsHead(loaderData: AlbumsPageData | undefined) {
@@ -94,12 +117,16 @@ function albumsHead(loaderData: AlbumsPageData | undefined) {
   }
 
   const filtered = loaderData.q !== undefined || loaderData.requestedOrder !== "most";
-  const canonical =
-    filtered || loaderData.page <= 1
-      ? `${siteUrl}/albums`
-      : `${siteUrl}/albums?page=${loaderData.page}`;
+  const noindex = filtered || shouldNoindexPage({ page: loaderData.page });
+  const canonical = pagedCanonical(`${siteUrl}/albums`, filtered ? 1 : loaderData.page);
+  const metaPage = filtered ? 1 : loaderData.page;
 
-  const meta = pagedMeta(filtered ? 1 : loaderData.page);
+  const meta = albumsPagedContent(
+    metaPage,
+    loaderData.order,
+    loaderData.hub.items,
+    loaderData.hub.pageCount,
+  );
   const ogImage = `${siteUrl}/api/og/hub?hub=albums`;
   const metaTags = [
     { title: meta.title },
@@ -117,9 +144,11 @@ function albumsHead(loaderData: AlbumsPageData | undefined) {
     { content: ogImage, name: "twitter:image" },
   ];
 
-  if (filtered) {
+  if (noindex) {
     metaTags.push({ content: "noindex, follow", name: "robots" });
+  }
 
+  if (filtered) {
     return { links: [{ href: canonical, rel: "canonical" }], meta: metaTags };
   }
 

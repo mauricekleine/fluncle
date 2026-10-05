@@ -339,6 +339,80 @@ describe("listTracksHubPage — numbered pagination", () => {
     expect(page11.total).toBe(482);
   });
 
+  it.each([
+    { futureCount: 5, retainedHeadCount: 0, tailAnchors: true },
+    { futureCount: 53, retainedHeadCount: 0, tailAnchors: true },
+    { futureCount: 53, retainedHeadCount: 7, tailAnchors: true },
+    { futureCount: 53, retainedHeadCount: 500, tailAnchors: true },
+    { futureCount: 53, retainedHeadCount: 0, tailAnchors: false },
+  ])(
+    "keeps deep release-day pages aligned with offsets for $futureCount future rows, $retainedHeadCount retained head rows, and tail anchors $tailAnchors",
+    async ({ futureCount, retainedHeadCount, tailAnchors }) => {
+      const now = new Date("2026-10-05T12:00:00.000Z");
+      const visibleCount = 581;
+      for (let index = 0; index < visibleCount; index += 1) {
+        await seedTrack({
+          releaseDate: index < retainedHeadCount ? "undated-z" : index < 550 ? "2024-01-01" : null,
+          trackId: `released-${String(index).padStart(3, "0")}`,
+        });
+      }
+      for (let index = 0; index < futureCount; index += 1) {
+        await seedTrack({
+          releaseDate: "2027-01-01",
+          trackId: `future-${String(index).padStart(3, "0")}`,
+        });
+      }
+      const extraction = await db.execute(tracksHubAnchorExtractionQuery({}));
+      const anchors = hubPageAnchorsFromRows(
+        extraction.rows as unknown as Record<string, unknown>[],
+        "rd",
+        TRACKS_HUB_PAGE_SIZE,
+      );
+      const first = await db.execute(tracksHubIdPageQuery({}, 1, 0));
+      const firstId = (first.rows as unknown as { track_id: string }[])[0]?.track_id;
+      await persistHubPageAnchors(
+        TRACKS_HUB_ANCHOR_ADDRESS.hub,
+        TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
+        tailAnchors ? anchors : anchors.filter((anchor) => anchor.page === 2),
+        hubCorpusFingerprint(visibleCount + futureCount, firstId),
+      );
+      const expectedPages = await Promise.all(
+        [11, 12, 13].map((page) =>
+          db.execute(
+            tracksHubIdPageQuery({}, TRACKS_HUB_PAGE_SIZE, (page - 1) * 48, {}, "2026-10-05"),
+          ),
+        ),
+      );
+      const statements: string[] = [];
+      holder.db = {
+        ...db,
+        execute: async (statement: InStatement) => {
+          statements.push(typeof statement === "string" ? statement : statement.sql);
+          return db.execute(statement);
+        },
+      } as Client;
+      const actualPages = [];
+      for (const page of [11, 12, 13]) {
+        actualPages.push(await listTracksHubPage({}, page, now));
+      }
+      for (const [index, actual] of actualPages.entries()) {
+        const expected = expectedPages[index];
+        expect(ids(actual.items)).toEqual(expected?.rows.map((row) => row["track_id"]));
+        expect(actual.total).toBe(visibleCount);
+        expect(actual.pageCount).toBe(13);
+      }
+      const adjacent = actualPages.flatMap((page) => ids(page.items));
+      expect(new Set(adjacent).size).toBe(adjacent.length);
+      expect(statements.some((sql) => sql.includes("row_number() over"))).toBe(
+        retainedHeadCount > 480,
+      );
+      expect(statements.some((sql) => sql.includes("insert into hub_page_anchors"))).toBe(false);
+      await expect(listTracksHubPage({}, 14, now)).rejects.toBeInstanceOf(
+        CatalogueHubPageOutOfRangeError,
+      );
+    },
+  );
+
   it("page 1 of an empty result is a legitimate empty page, never a throw", async () => {
     const page = await listTracksHubPage({ bpmMin: 500 }, 1);
 

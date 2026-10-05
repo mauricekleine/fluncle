@@ -12,6 +12,12 @@ import { tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumCoverAtSize, hubCoverSrcSet } from "@/lib/media";
 import { type HubOrder, hubHref, hubOrderParam } from "@/lib/hub-order";
+import {
+  formatHubTitleSnippet,
+  formatNameList,
+  pagedCanonical,
+  shouldNoindexPage,
+} from "@/lib/paged-indexing";
 import { pageParam, textParam } from "@/lib/search-params";
 import {
   type CatalogueHubNumberedPage,
@@ -73,19 +79,36 @@ const fetchLabelsPage = createServerFn({ method: "GET" })
       resolveLabelsPage(data.page, data.q, data.order ?? "most"),
   );
 
-const title = "Every drum & bass record label · Fluncle";
-const description =
+const page1Title = "Every drum & bass record label · Fluncle";
+const page1Description =
   "Every drum & bass record label Fluncle holds, with the founding facts and lineage that link them.";
 
-function pagedMeta(page: number): { description: string; title: string } {
+function pagedMeta(
+  page: number,
+  order: HubOrder,
+  labels: LabelHubEntry[],
+  pageCount: number,
+): { description: string; title: string } {
   if (page <= 1) {
-    return { description, title };
+    return { description: page1Description, title: page1Title };
   }
 
-  return {
-    description: `Page ${page} of every drum & bass record label Fluncle holds.`,
-    title: `Every drum & bass record label, page ${page} · Fluncle`,
-  };
+  const names = labels.map((l) => l.name);
+  const titleSnippet = formatHubTitleSnippet(names, order);
+
+  const title = titleSnippet
+    ? `Every drum & bass record label, page ${page}: ${titleSnippet} · Fluncle`
+    : `Every drum & bass record label, page ${page} · Fluncle`;
+
+  const descListed = names.slice(0, 3);
+  const descRemaining = names.length - descListed.length;
+  const descSnippet = formatNameList(descListed, descRemaining);
+
+  const description = descSnippet
+    ? `Drum & bass record labels Fluncle holds, page ${page} of ${pageCount}: ${descSnippet}.`
+    : `Page ${page} of every drum & bass record label Fluncle holds.`;
+
+  return { description, title };
 }
 
 function labelsHead(loaderData: LabelsPageData | undefined) {
@@ -94,12 +117,16 @@ function labelsHead(loaderData: LabelsPageData | undefined) {
   }
 
   const filtered = loaderData.q !== undefined || loaderData.requestedOrder !== "most";
-  const canonical =
-    filtered || loaderData.page <= 1
-      ? `${siteUrl}/labels`
-      : `${siteUrl}/labels?page=${loaderData.page}`;
+  const noindex = filtered || shouldNoindexPage({ page: loaderData.page });
+  const canonical = pagedCanonical(`${siteUrl}/labels`, filtered ? 1 : loaderData.page);
+  const metaPage = filtered ? 1 : loaderData.page;
 
-  const meta = pagedMeta(filtered ? 1 : loaderData.page);
+  const meta = pagedMeta(
+    metaPage,
+    loaderData.order,
+    loaderData.hub.items,
+    loaderData.hub.pageCount,
+  );
   const ogImage = `${siteUrl}/api/og/hub?hub=labels`;
   const metaTags = [
     { title: meta.title },
@@ -117,9 +144,11 @@ function labelsHead(loaderData: LabelsPageData | undefined) {
     { content: ogImage, name: "twitter:image" },
   ];
 
-  if (filtered) {
+  if (noindex) {
     metaTags.push({ content: "noindex, follow", name: "robots" });
+  }
 
+  if (filtered) {
     return { links: [{ href: canonical, rel: "canonical" }], meta: metaTags };
   }
 

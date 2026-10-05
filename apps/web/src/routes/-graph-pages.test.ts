@@ -298,9 +298,9 @@ describe("the label page", () => {
 
     const paged = await resolveLabelPageData("hospital-records", "name", 3);
 
-    expect(labelHeadTitle(paged)).toBe("Hospital Records, page 3 · Fluncle");
+    expect(labelHeadTitle(paged)).toBe("Hospital Records, page 3: Nu:Tone · Fluncle");
     expect(labelMetaDescription(paged)).toBe(
-      "Page 3 of the drum & bass artists released on Hospital Records that Fluncle holds.",
+      "Drum & bass on Hospital Records by Nu:Tone, page 3 of 5.",
     );
 
     listLabelCatalogue.mockResolvedValue(labelCatalogue(4));

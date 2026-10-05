@@ -179,7 +179,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     countArtistFindings.mockResolvedValue(0);
     listArtistCatalogue.mockResolvedValue({ ...NO_CATALOGUE, totalTracks: 5 });
 
-    const data = await resolveArtistPageData("drift", "name", 1);
+    const data = await resolveArtistPageData("drift", ARTIST_CATALOGUE_SORT_DEFAULT, 1);
 
     expect(data).toMatchObject({ indexable: true, status: "found" });
     expect(robotsMeta(data)).toBeUndefined();
@@ -225,7 +225,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     ]);
     countArtistFindings.mockResolvedValue(3);
 
-    const data = await resolveArtistPageData("drift", "name", 1);
+    const data = await resolveArtistPageData("drift", ARTIST_CATALOGUE_SORT_DEFAULT, 1);
 
     if (data.status !== "found") {
       throw new Error("expected the artist to be found");

@@ -14,6 +14,12 @@ import { tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumCoverAtSize, hubCoverSrcSet } from "@/lib/media";
 import { type HubOrder, hubHref, hubOrderParam } from "@/lib/hub-order";
+import {
+  formatHubTitleSnippet,
+  formatNameList,
+  pagedCanonical,
+  shouldNoindexPage,
+} from "@/lib/paged-indexing";
 import { pageParam, textParam } from "@/lib/search-params";
 import {
   type ArtistHubEntry,
@@ -113,19 +119,36 @@ const fetchSimilarArtists = createServerFn({ method: "GET" })
     return { names, results };
   });
 
-const title = "Every drum & bass artist · Fluncle";
-const description =
+const page1Title = "Every drum & bass artist · Fluncle";
+const page1Description =
   "Every drum & bass artist Fluncle holds, with the labels that pressed their records.";
 
-function pagedMeta(page: number): { description: string; title: string } {
+function pagedMeta(
+  page: number,
+  order: HubOrder,
+  artists: ArtistHubEntry[],
+  pageCount: number,
+): { description: string; title: string } {
   if (page <= 1) {
-    return { description, title };
+    return { description: page1Description, title: page1Title };
   }
 
-  return {
-    description: `Page ${page} of every drum & bass artist Fluncle holds.`,
-    title: `Every drum & bass artist, page ${page} · Fluncle`,
-  };
+  const names = artists.map((a) => a.name);
+  const titleSnippet = formatHubTitleSnippet(names, order);
+
+  const title = titleSnippet
+    ? `Every drum & bass artist, page ${page}: ${titleSnippet} · Fluncle`
+    : `Every drum & bass artist, page ${page} · Fluncle`;
+
+  const descListed = names.slice(0, 3);
+  const descRemaining = names.length - descListed.length;
+  const descSnippet = formatNameList(descListed, descRemaining);
+
+  const description = descSnippet
+    ? `Drum & bass artists Fluncle holds, page ${page} of ${pageCount}: ${descSnippet}.`
+    : `Page ${page} of every drum & bass artist Fluncle holds.`;
+
+  return { description, title };
 }
 
 function metaTagsFor(canonical: string, meta: { description: string; title: string }) {
@@ -155,22 +178,26 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
 
   if (loaderData.status === "similar") {
     const canonical = `${siteUrl}/artists`;
-    const metaTags = metaTagsFor(canonical, pagedMeta(1));
+    const metaTags = metaTagsFor(canonical, pagedMeta(1, "most", [], 1));
     metaTags.push({ content: "noindex, follow", name: "robots" });
 
     return { links: [{ href: canonical, rel: "canonical" }], meta: metaTags };
   }
 
   const filtered = loaderData.q !== undefined || loaderData.requestedOrder !== "most";
-  const canonical =
-    filtered || loaderData.page <= 1
-      ? `${siteUrl}/artists`
-      : `${siteUrl}/artists?page=${loaderData.page}`;
-  const metaTags = metaTagsFor(canonical, pagedMeta(filtered ? 1 : loaderData.page));
+  const noindex = filtered || shouldNoindexPage({ page: loaderData.page });
+  const canonical = pagedCanonical(`${siteUrl}/artists`, filtered ? 1 : loaderData.page);
+  const metaPage = filtered ? 1 : loaderData.page;
+  const metaTags = metaTagsFor(
+    canonical,
+    pagedMeta(metaPage, loaderData.order, loaderData.hub.items, loaderData.hub.pageCount),
+  );
+
+  if (noindex) {
+    metaTags.push({ content: "noindex, follow", name: "robots" });
+  }
 
   if (filtered) {
-    metaTags.push({ content: "noindex, follow", name: "robots" });
-
     return { links: [{ href: canonical, rel: "canonical" }], meta: metaTags };
   }
 

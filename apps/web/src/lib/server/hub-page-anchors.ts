@@ -127,6 +127,14 @@ export function hubSeekPageQuery(
 ): HubPageQuery {
   const anchor = nearestHubPageAnchor(page, anchors);
   const remainder = (anchor ? page - anchor.page : page - 1) * shape.pageSize;
+  return hubSeekPageQueryFromAnchor(shape, anchor, remainder);
+}
+
+export function hubSeekPageQueryFromAnchor(
+  shape: HubOrderedPageShape,
+  anchor: HubPageAnchor | undefined,
+  remainder: number,
+): HubPageQuery {
   const clauses = anchor ? [...shape.clauses, shape.seekAfter(anchor)] : shape.clauses;
   const prefix = queryPrefix(shape);
   const where = joinedWhere(clauses);

@@ -2,6 +2,12 @@ import { type TracksHubEntry, type TracksHubFilters } from "./server/tracks-hub"
 import { siteUrl } from "./fluncle-links";
 import { jsonLdScript } from "./json-ld";
 import { logPageUrl } from "./log-schema";
+import {
+  formatReleaseSpan,
+  isDatedRelease,
+  pagedCanonical,
+  shouldNoindexPage,
+} from "./paged-indexing";
 import { textParam } from "./search-params";
 import { styleBySlug } from "./search-styles";
 
@@ -11,15 +17,46 @@ export const tracksHubTitle = "Every drum & bass track, newest first · Fluncle"
 export const tracksHubDescription =
   "Every drum & bass track Fluncle holds, newest release first. Filter the whole list by release year, key, and label, or jump straight to a year.";
 
-export function tracksPagedMeta(page: number): { description: string; title: string } {
+export function tracksPagedMeta(
+  page: number,
+  entries?: TracksHubEntry[],
+  pageCount?: number,
+): { description: string; title: string } {
   if (page <= 1) {
     return { description: tracksHubDescription, title: tracksHubTitle };
   }
 
-  return {
-    description: `Page ${page} of every drum & bass track Fluncle holds, newest release first. Filter by release year, key, and label, or jump to a year.`,
-    title: `Every drum & bass track, page ${page} · Fluncle`,
-  };
+  const releaseSpan = entries ? tracksReleaseSpan(entries) : "";
+  const title = releaseSpan
+    ? `Drum & bass tracks ${releaseSpan}, page ${page} · Fluncle`
+    : `Every drum & bass track, page ${page} · Fluncle`;
+
+  const position = pageCount !== undefined ? `, page ${page} of ${pageCount}` : `, page ${page}`;
+  const description = releaseSpan
+    ? `Drum & bass tracks ${releaseSpan}${position}.`
+    : `Page ${page} of every drum & bass track Fluncle holds, newest release first. Filter by release year, key, and label, or jump to a year.`;
+
+  return { description, title };
+}
+
+function tracksReleaseSpan(entries: TracksHubEntry[]): string {
+  let earliest: string | undefined;
+  let latest: string | undefined;
+
+  for (const entry of entries) {
+    const date = entry.releaseDate;
+    if (date === undefined || !isDatedRelease(date)) {
+      continue;
+    }
+    if (earliest === undefined || date < earliest) {
+      earliest = date;
+    }
+    if (latest === undefined || date > latest) {
+      latest = date;
+    }
+  }
+
+  return formatReleaseSpan(earliest, latest);
 }
 
 const heldCountFormatter = new Intl.NumberFormat("en-US");
@@ -199,14 +236,25 @@ export function buildTracksHref(filters: TracksSearch, page: number): string {
   return query ? `/tracks?${query}` : "/tracks";
 }
 
-export type TracksHeadData = { entries: TracksHubEntry[]; page: number; total: number };
+export type TracksHeadData = {
+  entries: TracksHubEntry[];
+  page: number;
+  pageCount?: number;
+  total: number;
+};
 
 export function tracksHead(search: TracksSearch, data: TracksHeadData | undefined) {
   const filtered = tracksSearchHasFilters(search);
   const page = data?.page ?? 1;
 
-  const canonical = filtered || page <= 1 ? `${siteUrl}/tracks` : `${siteUrl}/tracks?page=${page}`;
-  const { description, title } = tracksPagedMeta(filtered ? 1 : page);
+  const canonical = pagedCanonical(`${siteUrl}/tracks`, filtered ? 1 : page);
+  const { description, title } = tracksPagedMeta(
+    filtered ? 1 : page,
+    data?.entries,
+    data?.pageCount,
+  );
+
+  const noindex = filtered || shouldNoindexPage({ page });
 
   const ogImage = `${siteUrl}/api/og/hub?hub=tracks`;
   const meta = [
@@ -225,7 +273,7 @@ export function tracksHead(search: TracksSearch, data: TracksHeadData | undefine
     { content: ogImage, name: "twitter:image" },
   ];
 
-  if (filtered) {
+  if (noindex) {
     meta.push({ content: "noindex, follow", name: "robots" });
   }
 

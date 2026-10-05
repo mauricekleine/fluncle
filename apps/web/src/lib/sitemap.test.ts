@@ -156,7 +156,7 @@ describe("the sitemap index", () => {
 });
 
 describe("a child sitemap", () => {
-  it("puts the static hubs in `pages`", () => {
+  it("puts the static hubs in `pages` without paged query URLs", () => {
     const xml = buildSitemapShardXml("pages", 1, bags({ logs: LOGS })) ?? "";
 
     for (const hub of [
@@ -175,6 +175,10 @@ describe("a child sitemap", () => {
     ]) {
       expect(xml).toContain(`<loc>${siteUrl}${hub}</loc>`);
     }
+
+    expect(xml).not.toContain("?page=");
+    expect(xml).not.toContain("?sort=");
+    expect(xml).not.toContain("?upcomingPage=");
 
     expect(xml).toContain(`<loc>${siteUrl}/about</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/privacy</loc>`);
