@@ -1,5 +1,5 @@
+import { NavLink } from "@/components/nav/nav-links";
 import { CaretRightIcon } from "@phosphor-icons/react";
-import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { siteUrl } from "@/lib/fluncle-links";
 import { serializeJsonLd } from "@/lib/json-ld";
@@ -112,7 +112,7 @@ export function NavBreadcrumb({
           <li key={crumb.label}>
             <CaretRightIcon aria-hidden="true" className="nav-breadcrumb-sep" weight="bold" />
             {crumb.to ? (
-              <Link to={crumb.to as never}>{crumb.label}</Link>
+              <NavLink to={crumb.to as never}>{crumb.label}</NavLink>
             ) : (
               <span aria-current="page" className="nav-breadcrumb-tail">
                 {crumb.label}

@@ -1,3 +1,4 @@
+import { NavLink } from "@/components/nav/nav-links";
 import {
   BinocularsIcon,
   BookmarkSimpleIcon,
@@ -6,7 +7,7 @@ import {
   PlanetIcon,
   SignOutIcon,
 } from "@phosphor-icons/react";
-import { Link, useRouterState } from "@tanstack/react-router";
+import { useRouterState } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import {
   DropdownMenuContent,
@@ -97,15 +98,15 @@ export function CrewMenuContent({ name }: { name: string }): ReactNode {
             key={link.id}
             render={
               link.to ? (
-                <Link aria-current={active ? "page" : undefined} to={link.to} />
+                <NavLink aria-current={active ? "page" : undefined} to={link.to} />
               ) : link.search ? (
-                <Link
+                <NavLink
                   aria-current={active ? "page" : undefined}
                   search={link.search}
                   to="/account"
                 />
               ) : (
-                <Link aria-current={active ? "page" : undefined} to="/account" />
+                <NavLink aria-current={active ? "page" : undefined} to="/account" />
               )
             }
           >

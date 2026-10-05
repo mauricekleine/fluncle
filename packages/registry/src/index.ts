@@ -433,7 +433,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "subdomain",
     name: "subdomain.galaxy",
     operatorNotes:
-      "Isomorphic host-rewrite in apps/web router (input/output) so SSR + hydration agree.",
+      "Isomorphic host-rewrite in apps/web router (input/output) so SSR + hydration agree. Other paths 308 to www except runtime resources; non-root HTML carries noindex.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     subdomain: "galaxy.fluncle.com",
     url: "https://galaxy.fluncle.com",
@@ -443,7 +443,8 @@ export const SURFACES: readonly Surface[] = [
     exposedContent: ["the observation station (root rewrites to /radio)"],
     kind: "subdomain",
     name: "subdomain.radio",
-    operatorNotes: "Isomorphic host-rewrite in apps/web router so SSR + hydration agree.",
+    operatorNotes:
+      "Isomorphic host-rewrite in apps/web router so SSR + hydration agree. Other paths 308 to www except runtime resources; non-root HTML carries noindex.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     subdomain: "radio.fluncle.com",
     url: "https://radio.fluncle.com",
@@ -476,7 +477,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "subdomain",
     name: "subdomain.status",
     operatorNotes:
-      "Isomorphic host-rewrite in apps/web router (input/output) so SSR + hydration agree. The DNS record (status.fluncle.com → the Worker) is the remaining operator step.",
+      "The live root serves /status through an isomorphic host-rewrite so SSR + hydration agree. Non-root HTML carries noindex; chrome links point to www.",
     subdomain: "status.fluncle.com",
     url: "https://status.fluncle.com",
     weights: { status: "tertiary", web: "tertiary" },

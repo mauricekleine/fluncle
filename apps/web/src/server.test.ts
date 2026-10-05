@@ -72,6 +72,21 @@ beforeEach(() => {
 });
 
 describe("server.ts dispatch spine", () => {
+  it("keeps oRPC, MCP and discovery ahead of surface redirects and wraps every HTML result", async () => {
+    const api = await dispatch("https://radio.fluncle.com/api/v1/search?q=a");
+    expect(api.status).toBe(400);
+    expect(api.headers.get("location")).toBeNull();
+    hoisted.handleMcp.mockResolvedValueOnce(new Response("mcp"));
+    expect(await (await dispatch("https://galaxy.fluncle.com/mcp")).text()).toBe("mcp");
+    hoisted.handleAgentDiscovery.mockResolvedValueOnce(
+      new Response("discovery", { headers: { "content-type": "text/html" } }),
+    );
+    const discovery = await dispatch("https://status.fluncle.com/.well-known/test");
+    expect(discovery.headers.get("x-robots-tag")).toBe("noindex");
+    expect(await discovery.text()).toBe("discovery");
+    expect(hoisted.routerFetch).not.toHaveBeenCalled();
+  });
+
   it("keeps the handler promise alive so disconnects cannot strand database leases", async () => {
     const response = await dispatch("https://www.fluncle.com/api/v1/search?q=a");
     const [handlerTask, ...otherTasks] = takeWaitUntilPromises();
@@ -146,7 +161,7 @@ describe("server.ts dispatch spine", () => {
     expect(hoisted.routerFetch).not.toHaveBeenCalled();
   });
 
-  it("negotiates every entity detail path, including trailing-slash redirects", async () => {
+  it("negotiates entity details after permanently normalizing trailing slashes", async () => {
     const entities = [
       ["artist", "sub-focus"],
       ["album", "all-that-jazz"],
@@ -162,8 +177,8 @@ describe("server.ts dispatch spine", () => {
           method,
         );
 
-        expect(trailing.status, `${method} /${kind}/${slug}/`).toBe(406);
-        expect(trailing.headers.get("vary"), `${method} /${kind}/${slug}/`).toBe("Accept");
+        expect(trailing.status, `${method} /${kind}/${slug}/`).toBe(308);
+        expect(trailing.headers.get("location")).toBe(`https://www.fluncle.com/${kind}/${slug}`);
 
         const canonical = await dispatch(
           `https://www.fluncle.com/${kind}/${slug}`,
@@ -258,6 +273,45 @@ describe("server.ts shared-cache isolation", () => {
     return response;
   }
 
+  it("isolates surface-host renders from canonical cache reads and writes", async () => {
+    await dispatchAndSettle("https://www.fluncle.com/albums", { accept: "text/html" });
+    const canonicalEntries = [...entries.keys()];
+    hoisted.routerFetch.mockImplementation(
+      async () => new Response("surface document", { headers: { "content-type": "text/html" } }),
+    );
+
+    const status = await dispatchAndSettle("https://status.fluncle.com/albums", {
+      accept: "text/html",
+    });
+    expect(await status.text()).toBe("surface document");
+    expect(status.headers.get("x-robots-tag")).toBe("noindex");
+    expect(status.headers.get("x-edge-cache")).toBeNull();
+    await dispatchAndSettle("https://status.fluncle.com/artists", { accept: "text/html" });
+    for (const host of ["status", "radio", "galaxy"]) {
+      const root = await dispatchAndSettle(`https://${host}.fluncle.com/`, { accept: "text/html" });
+      expect(root.headers.get("x-edge-cache")).toBeNull();
+      expect(root.headers.get("x-robots-tag")).toBeNull();
+    }
+    expect([...entries.keys()]).toEqual(canonicalEntries);
+    const canonical = await dispatch("https://www.fluncle.com/albums", { accept: "text/html" });
+    expect(await canonical.text()).toBe("router-sentinel");
+    expect(canonical.headers.get("x-robots-tag")).toBeNull();
+    expect(canonical.headers.get("x-edge-cache")).toBe("fresh");
+  });
+
+  it("redirects before HTML negotiation or rendering and applies security headers", async () => {
+    const response = await dispatch(
+      "https://radio.fluncle.com/albums/?page=2",
+      { accept: "application/json" },
+      "HEAD",
+    );
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location")).toBe("https://www.fluncle.com/albums?page=2");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(hoisted.routerFetch).not.toHaveBeenCalled();
+    expect(entries.size).toBe(0);
+  });
+
   it("shared-caches a public hub GET under its canonical key", async () => {
     await dispatchAndSettle("https://www.fluncle.com/artists", { accept: "text/html" });
 
@@ -272,15 +326,6 @@ describe("server.ts shared-cache isolation", () => {
       ["track", "mb_2b1c4d5e"],
     ] as const;
 
-    hoisted.routerFetch.mockImplementation(async (request) => {
-      const path = new URL(request.url).pathname;
-
-      return new Response(null, {
-        headers: { Location: path.slice(0, -1) },
-        status: 307,
-      });
-    });
-
     for (const [kind, slug] of entities) {
       for (const method of ["GET", "HEAD"] as const) {
         const response = await dispatchAndSettle(
@@ -289,9 +334,9 @@ describe("server.ts shared-cache isolation", () => {
           method,
         );
 
-        expect(response.status, `${method} /${kind}/${slug}/`).toBe(307);
+        expect(response.status, `${method} /${kind}/${slug}/`).toBe(308);
         expect(response.headers.get("location"), `${method} /${kind}/${slug}/`).toBe(
-          `/${kind}/${slug}`,
+          `https://www.fluncle.com/${kind}/${slug}`,
         );
       }
     }
@@ -321,7 +366,7 @@ describe("server.ts shared-cache isolation", () => {
     );
   });
 
-  it("answers 406 for JSON-only entity requests without caching either path shape", async () => {
+  it("answers 406 for slashless JSON-only entity requests and redirects slash variants without caching", async () => {
     const entities = [
       ["artist", "sub-focus"],
       ["album", "all-that-jazz"],
@@ -338,10 +383,10 @@ describe("server.ts shared-cache isolation", () => {
             method,
           );
 
-          expect(response.status, `${method} /${kind}/${slug}${suffix}`).toBe(406);
-          expect(response.headers.get("vary"), `${method} /${kind}/${slug}${suffix}`).toBe(
-            "Accept",
-          );
+          expect(response.status, `${method} /${kind}/${slug}${suffix}`).toBe(suffix ? 308 : 406);
+          if (!suffix) {
+            expect(response.headers.get("vary")).toBe("Accept");
+          }
         }
       }
     }

@@ -12,6 +12,8 @@ import { runWithDatabaseRequestScope } from "./lib/server/database-request-scope
 import { handleMcp } from "./lib/server/mcp";
 import { handleOrpc } from "./lib/server/orpc";
 import { withSecurityHeaders } from "./lib/server/security-headers";
+import { presenceRedirect, withPresenceRobots } from "./lib/server/presence-hosts";
+import { subdomainSurfaceRoute } from "./router-rewrite";
 import { serverSentryIntegrations, serverSentryScrubHooks } from "./lib/server/sentry-options";
 import { SENTRY_RELEASE, WORKER_SENTRY_DSN } from "./lib/sentry-config";
 
@@ -38,7 +40,7 @@ const NOISE_TRACE_MATCHERS = [
 const serverEntry = createServerEntry({
   fetch(request) {
     const response = runWithDatabaseRequestScope(async () =>
-      withSecurityHeaders(request, await dispatch(request)),
+      withSecurityHeaders(request, withPresenceRobots(request, await dispatch(request))),
     );
 
     waitUntil(response.catch(() => undefined));
@@ -66,6 +68,12 @@ async function dispatch(request: Request): Promise<Response> {
   }
 
   const url = new URL(request.url);
+  const redirect = presenceRedirect(request);
+
+  if (redirect) {
+    return redirect;
+  }
+
   const cachePolicy = edgeCachePolicyFor(url.pathname, url.search);
   const acceptsHtml = request.headers.get("accept")?.includes("text/html") ?? false;
 
@@ -86,6 +94,7 @@ async function dispatch(request: Request): Promise<Response> {
 
   if (
     cachePolicy &&
+    !subdomainSurfaceRoute(url.hostname) &&
     request.method === "GET" &&
     !hasAdminCookie(request) &&
     (cachePolicy.contentType !== "text/html" || acceptsHtml)

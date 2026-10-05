@@ -58,14 +58,14 @@ On `/fresh`, tracks from one record fold into one release; a record whose tracks
 
 ### Subdomains — sibling hosts on the same Worker
 
-| Surface            | Host                  | Exposes                                                                                               | Weight    |
-| ------------------ | --------------------- | ----------------------------------------------------------------------------------------------------- | --------- |
-| `subdomain.galaxy` | `galaxy.fluncle.com`  | the Galaxy game's front door (root rewrites to `/galaxy`)                                             | primary   |
-| `subdomain.radio`  | `radio.fluncle.com`   | the observation station (root rewrites to `/radio`)                                                   | secondary |
-| `subdomain.found`  | `found.fluncle.com`   | the R2 media zone — each finding's video bundle + mixtape audio + the `/cdn-cgi/media` transform base | tertiary  |
-| `subdomain.dig`    | `dig.fluncle.com`     | the delegated DNS zone's host label (see `dns.zone` for the resolver)                                 | tertiary  |
-| `subdomain.status` | `status.fluncle.com`  | the planned status host — points at `/status` (not yet wired)                                         | tertiary  |
-| `subdomain.onion`  | `…kqo33fyppkqd.onion` | the Tor onion mirror of `www.fluncle.com` — the archive, API, RSS, and MCP over Tor                   | tertiary  |
+| Surface            | Host                  | Exposes                                                                                                                                    | Weight    |
+| ------------------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| `subdomain.galaxy` | `galaxy.fluncle.com`  | the Galaxy game's front door (root rewrites to `/galaxy`); other paths 308 to www, except runtime resources; non-root HTML carries noindex | primary   |
+| `subdomain.radio`  | `radio.fluncle.com`   | the observation station (root rewrites to `/radio`); other paths 308 to www, except runtime resources; non-root HTML carries noindex       | secondary |
+| `subdomain.found`  | `found.fluncle.com`   | the R2 media zone — each finding's video bundle + mixtape audio + the `/cdn-cgi/media` transform base                                      | tertiary  |
+| `subdomain.dig`    | `dig.fluncle.com`     | the delegated DNS zone's host label (see `dns.zone` for the resolver)                                                                      | tertiary  |
+| `subdomain.status` | `status.fluncle.com`  | the status host (root serves `/status`); non-root HTML carries noindex                                                                     | tertiary  |
+| `subdomain.onion`  | `…kqo33fyppkqd.onion` | the Tor onion mirror of `www.fluncle.com` — the archive, API, RSS, and MCP over Tor                                                        | tertiary  |
 
 ### API — the public `/api/v1` surface
 

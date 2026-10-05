@@ -1,8 +1,54 @@
-import { Link } from "@tanstack/react-router";
-import { type ReactNode } from "react";
+import { Link, type LinkProps, useRouter } from "@tanstack/react-router";
+import { type AnchorHTMLAttributes, type ReactNode } from "react";
+import { siteUrl } from "@/lib/fluncle-links";
+import { subdomainSurfaceRoute } from "@/router-rewrite";
 import { navIcon } from "@/components/nav/nav-icons";
 import { type NavItem } from "@/lib/nav-model";
 import { cn } from "@/lib/utils";
+
+export function NavLink({
+  activeOptions,
+  activeProps,
+  children,
+  params,
+  search,
+  to,
+  ...rest
+}: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
+  activeOptions?: LinkProps["activeOptions"];
+  activeProps?: LinkProps["activeProps"];
+  params?: Record<string, string>;
+  search?: Record<string, string>;
+  to: string;
+}): ReactNode {
+  const router = useRouter();
+
+  if (subdomainSurfaceRoute(new URL(router.origin).hostname)) {
+    const location = router.buildLocation({ params: params as never, search: search as never, to });
+    const destination = new URL(siteUrl);
+    destination.pathname = location.pathname;
+    destination.search = location.searchStr;
+
+    return (
+      <a {...rest} href={destination.href}>
+        {children}
+      </a>
+    );
+  }
+
+  return (
+    <Link
+      {...rest}
+      activeOptions={activeOptions}
+      activeProps={activeProps}
+      params={params as never}
+      search={search as never}
+      to={to as never}
+    >
+      {children}
+    </Link>
+  );
+}
 
 export function NavRouteLink({
   children,
@@ -17,16 +63,16 @@ export function NavRouteLink({
   to: string;
 }): ReactNode {
   return (
-    <Link
+    <NavLink
       activeOptions={{ exact: to === "/" }}
       activeProps={{ "aria-current": "page", "data-status": "active" }}
       className={className}
-      params={params as never}
-      to={to as never}
+      params={params}
+      to={to}
       {...rest}
     >
       {children}
-    </Link>
+    </NavLink>
   );
 }
 

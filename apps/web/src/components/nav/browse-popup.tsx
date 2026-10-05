@@ -1,5 +1,5 @@
+import { NavLink } from "@/components/nav/nav-links";
 import { XIcon } from "@phosphor-icons/react";
-import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import {
@@ -49,7 +49,7 @@ export function BrowseDropdownContent({ current, returnFocus, shortcuts }: Popup
             <DropdownMenuItem
               className={active ? "browse-hub browse-hub--active" : "browse-hub"}
               key={hub.id}
-              render={<Link aria-current={active ? "page" : undefined} to={hub.to as never} />}
+              render={<NavLink aria-current={active ? "page" : undefined} to={hub.to as never} />}
             >
               <HubText hub={hub} />
             </DropdownMenuItem>
@@ -66,7 +66,7 @@ export function BrowseDropdownContent({ current, returnFocus, shortcuts }: Popup
                 <DropdownMenuItem
                   className="browse-shortcut"
                   key={`${shortcut.to}:${JSON.stringify(shortcut.search ?? {})}`}
-                  render={<Link search={shortcut.search as never} to={shortcut.to as never} />}
+                  render={<NavLink search={shortcut.search as never} to={shortcut.to as never} />}
                 >
                   {shortcut.label}
                 </DropdownMenuItem>
@@ -110,14 +110,14 @@ export function BrowseSheetContent({
 
             return (
               <li key={hub.id}>
-                <Link
+                <NavLink
                   aria-current={active ? "page" : undefined}
                   className={active ? "browse-hub browse-hub--active" : "browse-hub"}
                   onClick={close}
                   to={hub.to as never}
                 >
                   <HubText hub={hub} />
-                </Link>
+                </NavLink>
               </li>
             );
           })}
@@ -128,14 +128,14 @@ export function BrowseSheetContent({
             <ul className="browse-shortcut-row">
               {shortcuts.items.map((shortcut) => (
                 <li key={`${shortcut.to}:${JSON.stringify(shortcut.search ?? {})}`}>
-                  <Link
+                  <NavLink
                     className="browse-shortcut"
                     onClick={close}
                     search={shortcut.search as never}
                     to={shortcut.to as never}
                   >
                     {shortcut.label}
-                  </Link>
+                  </NavLink>
                 </li>
               ))}
             </ul>
