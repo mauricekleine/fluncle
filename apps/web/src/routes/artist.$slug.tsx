@@ -34,6 +34,12 @@ import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
 import { bioMetaDescription } from "@/lib/meta-description";
 import { albumCoverAtSize } from "@/lib/media";
 import { type CatalogueSort, catalogueSortParam, entityPageHref } from "@/lib/catalogue";
+import {
+  formatNameList,
+  formatNameRange,
+  pagedCanonical,
+  shouldNoindexPage,
+} from "@/lib/paged-indexing";
 import { pageParam } from "@/lib/search-params";
 import { type ArtistPageData, type ArtistSocialLink } from "./-artist-page-data";
 
@@ -81,6 +87,37 @@ const fetchArtist = createServerFn({ method: "GET" })
     return resolveArtistPageData(slug, sort, page, upcomingPage);
   });
 
+function artistRecordNames(
+  groups: Extract<ArtistPageData, { status: "found" }>["catalogue"]["groups"],
+): string[] {
+  return groups.flatMap((group) => (group.name !== undefined ? [group.name] : []));
+}
+
+function artistRecordRange(
+  groups: Extract<ArtistPageData, { status: "found" }>["catalogue"]["groups"],
+): string {
+  const names = artistRecordNames(groups);
+
+  return formatNameRange(names[0], names[names.length - 1]);
+}
+
+function artistRecordDescription(
+  artistName: string,
+  groups: Extract<ArtistPageData, { status: "found" }>["catalogue"]["groups"],
+  page: number,
+  pageCount: number,
+): string {
+  const names = artistRecordNames(groups);
+  const listed = names.slice(0, 3);
+  const remaining = names.length - listed.length;
+  const nameSnippet = formatNameList(listed, remaining);
+  const position = `page ${page} of ${pageCount}`;
+
+  return nameSnippet
+    ? `Drum & bass records by ${artistName} including ${nameSnippet}, ${position}.`
+    : `Page ${page} of the drum & bass records by ${artistName} that Fluncle holds.`;
+}
+
 function artistHead(loaderData: ArtistPageData | undefined) {
   if (loaderData?.status !== "found") {
     return {};
@@ -96,6 +133,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     indexable,
     name,
     slug,
+    sort,
     socials,
     discogsUrl,
     lastfmUrl,
@@ -104,13 +142,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     wikidataQid,
   } = loaderData;
 
-  const pageUrl = entityPageHref(
-    `${siteUrl}/artist/${slug}`,
-    catalogue.page,
-    ARTIST_CATALOGUE_SORT_DEFAULT,
-    ARTIST_CATALOGUE_SORT_DEFAULT,
-    upcoming.page,
-  );
+  const pageUrl = pagedCanonical(`${siteUrl}/artist/${slug}`, catalogue.page);
 
   const baseTitle = `${name} · Fluncle`;
 
@@ -121,13 +153,30 @@ function artistHead(loaderData: ArtistPageData | undefined) {
         ? `Drum & bass tracks by ${name} that Fluncle recommends, ${findings.length} so far, with the labels and releases behind them.`
         : `Drum & bass tracks by ${name}, with the labels and releases behind them.`;
 
+  const recordRange = catalogue.page > 1 ? artistRecordRange(catalogue.groups) : "";
+
   const { description, title } =
     catalogue.page > 1
       ? {
-          description: `Page ${catalogue.page} of the drum & bass records by ${name} that Fluncle holds.`,
-          title: `${name}, page ${catalogue.page} · Fluncle`,
+          description: artistRecordDescription(
+            name,
+            catalogue.groups,
+            catalogue.page,
+            catalogue.pageCount,
+          ),
+          title: recordRange
+            ? `${name}, page ${catalogue.page}: ${recordRange} · Fluncle`
+            : `${name}, page ${catalogue.page} · Fluncle`,
         }
       : { description: baseDescription, title: baseTitle };
+
+  const noindex =
+    !indexable ||
+    shouldNoindexPage({
+      nonDefaultSort: sort !== ARTIST_CATALOGUE_SORT_DEFAULT,
+      page: catalogue.page,
+      upcomingPage: upcoming.page,
+    });
 
   const coverFinding = findings[0];
   const imageUrl =
@@ -184,7 +233,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
       { title },
       { content: description, name: "description" },
 
-      ...(indexable ? [] : [{ content: "noindex, follow", name: "robots" }]),
+      ...(noindex ? [{ content: "noindex, follow", name: "robots" }] : []),
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
       { content: imageUrl, property: "og:image" },

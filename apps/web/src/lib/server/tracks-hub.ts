@@ -22,6 +22,7 @@ import {
   hubOffsetPageQuery,
   hubPageAnchorsFromRows,
   hubSeekPageQuery,
+  hubSeekPageQueryFromAnchor,
   isShallowHubPage,
   loadPersistedHubPageAnchors,
   persistHubPageAnchors,
@@ -416,15 +417,14 @@ export function tracksHubAnchorExtractionQuery(
 export function tracksHubSeekIdPageQuery(
   filters: TracksHubFilters,
   page: number,
-  anchors: HubPageAnchor[],
+  anchors: HubPageAnchor[] | { anchor: HubPageAnchor; offset: number },
   resolved: ResolvedFilterEntities = {},
   today?: string,
 ): { args: (number | string)[]; remainder: number; sql: string } {
-  const query = hubSeekPageQuery(
-    tracksHubOrderedShape(tracksHubClauses(filters, resolved, today)),
-    page,
-    anchors,
-  );
+  const shape = tracksHubOrderedShape(tracksHubClauses(filters, resolved, today));
+  const query = Array.isArray(anchors)
+    ? hubSeekPageQuery(shape, page, anchors)
+    : hubSeekPageQueryFromAnchor(shape, anchors.anchor, anchors.offset);
 
   return { args: query.args, remainder: query.remainder, sql: query.sql };
 }
@@ -604,6 +604,26 @@ function scheduleTracksHubAnchorRefresh(): void {
   );
 }
 
+function nearestReleasedTracksHubAnchor(
+  anchors: HubPageAnchor[],
+  logicalRank: number,
+  futureCount: number,
+  retainedHeadCount: number,
+): HubPageAnchor | undefined {
+  let anchor: HubPageAnchor | undefined;
+  for (const candidate of anchors) {
+    const rank = (candidate.page - 1) * TRACKS_HUB_PAGE_SIZE;
+    if (
+      rank >= futureCount + retainedHeadCount &&
+      rank - futureCount <= logicalRank &&
+      (!anchor || candidate.page > anchor.page)
+    ) {
+      anchor = candidate;
+    }
+  }
+  return anchor;
+}
+
 export async function listTracksHubPage(
   filters: TracksHubFilters,
   page: number,
@@ -617,6 +637,7 @@ export async function listTracksHubPage(
 
   const resolved = await resolveTracksHubEntities(filters);
   const clauses = tracksHubClauses(filters, resolved, today);
+  const unfiltered = tracksHubClauses(filters, resolved).length === 1;
   let total: number;
   let idsResult: Awaited<ReturnType<typeof db.execute>>;
 
@@ -625,10 +646,9 @@ export async function listTracksHubPage(
   const projectedRank = futureCount + Math.max(logicalRank, retainedHeadCount);
   const projectedPage = Math.floor(projectedRank / limit) + 1;
   const projectedSkip = projectedRank % limit;
-  const projectedStart =
-    tracksHubClauses(filters, resolved).length === 1
-      ? await readProjectedTrackHubPageStart(db, TRACKS_HUB_ANCHOR_ADDRESS, limit, projectedPage)
-      : undefined;
+  const projectedStart = unfiltered
+    ? await readProjectedTrackHubPageStart(db, TRACKS_HUB_ANCHOR_ADDRESS, limit, projectedPage)
+    : undefined;
 
   if (projectedStart !== undefined) {
     total = projectedStart.total - futureCount;
@@ -662,7 +682,7 @@ export async function listTracksHubPage(
       countTracksHub(filters, resolved, today, futureCount),
       db.execute(tracksHubIdPageQuery(filters, limit, (page - 1) * limit, resolved, today)),
     ]);
-  } else if (clauses.length > 1) {
+  } else if (!unfiltered || retainedHeadRows > 0) {
     const anchorsPromise = memoizedAggregate(aggregateKey("anchors", clauses), () =>
       extractTracksHubAnchors(filters, resolved, today),
     );
@@ -676,31 +696,49 @@ export async function listTracksHubPage(
     );
   } else {
     const firstQuery = tracksHubIdPageQuery({}, 1, 0);
-    const [resolvedTotal, stored, firstResult] = await Promise.all([
-      countTracksHub(filters, resolved, today, futureCount),
+    const [unfilteredTotal, stored, firstResult] = await Promise.all([
+      countTracksHub(filters, resolved),
       loadPersistedHubPageAnchors(
         TRACKS_HUB_ANCHOR_ADDRESS.hub,
         TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
       ),
       db.execute(firstQuery),
     ]);
-    total = resolvedTotal;
+    total = unfilteredTotal - futureCount;
+    if (page > Math.max(Math.ceil(total / limit), 1)) {
+      throw new CatalogueHubPageOutOfRangeError();
+    }
     const firstId = typedRows<{ track_id: string }>(firstResult.rows)[0]?.track_id;
     const decision = persistedAnchorDecision(
       page,
       limit,
       stored,
-      hubCorpusFingerprint(total, firstId),
+      hubCorpusFingerprint(unfilteredTotal, firstId),
     );
 
     if (decision.refresh) {
       scheduleTracksHubAnchorRefresh();
     }
 
-    idsResult = await db.execute(
+    const anchor =
       decision.mode === "seek" && stored
-        ? tracksHubSeekIdPageQuery(filters, page, stored.anchors, resolved)
-        : tracksHubIdPageQuery(filters, limit, (page - 1) * limit, resolved),
+        ? nearestReleasedTracksHubAnchor(
+            stored.anchors,
+            logicalRank,
+            futureCount,
+            retainedHeadCount,
+          )
+        : undefined;
+    idsResult = await db.execute(
+      anchor
+        ? tracksHubSeekIdPageQuery(
+            filters,
+            page,
+            { anchor, offset: logicalRank - ((anchor.page - 1) * limit - futureCount) },
+            resolved,
+            today,
+          )
+        : tracksHubIdPageQuery(filters, limit, logicalRank, resolved, today),
     );
   }
 

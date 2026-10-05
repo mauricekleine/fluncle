@@ -180,6 +180,7 @@ export const Route = createFileRoute("/tracks")({
       ? tracksHead(loaderData.filters, {
           entries: loaderData.hub.items,
           page: loaderData.hub.page,
+          pageCount: loaderData.hub.pageCount,
           total: loaderData.hub.total,
         })
       : {},
