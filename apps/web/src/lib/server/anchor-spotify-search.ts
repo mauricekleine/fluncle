@@ -2,14 +2,17 @@ import { logEvent } from "./log";
 import {
   getSpotifyAnchorBreakerState,
   getSpotifyAnchorQuotaUntil,
+  SPOTIFY_ANCHOR_BREAKER_KEYS,
   SPOTIFY_ANCHOR_BREAKER_REASON_QUOTA,
 } from "./spotify-anchor-breaker";
-import { getSetting, setSetting } from "./settings";
+import { getSetting, getSettings, setSetting } from "./settings";
 import {
   isSpotifyCallBudgetAvailable,
   readSpotifyConsumerDailyBudget,
   readSpotifyConsumerDailyCallsSpent,
   readSpotifyQuotaHoldUntil,
+  SPOTIFY_ANCHOR_DAILY_BUDGET_KEY,
+  SPOTIFY_QUOTA_HOLD_UNTIL_KEY,
 } from "./spotify-budget";
 
 export const ANCHOR_SPOTIFY_SEARCH_ENABLED_KEY = "anchor_spotify_search_enabled";
@@ -76,12 +79,16 @@ export async function anchorSpotifySearchGate(now: Date): Promise<AnchorSpotifyG
   }
 
   try {
-    const breaker = await getSpotifyAnchorBreakerState(now.getTime());
+    const values = await getSettings([
+      ...SPOTIFY_ANCHOR_BREAKER_KEYS,
+      SPOTIFY_QUOTA_HOLD_UNTIL_KEY,
+    ]);
+    const breaker = await getSpotifyAnchorBreakerState(now.getTime(), values);
     const validTrip = breaker.trippedAt !== null && !Number.isNaN(Date.parse(breaker.trippedAt));
     if (breaker.tripped && !validTrip) {
       return { nextEligibleAt: null, reason: "breaker_throttle" };
     }
-    const quotaUntil = await getSpotifyAnchorQuotaUntil(now.getTime());
+    const quotaUntil = await getSpotifyAnchorQuotaUntil(now.getTime(), values);
     const quotaHoldEnd = Date.UTC(
       now.getUTCFullYear(),
       now.getUTCMonth(),
@@ -134,11 +141,16 @@ export async function anchorSpotifySearchAllowed(now: Date): Promise<boolean> {
 
 export async function anchorSpotifyBreakerAllows(now: Date): Promise<boolean> {
   try {
+    const values = await getSettings([
+      ...SPOTIFY_ANCHOR_BREAKER_KEYS,
+      SPOTIFY_QUOTA_HOLD_UNTIL_KEY,
+      SPOTIFY_ANCHOR_DAILY_BUDGET_KEY,
+    ]);
     const [breaker, holdUntil, spent, budget, meterAvailable] = await Promise.all([
-      getSpotifyAnchorBreakerState(now.getTime()),
-      readSpotifyQuotaHoldUntil(now.getTime()),
+      getSpotifyAnchorBreakerState(now.getTime(), values),
+      readSpotifyQuotaHoldUntil(now.getTime(), values),
       readSpotifyConsumerDailyCallsSpent("anchor", now.getTime()),
-      readSpotifyConsumerDailyBudget("anchor"),
+      readSpotifyConsumerDailyBudget("anchor", values),
       isSpotifyCallBudgetAvailable(now.getTime()),
     ]);
     return (

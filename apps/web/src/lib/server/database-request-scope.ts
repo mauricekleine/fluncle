@@ -32,6 +32,17 @@ type RequestTransactionAdmission = {
 };
 
 const databaseRequestScope = new AsyncLocalStorage<DatabaseRequestScope>();
+const SETTINGS_MEMO_KEY = Symbol("fluncle.settings-memo");
+
+export function getRequestScopedSettingsMemo():
+  | Map<string, Promise<string | undefined>>
+  | undefined {
+  return getRequestScopedValue(SETTINGS_MEMO_KEY, () => new Map());
+}
+
+export function clearRequestScopedSettingsMemo(): void {
+  getRequestScopedSettingsMemo()?.clear();
+}
 
 export function runWithDatabaseRequestScope<Result>(run: () => Result): Result {
   if (databaseRequestScope.getStore() !== undefined) {

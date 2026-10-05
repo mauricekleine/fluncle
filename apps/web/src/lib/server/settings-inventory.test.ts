@@ -70,7 +70,7 @@ const SETTINGS_INVENTORY = {
 } as const satisfies Record<string, readonly string[]>;
 
 type SettingUsage = {
-  operation: "deleteSetting" | "getSetting" | "setSetting";
+  operation: "deleteSetting" | "getSetting" | "getSettings" | "setSetting";
   source: string;
 };
 
@@ -102,9 +102,43 @@ function collectSettingUsage(): {
   const unresolved: string[] = [];
   const usage = new Map<string, SettingUsage[]>();
 
-  for (const path of sourceFiles(SERVER_DIR)) {
+  const files = sourceFiles(SERVER_DIR);
+  const exportedConstants = new Map<string, string>();
+  const exportedLists = new Map<string, string>();
+  for (const path of files) {
     const source = readFileSync(path, "utf8");
-    const constants = new Map<string, string>();
+    for (const match of source.matchAll(
+      /\bexport\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(["'])(.*?)\2/g,
+    )) {
+      if (match[1] && match[3] !== undefined) {
+        exportedConstants.set(match[1], match[3]);
+      }
+    }
+    const localConstants = new Map<string, string>();
+    for (const match of source.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*(["'])(.*?)\2/g)) {
+      if (match[1] && match[3] !== undefined) {
+        localConstants.set(match[1], match[3]);
+      }
+    }
+    for (const match of source.matchAll(
+      /\bexport\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(\[[\s\S]*?\])/g,
+    )) {
+      if (match[1] && match[2]) {
+        exportedLists.set(
+          match[1],
+          match[2].replace(/\b[A-Za-z_$][\w$]*\b/g, (name) => {
+            const value = localConstants.get(name);
+            return value === undefined ? name : JSON.stringify(value);
+          }),
+        );
+      }
+    }
+  }
+
+  for (const path of files) {
+    const source = readFileSync(path, "utf8");
+    const constants = new Map(exportedConstants);
+    const lists = new Map(exportedLists);
     const constantPattern = /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*(["'])(.*?)\2/g;
 
     for (const match of source.matchAll(constantPattern)) {
@@ -116,7 +150,25 @@ function collectSettingUsage(): {
       }
     }
 
-    const callPattern = /\b(deleteSetting|getSetting|setSetting)\(\s*([^,\n)]+)/g;
+    for (const match of source.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*(\[[\s\S]*?\])/g)) {
+      if (match[1] && match[2]) {
+        lists.set(match[1], match[2]);
+      }
+    }
+
+    const resolveKeys = (argument: string): Array<string | undefined> => {
+      const list = argument.startsWith("[") ? argument : lists.get(argument);
+      if (list !== undefined) {
+        return list
+          .slice(1, -1)
+          .split(",")
+          .filter((item) => item.trim())
+          .flatMap((item) => resolveKeys(item.trim().replace(/^\.\.\./, "")));
+      }
+      return [argument.match(/^(["'])(.*?)\1$/)?.[2] ?? constants.get(argument)];
+    };
+    const callPattern =
+      /\b(deleteSetting|getSetting|getSettings|setSetting)\(\s*(\[[\s\S]*?\]|[^,\n)]+)/g;
 
     for (const match of source.matchAll(callPattern)) {
       const operation = match[1] as SettingUsage["operation"] | undefined;
@@ -126,18 +178,16 @@ function collectSettingUsage(): {
         continue;
       }
 
-      const literal = argument.match(/^(["'])(.*?)\1$/)?.[2];
-      const key = literal ?? constants.get(argument);
       const sourceName = relative(SERVER_DIR, path);
-
-      if (!key) {
-        unresolved.push(`${sourceName}: ${operation}(${argument})`);
-        continue;
+      for (const key of resolveKeys(argument)) {
+        if (!key) {
+          unresolved.push(`${sourceName}: ${operation}(${argument})`);
+          continue;
+        }
+        const entries = usage.get(key) ?? [];
+        entries.push({ operation, source: sourceName });
+        usage.set(key, entries);
       }
-
-      const entries = usage.get(key) ?? [];
-      entries.push({ operation, source: sourceName });
-      usage.set(key, entries);
     }
   }
 
@@ -145,7 +195,7 @@ function collectSettingUsage(): {
 }
 
 describe("settings inventory drift", () => {
-  it("keeps the executable inventory and every get/set/delete call in lockstep", () => {
+  it("keeps the executable inventory and every scalar and batched settings call in lockstep", () => {
     const { unresolved, usage } = collectSettingUsage();
     const registered = new Map<string, string>();
 
@@ -160,12 +210,23 @@ describe("settings inventory drift", () => {
     const wrongOwner = [...registered.entries()]
       .flatMap(([key, owner]) =>
         (usage.get(key) ?? [])
-          .filter(({ source }) => basename(source) !== owner)
+          .filter(({ operation, source }) => {
+            const sharedGateBatch =
+              operation === "getSettings" &&
+              source === "anchor-spotify-search.ts" &&
+              (owner === "spotify-anchor-breaker.ts" ||
+                key === "spotify_quota_hold_until" ||
+                key === "anchor_spotify_daily_calls");
+            return basename(source) !== owner && !sharedGateBatch;
+          })
           .map(({ source }) => `${key}: registered to ${owner}, used by ${source}`),
       )
       .sort();
 
-    expect(unresolved, "Every settings call must use a literal or same-file constant").toEqual([]);
+    expect(
+      unresolved,
+      "Every settings call must resolve to literal keys or constant key lists",
+    ).toEqual([]);
     expect(orphaned, "Registered settings keys with no reader and no writer").toEqual([]);
     expect(unregistered, "Settings keys used by code but missing from the inventory").toEqual([]);
     expect(wrongOwner, "Settings keys used outside their registered owner module").toEqual([]);

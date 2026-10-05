@@ -1,5 +1,5 @@
 import { getDb } from "../db";
-import { getHealthSnapshotReceiptCutoverDispositionFor } from "../health-receipt-cutover";
+import { getHealthSnapshotReceiptCutoverDisposition } from "../health-receipt-cutover";
 import { logEvent } from "../log";
 import {
   inspectOperationReceipt,
@@ -84,7 +84,7 @@ export function adminOperationReceiptHandlers(os: Implementer) {
             return { ok: true as const, receipt: inspectionSummary(inspection) };
           }
 
-          const cutover = await getHealthSnapshotReceiptCutoverDispositionFor(db);
+          const cutover = await getHealthSnapshotReceiptCutoverDisposition();
           if (cutover === "unavailable") {
             throw new ApiError(
               "operation_receipt_cutover_unavailable",

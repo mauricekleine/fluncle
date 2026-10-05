@@ -1,6 +1,6 @@
 import { makeBreaker, makeCallWindow, type BreakerPatch } from "./breaker";
 import { runServerEffect } from "./effect/runtime";
-import { getSetting, setSetting } from "./settings";
+import { getSetting, getSettings, setSetting } from "./settings";
 
 export const APPLE_BREAKER_TRIPPED_AT_KEY = "apple_auth_breaker_tripped_at";
 
@@ -52,10 +52,9 @@ export type AppleBreakerState = {
 };
 
 export async function getAppleBreakerState(now: number = Date.now()): Promise<AppleBreakerState> {
-  const [trippedAt, failures] = await Promise.all([
-    getSetting(APPLE_BREAKER_TRIPPED_AT_KEY),
-    getSetting(APPLE_BREAKER_FAILURES_KEY),
-  ]);
+  const values = await getSettings([APPLE_BREAKER_TRIPPED_AT_KEY, APPLE_BREAKER_FAILURES_KEY]);
+  const trippedAt = values.get(APPLE_BREAKER_TRIPPED_AT_KEY);
+  const failures = values.get(APPLE_BREAKER_FAILURES_KEY);
 
   const verdict = appleBreakerVerdict({ now, trippedAt: trippedAt ?? null });
 
@@ -96,10 +95,9 @@ export async function resetAppleBreaker(): Promise<AppleBreakerState> {
 }
 
 export async function readAppleCallCount(now: number = Date.now()): Promise<number> {
-  const [start, count] = await Promise.all([
-    getSetting(APPLE_CALLS_WINDOW_START_KEY),
-    getSetting(APPLE_CALLS_WINDOW_COUNT_KEY),
-  ]);
+  const values = await getSettings([APPLE_CALLS_WINDOW_START_KEY, APPLE_CALLS_WINDOW_COUNT_KEY]);
+  const start = values.get(APPLE_CALLS_WINDOW_START_KEY);
+  const count = values.get(APPLE_CALLS_WINDOW_COUNT_KEY);
 
   return callWindow.count(start, count, now);
 }
@@ -109,10 +107,9 @@ export async function isAppleCallBudgetAvailable(now: number = Date.now()): Prom
 }
 
 export async function recordAppleCall(now: number = Date.now()): Promise<void> {
-  const [start, count] = await Promise.all([
-    getSetting(APPLE_CALLS_WINDOW_START_KEY),
-    getSetting(APPLE_CALLS_WINDOW_COUNT_KEY),
-  ]);
+  const values = await getSettings([APPLE_CALLS_WINDOW_START_KEY, APPLE_CALLS_WINDOW_COUNT_KEY]);
+  const start = values.get(APPLE_CALLS_WINDOW_START_KEY);
+  const count = values.get(APPLE_CALLS_WINDOW_COUNT_KEY);
 
   const patch = await runServerEffect(callWindow.record(start, count, now));
 

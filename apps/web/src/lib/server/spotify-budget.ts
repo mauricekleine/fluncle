@@ -43,8 +43,13 @@ const CONSUMER_BUDGETS: Record<
   },
 };
 
-export async function readSpotifyQuotaHoldUntil(now = Date.now()): Promise<null | string> {
-  const raw = await getSetting(SPOTIFY_QUOTA_HOLD_UNTIL_KEY);
+export async function readSpotifyQuotaHoldUntil(
+  now = Date.now(),
+  settings?: ReadonlyMap<string, string | undefined>,
+): Promise<null | string> {
+  const raw = settings
+    ? settings.get(SPOTIFY_QUOTA_HOLD_UNTIL_KEY)
+    : await getSetting(SPOTIFY_QUOTA_HOLD_UNTIL_KEY);
   if (!raw) {
     return null;
   }
@@ -85,10 +90,18 @@ export async function recordSpotifyQuotaHold(
 
 export async function readSpotifyConsumerDailyBudget(
   consumer: Exclude<SpotifyConsumer, "cosmetic" | "essential" | "frontier">,
+  settings?: ReadonlyMap<string, string | undefined>,
 ): Promise<number> {
   const config = CONSUMER_BUDGETS[consumer];
-  const raw =
-    consumer === "anchor"
+  const raw = settings
+    ? settings.get(
+        consumer === "anchor"
+          ? SPOTIFY_ANCHOR_DAILY_BUDGET_KEY
+          : consumer === "artist_images"
+            ? SPOTIFY_ARTIST_DAILY_BUDGET_KEY
+            : SPOTIFY_PUBLIC_SEARCH_DAILY_BUDGET_KEY,
+      )
+    : consumer === "anchor"
       ? await getSetting(SPOTIFY_ANCHOR_DAILY_BUDGET_KEY)
       : consumer === "artist_images"
         ? await getSetting(SPOTIFY_ARTIST_DAILY_BUDGET_KEY)

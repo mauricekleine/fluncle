@@ -4,6 +4,7 @@ const store = new Map<string, string>();
 
 vi.mock("./settings", () => ({
   getSetting: async (key: string) => store.get(key),
+  getSettings: async (keys: readonly string[]) => new Map(keys.map((key) => [key, store.get(key)])),
   setSetting: async (key: string, value: string) => {
     store.set(key, value);
   },

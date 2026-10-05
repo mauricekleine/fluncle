@@ -1,5 +1,5 @@
 import { getDb, typedRow } from "./db";
-import { getSetting, setSetting } from "./settings";
+import { getSetting, getSettings, setSetting } from "./settings";
 
 export const CATALOGUE_CAPTURE_PAUSED_KEY = "catalogue_capture_paused";
 
@@ -85,14 +85,23 @@ export async function setCatalogueCapturePaused(paused: boolean): Promise<void> 
 }
 
 export async function getCatalogueCaptureBudget(): Promise<CatalogueCaptureBudget> {
-  const [tracks, bytes] = await Promise.all([
-    getSetting(CATALOGUE_CAPTURE_DAILY_TRACKS_KEY),
-    getSetting(CATALOGUE_CAPTURE_DAILY_BYTES_KEY),
-  ]);
+  return captureBudgetFromSettings(
+    await getSettings([CATALOGUE_CAPTURE_DAILY_TRACKS_KEY, CATALOGUE_CAPTURE_DAILY_BYTES_KEY]),
+  );
+}
 
+function captureBudgetFromSettings(
+  values: ReadonlyMap<string, string | undefined>,
+): CatalogueCaptureBudget {
   return {
-    dailyBytes: parseBudgetNumber(bytes, DEFAULT_DAILY_BYTES),
-    dailyTracks: parseBudgetNumber(tracks, DEFAULT_DAILY_TRACKS),
+    dailyBytes: parseBudgetNumber(
+      values.get(CATALOGUE_CAPTURE_DAILY_BYTES_KEY),
+      DEFAULT_DAILY_BYTES,
+    ),
+    dailyTracks: parseBudgetNumber(
+      values.get(CATALOGUE_CAPTURE_DAILY_TRACKS_KEY),
+      DEFAULT_DAILY_TRACKS,
+    ),
   };
 }
 
@@ -137,11 +146,16 @@ export async function readCatalogueCaptureSpend(
 export async function getCatalogueCaptureState(
   nowMs: number = Date.now(),
 ): Promise<CatalogueCaptureState> {
-  const [paused, budget, spend] = await Promise.all([
-    isCatalogueCapturePaused(),
-    getCatalogueCaptureBudget(),
+  const [values, spend] = await Promise.all([
+    getSettings([
+      CATALOGUE_CAPTURE_PAUSED_KEY,
+      CATALOGUE_CAPTURE_DAILY_TRACKS_KEY,
+      CATALOGUE_CAPTURE_DAILY_BYTES_KEY,
+    ]),
     readCatalogueCaptureSpend(nowMs),
   ]);
+  const paused = values.get(CATALOGUE_CAPTURE_PAUSED_KEY) !== "false";
+  const budget = captureBudgetFromSettings(values);
 
   return {
     budget,
@@ -159,14 +173,17 @@ export async function isCatalogueCaptureOpen(nowMs: number = Date.now()): Promis
 export async function readCatalogueCaptureAdmission(
   nowMs: number = Date.now(),
 ): Promise<{ open: boolean; remainingTracks: number }> {
-  if (await isCatalogueCapturePaused()) {
+  const values = await getSettings([
+    CATALOGUE_CAPTURE_PAUSED_KEY,
+    CATALOGUE_CAPTURE_DAILY_TRACKS_KEY,
+    CATALOGUE_CAPTURE_DAILY_BYTES_KEY,
+  ]);
+  if (values.get(CATALOGUE_CAPTURE_PAUSED_KEY) !== "false") {
     return { open: false, remainingTracks: 0 };
   }
 
-  const [budget, spend] = await Promise.all([
-    getCatalogueCaptureBudget(),
-    readCatalogueCaptureSpend(nowMs),
-  ]);
+  const budget = captureBudgetFromSettings(values);
+  const spend = await readCatalogueCaptureSpend(nowMs);
   const { open, remainingTracks } = catalogueCaptureVerdict({ budget, paused: false, spend });
 
   return { open, remainingTracks };
