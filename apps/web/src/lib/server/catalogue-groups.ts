@@ -180,7 +180,9 @@ export async function listArtistUpcoming(
     }),
     db.execute({
       args: [artistId, artistId, today, artistId, today],
-      sql: `select count(*) as total from (${candidate}) artist_tracks
+      sql: `select count(*) as total,
+                 sum(exists (select 1 from findings where findings.track_id = tracks.track_id and findings.log_id is not null)) as finding_total
+          from (${candidate}) artist_tracks
           join tracks on tracks.track_id = artist_tracks.track_id where ${predicate}`,
     }),
   ]);
@@ -207,7 +209,9 @@ export async function listLabelUpcoming(
     }),
     db.execute({
       args: [labelId, today],
-      sql: `select count(*) as total from tracks indexed by tracks_label_cover_idx where ${predicate}`,
+      sql: `select count(*) as total,
+                 sum(exists (select 1 from findings where findings.track_id = tracks.track_id and findings.log_id is not null)) as finding_total
+          from tracks indexed by tracks_label_cover_idx where ${predicate}`,
     }),
   ]);
   return upcomingPageFromRows(result.rows, count.rows, page);
@@ -218,7 +222,8 @@ async function upcomingPageFromRows(
   countRows: Awaited<ReturnType<Client["execute"]>>["rows"],
   page: number,
 ): Promise<UpcomingTrackPage> {
-  const total = Number(typedRows<{ total: number }>(countRows)[0]?.total ?? 0);
+  const counts = typedRows<{ finding_total: number | null; total: number }>(countRows)[0];
+  const total = Number(counts?.total ?? 0);
   const pageCount = Math.max(Math.ceil(total / GRAPH_GROUP_ROW_CEILING), 1);
   if (page > pageCount) {
     throw new CataloguePageOutOfRangeError();
@@ -228,6 +233,7 @@ async function upcomingPageFromRows(
     pageRows.filter((row) => row.log_id !== null).map((row) => row.track_id),
   );
   return {
+    findingTotal: Number(counts?.finding_total ?? 0),
     findings,
     page,
     pageCount,
@@ -460,11 +466,13 @@ export async function listLabelCatalogue(
 
   const totalTracks = Number(rows[0]?.total_tracks ?? 0);
   const totalGroups = Number(rows[0]?.total_groups ?? 0);
-  let removed = 0;
+  const removed = new Set<string>();
   const groups = intoGroups(rows).map(({ head, rows: held }) => {
     const records = intoRecords(held);
 
-    removed += records.removed;
+    for (const trackId of records.removed) {
+      removed.add(trackId);
+    }
 
     return {
       name: head.group_name,
@@ -481,7 +489,10 @@ export async function listLabelCatalogue(
     pageCount: Math.max(Math.ceil(totalGroups / GRAPH_GROUP_PAGE_SIZE), 1),
     totalGroups,
 
-    totalTracks: Math.max(totalTracks - removed, flattenArtistGroups(groups).length),
+    totalTracks: Math.max(
+      totalTracks - removed.size,
+      new Set(flattenArtistGroups(groups).map((track) => track.trackId)).size,
+    ),
   };
 }
 
@@ -504,7 +515,7 @@ function intoGroups(
   return groups;
 }
 
-function intoRecords(rows: GroupTrackRow[]): { records: CatalogueRecord[]; removed: number } {
+function intoRecords(rows: GroupTrackRow[]): { records: CatalogueRecord[]; removed: string[] } {
   const buckets: GroupTrackRow[][] = [];
   const index = new Map<string, GroupTrackRow[]>();
 
@@ -523,11 +534,12 @@ function intoRecords(rows: GroupTrackRow[]): { records: CatalogueRecord[]; remov
     buckets.push(bucket);
   }
 
-  let removed = 0;
+  const removed: string[] = [];
   const records = buckets.map((bucket) => {
     const deduped = dedupeByRecordingIdentity(bucket, groupRowIdentity);
+    const kept = new Set(deduped.map((row) => row.track_id));
 
-    removed += bucket.length - deduped.length;
+    removed.push(...bucket.filter((row) => !kept.has(row.track_id)).map((row) => row.track_id));
 
     const head = bucket[0];
 

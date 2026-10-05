@@ -45,7 +45,6 @@ const TAGLINE_SITES = [
   "apps/web/src/lib/identity.ts",
   "apps/web/src/lib/server/bluesky.ts",
   "apps/web/src/lib/server/orpc.ts",
-  "apps/web/src/routes/__root.tsx",
   "apps/web/src/routes/atom[.]xml.ts",
   "apps/web/src/routes/feed[.]json.ts",
   "apps/web/src/routes/findings.tsx",

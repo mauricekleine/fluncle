@@ -13,10 +13,11 @@ import { printConsoleGreeting } from "@/lib/console-greeting";
 import { findingToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { fluncleEntityRef, fluncleWebsiteId, siteUrl } from "@/lib/fluncle-links";
 import { frontDoorCount } from "@/lib/front-door";
-import { fluncleDescription } from "@/lib/identity";
+import { fluncleDescription, fluncleMetaDescription, fluncleSiteTitle } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import { logPageUrl } from "@/lib/log-schema";
 import { coverPreloadLink } from "@/lib/media";
+import { twitterCardMeta } from "@/lib/page-meta";
 import { registerWebMcpTools } from "@/lib/webmcp";
 
 const fetchFrontDoorData = createServerFn({ method: "GET" }).handler(async () => {
@@ -47,6 +48,12 @@ export const Route = createFileRoute("/")({
         coverPreloadLink(loaderData?.lead?.albumImageUrl, LEAD_COVER_SIZE, LEAD_COVER_SIZES),
       ].filter((link) => link !== undefined),
     ],
+
+    meta: twitterCardMeta({
+      description: fluncleMetaDescription,
+      imageUrl: `${siteUrl}/fluncle-cover.png`,
+      title: fluncleSiteTitle,
+    }),
 
     scripts: [
       jsonLdScript({

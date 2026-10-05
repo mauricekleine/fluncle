@@ -17,9 +17,9 @@ import { entityFreshChannel } from "@/lib/fresh-feed-rss";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
 import { labelBreadcrumbsJsonLd, recordLabelJsonLd } from "@/lib/log-schema";
-import { bioMetaDescription } from "@/lib/meta-description";
 import { FINDING_COVER_SIZES } from "@/components/graph-sections";
 import { albumCoverAtSize, coverPreloadLink } from "@/lib/media";
+import { labelMetaDescription, labelPageTitle } from "@/lib/page-meta";
 import {
   CATALOGUE_SORT_DEFAULT,
   type CatalogueSort,
@@ -101,15 +101,6 @@ function labelHead(loaderData: LabelPageData | undefined) {
 
   const pageUrl = pagedCanonical(`${siteUrl}/label/${slug}`, catalogue.page);
 
-  const baseTitle = `${name} · Fluncle`;
-
-  const baseDescription =
-    bio !== undefined
-      ? bioMetaDescription(bio)
-      : findings.length > 0
-        ? `Drum & bass tracks on ${name} that Fluncle recommends, ${findings.length} so far, with the artists behind them.`
-        : `Drum & bass records released on ${name}, with the artists behind them.`;
-
   const artistRange = catalogue.page > 1 ? labelArtistGroupRange(catalogue.groups) : "";
 
   const { description, title } =
@@ -125,7 +116,19 @@ function labelHead(loaderData: LabelPageData | undefined) {
             ? `${name}, page ${catalogue.page}: ${artistRange} · Fluncle`
             : `${name}, page ${catalogue.page} · Fluncle`,
         }
-      : { description: baseDescription, title: baseTitle };
+      : {
+          description: labelMetaDescription({
+            artistNames: [
+              ...artists.map((artist) => artist.name),
+              ...catalogue.groups.map((group) => group.name),
+            ],
+            bio,
+            findingCount: findings.length + upcoming.findingTotal,
+            name,
+            trackCount: catalogue.totalTracks + findings.length + upcoming.total,
+          }),
+          title: labelPageTitle(name),
+        };
 
   const coverFinding = findings[0];
   const imageUrl =

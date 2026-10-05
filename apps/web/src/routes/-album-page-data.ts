@@ -17,6 +17,7 @@ export type AlbumPageData =
       bio: string | undefined;
 
       catalogue: CatalogueTrackItem[];
+      catalogueTotal: number;
 
       catalogNumber: string | undefined;
       coverImageUrl: string | undefined;
@@ -63,6 +64,7 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     bio: album.bio,
     catalogNumber: album.discogsCatno,
     catalogue: catalogue.tracks,
+    catalogueTotal: catalogue.total,
 
     coverImageUrl: findings[0]?.albumImageUrl,
     findings,

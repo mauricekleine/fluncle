@@ -81,7 +81,7 @@ On the third attempt, a bio that **failed** the automated voice gate is stored a
 | Surface                                                                | Form                                                                                                                                                                         |
 | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/artist/<slug>`, `/label/<slug>`, `/album/<slug>` page body           | full text                                                                                                                                                                    |
-| `<meta name="description">` + `og:description` + `twitter:description` | truncated to ≤160 chars at a sentence boundary (`lib/meta-description.ts`)                                                                                                   |
+| `<meta name="description">` + `og:description` + `twitter:description` | leading whole sentences, then the page's facts, ≤160 chars (`lib/page-meta.ts`); the bio alone, cut at a sentence boundary, when no sentence leaves room for the facts       |
 | The `GraphLink` hover card (`components/graph-link.tsx`)               | full text in the DOM, clamped to 4 lines by CSS only — and it appears **away from the entity's own page**: the homepage feed, log pages, the hub indexes, `/recommendations` |
 
 The **machine-readable discovery layer** is the half that surprises people, because none of it is page copy and all of it carries the paragraph in full:

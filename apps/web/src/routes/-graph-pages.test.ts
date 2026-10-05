@@ -50,6 +50,7 @@ vi.mock("@/lib/server/tracks", async (importOriginal) => ({
 }));
 
 const { Route: LabelRoute } = await import("./label.$slug");
+const { Route: AlbumRoute } = await import("./album.$slug");
 
 const { resolveLabelPageData } = await import("./-label-page-data");
 const { resolveAlbumPageData } = await import("./-album-page-data");
@@ -149,6 +150,7 @@ beforeEach(() => {
   listRelatedFindings.mockResolvedValue([]);
   listLabelCatalogue.mockResolvedValue(NO_LABEL_CATALOGUE);
   listLabelUpcoming.mockResolvedValue({
+    findingTotal: 0,
     findings: [],
     page: 1,
     pageCount: 1,
@@ -161,6 +163,7 @@ beforeEach(() => {
 describe("the label page", () => {
   it("passes upcoming rows into their own page block", async () => {
     listLabelUpcoming.mockResolvedValue({
+      findingTotal: 0,
       findings: [],
       page: 1,
       pageCount: 1,
@@ -259,7 +262,7 @@ describe("the label page", () => {
     getLabelBySlug.mockResolvedValue(LABEL);
     const withoutBio = await resolveLabelPageData("hospital-records", "name", 1);
     expect(labelMetaDescription(withoutBio)).toBe(
-      "Drum & bass tracks on Hospital Records that Fluncle recommends, 1 so far, with the artists behind them.",
+      "Drum & bass released on Hospital Records: 1 track, recommended by Fluncle.",
     );
   });
 
@@ -309,12 +312,58 @@ describe("the label page", () => {
     listLabelCatalogue.mockResolvedValue(labelCatalogue(4));
     const first = await resolveLabelPageData("hospital-records", "name", 1);
 
-    expect(labelHeadTitle(first)).toBe("Hospital Records · Fluncle");
+    expect(labelHeadTitle(first)).toBe(
+      "Hospital Records: drum & bass releases and artists · Fluncle",
+    );
     expect(labelMetaDescription(first)?.startsWith("Hospital Records is a British")).toBe(true);
   });
 });
 
 describe("the album page", () => {
+  it("titles and describes the record with its artist, year and tracklist, the same on every card", async () => {
+    getAlbumBySlug.mockResolvedValue({
+      ...ALBUM,
+      releaseDate: "2024-05-03",
+      renderableTrackCount: 3,
+    });
+    getFindingsByAlbum.mockResolvedValue(findings(1));
+    listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(2));
+
+    const data = await resolveAlbumPageData("wormhole");
+    const head = AlbumRoute.options.head?.({ loaderData: data } as never) as {
+      meta: Array<{ content?: string; name?: string; property?: string; title?: string }>;
+    };
+    const title = head.meta.find((entry) => entry.title !== undefined)?.title;
+    const value = (key: string) =>
+      head.meta.find((entry) => entry.name === key || entry.property === key)?.content;
+
+    expect(title).toBe("Wormhole by Nu:Tone: 2024 drum & bass release · Fluncle");
+    expect(value("description")).toBe(
+      "Wormhole by Nu:Tone, a 2024 drum & bass release on Hospital Records. 3 tracks: Tune 0, Deep cut 0 and Deep cut 1. Fluncle recommends 1 of them.",
+    );
+    expect(value("og:title")).toBe(title);
+    expect(value("twitter:title")).toBe(title);
+    expect(value("og:description")).toBe(value("description"));
+    expect(value("twitter:description")).toBe(value("description"));
+  });
+
+  it("drops the artist credit and counts the whole record when the tracklist is capped", async () => {
+    getAlbumBySlug.mockResolvedValue({ ...ALBUM, renderableTrackCount: 101 });
+    getFindingsByAlbum.mockResolvedValue([]);
+    listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(101, 100));
+
+    const data = await resolveAlbumPageData("wormhole");
+    const head = AlbumRoute.options.head?.({ loaderData: data } as never) as {
+      meta: Array<{ content?: string; name?: string; title?: string }>;
+    };
+    const title = head.meta.find((entry) => entry.title !== undefined)?.title;
+    const description = head.meta.find((entry) => entry.name === "description")?.content;
+
+    expect(title).not.toContain("Nu:Tone");
+    expect(description).not.toContain("Nu:Tone");
+    expect(description).toContain("101 tracks");
+  });
+
   it("404s a zero-public-track album even when a raw tracklist row exists", async () => {
     getAlbumBySlug.mockResolvedValue({ ...ALBUM, renderableTrackCount: 0 });
     listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(1));

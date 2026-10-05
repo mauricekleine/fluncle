@@ -4,6 +4,7 @@ import { type HubOrder } from "@/lib/hub-order";
 import { type AlbumHubEntry } from "@/lib/server/albums";
 import { type ArtistHubEntry } from "@/lib/server/artists";
 import { type LabelHubEntry } from "@/lib/server/labels";
+import { type TrackListItem } from "@/lib/server/tracks";
 import { type ArtistPageData } from "./-artist-page-data";
 import { type LabelPageData } from "./-label-page-data";
 
@@ -170,7 +171,7 @@ const hubs = [
   },
 ];
 
-const upcoming = { findings: [], page: 1, pageCount: 3, total: 0, tracks: [] };
+const upcoming = { findingTotal: 0, findings: [], page: 1, pageCount: 3, total: 0, tracks: [] };
 
 function record(name: string | undefined): CatalogueRecord {
   return { name, releaseDate: undefined, slug: name?.toLowerCase(), tracks: [] };
@@ -256,7 +257,7 @@ type EntityOptions = {
 const entities = [
   {
     canonical: "https://www.fluncle.com/artist/drift",
-    description: "Drum & bass tracks by Drift, with the labels and releases behind them.",
+    description: "Drum & bass by Drift: 192 tracks, with the releases and labels behind them.",
     head: (options: EntityOptions = {}) => {
       const data = artistData({
         indexable: options.indexable ?? true,
@@ -267,11 +268,11 @@ const entities = [
       return artistHead({ ...data, catalogue: { ...data.catalogue, page: options.page ?? 1 } });
     },
     name: "artist",
-    title: "Drift · Fluncle",
+    title: "Drift: drum & bass tracks and releases · Fluncle",
   },
   {
     canonical: "https://www.fluncle.com/label/depth",
-    description: "Drum & bass records released on Depth, with the artists behind them.",
+    description: "Drum & bass released on Depth: 192 tracks.",
     head: (options: EntityOptions = {}) => {
       const data = labelData({
         indexable: options.indexable ?? true,
@@ -282,12 +283,12 @@ const entities = [
       return labelHead({ ...data, catalogue: { ...data.catalogue, page: options.page ?? 1 } });
     },
     name: "label",
-    title: "Depth · Fluncle",
+    title: "Depth: drum & bass releases and artists · Fluncle",
   },
 ];
 
 describe.each(hubs)("$name hub head", (hub) => {
-  it("preserves the original page-one title and description", () => {
+  it("keeps the page-one title and description", () => {
     const head = hub.head();
 
     expectTitles(head, hub.title);
@@ -357,7 +358,7 @@ describe.each(hubs)("$name hub head", (hub) => {
 });
 
 describe.each(entities)("$name entity head", (entity) => {
-  it("preserves the original page-one title and description", () => {
+  it("keeps the page-one title and description", () => {
     const head = entity.head();
 
     expectTitles(head, entity.title);
@@ -386,6 +387,41 @@ describe.each(entities)("$name entity head", (entity) => {
       );
     },
   );
+});
+
+describe("entity head track counts", () => {
+  it("counts upcoming releases on a page whose only tracks are still to come", () => {
+    const futureOnly = {
+      catalogue: { groups: [], page: 1, pageCount: 1, totalGroups: 0, totalTracks: 0 },
+      upcoming: { ...upcoming, pageCount: 1, total: 5 },
+    };
+
+    expect(description(artistHead(artistData(futureOnly)))).toBe(
+      "Drum & bass by Drift: 5 tracks, with the releases and labels behind them.",
+    );
+    expect(description(labelHead(labelData(futureOnly)))).toBe(
+      "Drum & bass released on Depth: 5 tracks.",
+    );
+  });
+
+  it("counts upcoming findings as recommended alongside the released ones", () => {
+    const mixed = {
+      catalogue: { groups: [], page: 1, pageCount: 1, totalGroups: 0, totalTracks: 0 },
+      upcoming: { ...upcoming, findingTotal: 1, pageCount: 1, total: 1 },
+    };
+    const artist = artistData(mixed);
+
+    expect(
+      description(artistHead({ ...artist, dossier: { ...artist.dossier, findingCount: 1 } })),
+    ).toBe(
+      "Drum & bass by Drift: 2 tracks, both recommended by Fluncle, with the releases and labels behind them.",
+    );
+    expect(
+      description(
+        labelHead(labelData({ ...mixed, findings: [{ trackId: "released" } as TrackListItem] })),
+      ),
+    ).toBe("Drum & bass released on Depth: 2 tracks, both recommended by Fluncle.");
+  });
 });
 
 describe("paged names in head metadata", () => {

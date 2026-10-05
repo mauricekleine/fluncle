@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { siteUrl } from "@/lib/fluncle-links";
 import { bangersCount, formatAlbumDuration } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
+import { twitterCardMeta } from "@/lib/page-meta";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { listMixtapes } from "@/lib/server/mixtapes";
 
@@ -34,6 +35,7 @@ export const Route = createFileRoute("/mixtapes/")({
       { content: description, property: "og:description" },
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: `${siteUrl}/mixtapes`, property: "og:url" },
+      ...twitterCardMeta({ description, imageUrl: `${siteUrl}/fluncle-cover.png`, title }),
     ],
 
     scripts: [

@@ -31,8 +31,8 @@ import { entityFreshChannel } from "@/lib/fresh-feed-rss";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
-import { bioMetaDescription } from "@/lib/meta-description";
 import { type CoverPreloadLink, albumCoverAtSize, coverPreloadLink } from "@/lib/media";
+import { artistMetaDescription, artistPageTitle } from "@/lib/page-meta";
 import { type CatalogueSort, catalogueSortParam, entityPageHref } from "@/lib/catalogue";
 import {
   formatNameList,
@@ -127,6 +127,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     alternateNames,
     bio,
     catalogue,
+    dossier,
     upcoming,
     findings,
     imageUrl: artistImageUrl,
@@ -144,15 +145,6 @@ function artistHead(loaderData: ArtistPageData | undefined) {
 
   const pageUrl = pagedCanonical(`${siteUrl}/artist/${slug}`, catalogue.page);
 
-  const baseTitle = `${name} · Fluncle`;
-
-  const baseDescription =
-    bio !== undefined
-      ? bioMetaDescription(bio)
-      : findings.length > 0
-        ? `Drum & bass tracks by ${name} that Fluncle recommends, ${findings.length} so far, with the labels and releases behind them.`
-        : `Drum & bass tracks by ${name}, with the labels and releases behind them.`;
-
   const recordRange = catalogue.page > 1 ? artistRecordRange(catalogue.groups) : "";
 
   const { description, title } =
@@ -168,7 +160,15 @@ function artistHead(loaderData: ArtistPageData | undefined) {
             ? `${name}, page ${catalogue.page}: ${recordRange} · Fluncle`
             : `${name}, page ${catalogue.page} · Fluncle`,
         }
-      : { description: baseDescription, title: baseTitle };
+      : {
+          description: artistMetaDescription({
+            bio,
+            findingCount: dossier.findingCount + upcoming.findingTotal,
+            name,
+            trackCount: catalogue.totalTracks + dossier.findingCount + upcoming.total,
+          }),
+          title: artistPageTitle(name),
+        };
 
   const noindex =
     !indexable ||
