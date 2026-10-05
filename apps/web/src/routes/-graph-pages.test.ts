@@ -7,6 +7,7 @@ const getConfirmedAliasNames = vi.hoisted(() => vi.fn(async () => []));
 
 const resolveLabelAliasRedirect = vi.hoisted(() => vi.fn(async () => undefined));
 const getAlbumBySlug = vi.hoisted(() => vi.fn());
+const albumCoverUrl = vi.hoisted(() => vi.fn());
 const listArtistsByLabel = vi.hoisted(() => vi.fn());
 const listArtistsByAlbum = vi.hoisted(() => vi.fn());
 const getFindingsByLabel = vi.hoisted(() => vi.fn());
@@ -26,6 +27,7 @@ vi.mock("@/lib/server/labels", async (importOriginal) => ({
 
 vi.mock("@/lib/server/albums", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/albums")>()),
+  albumCoverUrl,
   getAlbumBySlug,
 }));
 
@@ -142,6 +144,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   getLabelBySlug.mockResolvedValue(LABEL);
   getAlbumBySlug.mockResolvedValue(ALBUM);
+  albumCoverUrl.mockResolvedValue(undefined);
   getLabelForAlbum.mockResolvedValue(LABEL);
   listArtistsByLabel.mockResolvedValue([]);
   listArtistsByAlbum.mockResolvedValue([]);
@@ -362,6 +365,38 @@ describe("the album page", () => {
     expect(title).not.toContain("Nu:Tone");
     expect(description).not.toContain("Nu:Tone");
     expect(description).toContain("101 tracks");
+  });
+
+  it("shows a findings-free album's own cover in its link preview and MusicAlbum image", async () => {
+    const cover =
+      "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/wormhole.jpg?v=1";
+    getAlbumBySlug.mockResolvedValue({ ...ALBUM, renderableTrackCount: 12 });
+    getFindingsByAlbum.mockResolvedValue([]);
+    listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(12));
+    albumCoverUrl.mockResolvedValue(cover);
+
+    const data = await resolveAlbumPageData("wormhole");
+    const head = AlbumRoute.options.head?.({ loaderData: data } as never) as {
+      meta: Array<{ content?: string; property?: string }>;
+      scripts: Array<{ children?: string }>;
+    };
+    const ogImage = head.meta.find((entry) => entry.property === "og:image")?.content;
+    const album = JSON.parse(head.scripts[0]?.children ?? "{}") as { image?: string };
+
+    expect(albumCoverUrl).toHaveBeenCalledWith(ALBUM.id);
+    expect(ogImage).toContain("/albums/wormhole.jpg");
+    expect(album.image).toContain("/albums/wormhole.jpg");
+  });
+
+  it("serves a findings-free album with the site cover when its cover read fails", async () => {
+    getAlbumBySlug.mockResolvedValue({ ...ALBUM, renderableTrackCount: 12 });
+    listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(12));
+    albumCoverUrl.mockRejectedValue(new Error("turso 502"));
+
+    expect(await resolveAlbumPageData("wormhole")).toMatchObject({
+      coverImageUrl: undefined,
+      status: "found",
+    });
   });
 
   it("404s a zero-public-track album even when a raw tracklist row exists", async () => {
