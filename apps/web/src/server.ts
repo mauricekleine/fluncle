@@ -33,6 +33,8 @@ const serverEntry = createServerEntry({
   },
 });
 
+const NULL_ID_PATH = /^\/(?:track|log)\/null\/?$/;
+
 async function dispatch(request: Request): Promise<Response> {
   const orpc = await handleOrpc(request);
 
@@ -53,6 +55,14 @@ async function dispatch(request: Request): Promise<Response> {
   }
 
   const url = new URL(request.url);
+
+  if (NULL_ID_PATH.test(url.pathname)) {
+    return new Response("Gone\n", {
+      headers: { "Cache-Control": "public, max-age=86400", "Content-Type": "text/plain" },
+      status: 410,
+    });
+  }
+
   const redirect = presenceRedirect(request);
 
   if (redirect) {
