@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { useFumadocsLoader } from "fumadocs-core/source/client";
 import { DocsLayout } from "fumadocs-ui/layouts/docs";
 import { RootProvider } from "fumadocs-ui/provider/tanstack";
+import { fluncleCoverImageMeta } from "@/lib/cover-meta";
 import { docsBaseOptions } from "@/lib/docs-layout.shared";
 import docsCss from "../docs.css?url";
 import stylesFullCss from "../styles-full.css?url";
@@ -22,6 +23,7 @@ export const Route = createFileRoute("/docs")({
         rel: "stylesheet",
       },
     ],
+    meta: fluncleCoverImageMeta,
   }),
 });
 

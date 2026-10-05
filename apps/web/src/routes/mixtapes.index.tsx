@@ -6,6 +6,7 @@ import { jsonLdScript } from "@/lib/json-ld";
 import { twitterCardMeta } from "@/lib/page-meta";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { listMixtapes } from "@/lib/server/mixtapes";
+import { fluncleCoverImageMeta, fluncleCoverUrl } from "@/lib/cover-meta";
 
 const fetchMixtapes = createServerFn({ method: "GET" }).handler(() => listMixtapes());
 
@@ -33,9 +34,9 @@ export const Route = createFileRoute("/mixtapes/")({
       { content: description, name: "description" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
-      { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+      ...fluncleCoverImageMeta,
       { content: `${siteUrl}/mixtapes`, property: "og:url" },
-      ...twitterCardMeta({ description, imageUrl: `${siteUrl}/fluncle-cover.png`, title }),
+      ...twitterCardMeta({ description, imageUrl: fluncleCoverUrl, title }),
     ],
 
     scripts: [

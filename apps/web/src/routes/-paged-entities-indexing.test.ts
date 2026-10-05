@@ -436,10 +436,40 @@ describe("paged names in head metadata", () => {
       },
     });
 
-    expectTitles(head, "Drift, page 2: First to Last · Fluncle");
+    expectTitles(head, "Drift, page 2: First, Middle and more · Fluncle");
     expect(description(head)).toContain("First, Middle, Third and 1 more");
     expect(description(head)).toContain("page 2 of 8");
     expect(description(head)).not.toContain("undefined");
+  });
+
+  it.each([
+    { expected: "Drift, page 2: Anchor to Zebra · Fluncle", sort: "name" as const },
+    { expected: "Drift, page 2: Anchor, Middle and more · Fluncle", sort: "recent" as const },
+  ])("titles artist records as a range only in name order: $sort", ({ expected, sort }) => {
+    const data = artistData({ sort });
+    const head = artistHead({
+      ...data,
+      catalogue: { ...data.catalogue, groups: ["Anchor", "Middle", "Zebra"].map(record), page: 2 },
+    });
+
+    expectTitles(head, expected);
+  });
+
+  it.each([
+    { expected: "Depth, page 2: Anchor to Zebra · Fluncle", sort: "name" as const },
+    { expected: "Depth, page 2: Anchor, Middle and more · Fluncle", sort: "recent" as const },
+  ])("titles label artists as a range only in name order: $sort", ({ expected, sort }) => {
+    const data = labelData({ sort });
+    const head = labelHead({
+      ...data,
+      catalogue: {
+        ...data.catalogue,
+        groups: ["Anchor", "Middle", "Zebra"].map(artistGroup),
+        page: 2,
+      },
+    });
+
+    expectTitles(head, expected);
   });
 
   it.each([

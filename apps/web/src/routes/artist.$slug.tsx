@@ -36,7 +36,7 @@ import { artistMetaDescription, artistPageTitle } from "@/lib/page-meta";
 import { type CatalogueSort, catalogueSortParam, entityPageHref } from "@/lib/catalogue";
 import {
   formatNameList,
-  formatNameRange,
+  formatPageTitleSnippet,
   pagedCanonical,
   shouldNoindexPage,
 } from "@/lib/paged-indexing";
@@ -93,12 +93,11 @@ function artistRecordNames(
   return groups.flatMap((group) => (group.name !== undefined ? [group.name] : []));
 }
 
-function artistRecordRange(
+function artistRecordSnippet(
   groups: Extract<ArtistPageData, { status: "found" }>["catalogue"]["groups"],
+  sort: CatalogueSort,
 ): string {
-  const names = artistRecordNames(groups);
-
-  return formatNameRange(names[0], names[names.length - 1]);
+  return formatPageTitleSnippet(artistRecordNames(groups), sort === "name");
 }
 
 function artistRecordDescription(
@@ -145,7 +144,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
 
   const pageUrl = pagedCanonical(`${siteUrl}/artist/${slug}`, catalogue.page);
 
-  const recordRange = catalogue.page > 1 ? artistRecordRange(catalogue.groups) : "";
+  const recordSnippet = catalogue.page > 1 ? artistRecordSnippet(catalogue.groups, sort) : "";
 
   const { description, title } =
     catalogue.page > 1
@@ -156,8 +155,8 @@ function artistHead(loaderData: ArtistPageData | undefined) {
             catalogue.page,
             catalogue.pageCount,
           ),
-          title: recordRange
-            ? `${name}, page ${catalogue.page}: ${recordRange} · Fluncle`
+          title: recordSnippet
+            ? `${name}, page ${catalogue.page}: ${recordSnippet} · Fluncle`
             : `${name}, page ${catalogue.page} · Fluncle`,
         }
       : {

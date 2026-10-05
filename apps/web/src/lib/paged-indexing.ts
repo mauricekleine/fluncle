@@ -55,18 +55,22 @@ export function formatNameList(names: string[], remaining: number): string {
   return `${listed} and ${remaining} more`;
 }
 
-export function formatHubTitleSnippet(names: string[], order: HubOrder): string {
+export function formatPageTitleSnippet(names: string[], alphabetical: boolean): string {
   if (names.length === 0) {
     return "";
   }
 
-  if (order === "az") {
+  if (alphabetical) {
     return formatNameRange(names[0], names[names.length - 1]);
   }
 
   const head = names.slice(0, 2).join(", ");
 
   return names.length > 2 ? `${head} and more` : head;
+}
+
+export function formatHubTitleSnippet(names: string[], order: HubOrder): string {
+  return formatPageTitleSnippet(names, order === "az");
 }
 
 const ISO_DATE_RE = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/;

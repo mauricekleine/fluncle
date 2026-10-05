@@ -27,6 +27,7 @@ import { type FeedItem } from "@/lib/mixtapes";
 import { FINDINGS_PAGE_SIZE } from "@/lib/findings-feed";
 import { fetchTracks, type TracksResponse } from "@/lib/tracks";
 import { registerWebMcpTools } from "@/lib/webmcp";
+import { fluncleCoverImageMeta, fluncleCoverUrl } from "@/lib/cover-meta";
 
 type FindingsSearch = {
   story?: string;
@@ -72,11 +73,11 @@ export const Route = createFileRoute("/findings")({
       { content: findingsDescription, name: "description" },
       { content: findingsTitle, property: "og:title" },
       { content: findingsDescription, property: "og:description" },
-      { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+      ...fluncleCoverImageMeta,
       { content: findingsPageUrl, property: "og:url" },
       ...twitterCardMeta({
         description: findingsDescription,
-        imageUrl: `${siteUrl}/fluncle-cover.png`,
+        imageUrl: fluncleCoverUrl,
         title: findingsTitle,
       }),
     ],

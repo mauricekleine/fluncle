@@ -2,6 +2,7 @@ import { Link, createFileRoute, redirect } from "@tanstack/react-router";
 import { IdentityLookupForm } from "@/components/identity-lookup-form";
 import { canonicalIdentityKey } from "@/lib/identity-key";
 import { siteUrl } from "@/lib/fluncle-links";
+import { fluncleCoverImageMeta } from "@/lib/cover-meta";
 
 type IdentitySearch = { key?: string };
 
@@ -37,7 +38,7 @@ function identityDoorHead() {
       { content: description, name: "description" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
-      { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+      ...fluncleCoverImageMeta,
       { content: pageUrl, property: "og:url" },
     ],
   };

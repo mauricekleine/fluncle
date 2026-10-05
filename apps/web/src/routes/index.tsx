@@ -19,6 +19,7 @@ import { logPageUrl } from "@/lib/log-schema";
 import { coverPreloadLink } from "@/lib/media";
 import { twitterCardMeta } from "@/lib/page-meta";
 import { registerWebMcpTools } from "@/lib/webmcp";
+import { fluncleCoverImageMeta, fluncleCoverUrl } from "@/lib/cover-meta";
 
 const fetchFrontDoorData = createServerFn({ method: "GET" }).handler(async () => {
   const { loadFrontDoorData } = await import("./-front-door-data");
@@ -49,11 +50,14 @@ export const Route = createFileRoute("/")({
       ].filter((link) => link !== undefined),
     ],
 
-    meta: twitterCardMeta({
-      description: fluncleMetaDescription,
-      imageUrl: `${siteUrl}/fluncle-cover.png`,
-      title: fluncleSiteTitle,
-    }),
+    meta: [
+      ...fluncleCoverImageMeta,
+      ...twitterCardMeta({
+        description: fluncleMetaDescription,
+        imageUrl: fluncleCoverUrl,
+        title: fluncleSiteTitle,
+      }),
+    ],
 
     scripts: [
       jsonLdScript({

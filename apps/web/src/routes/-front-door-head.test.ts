@@ -17,6 +17,7 @@ type HeadLink = {
 
 type HeadResult = {
   links?: HeadLink[];
+  meta?: Array<{ content?: string; name?: string; property?: string }>;
   scripts?: Array<{ children: string; type: string }>;
 };
 
@@ -95,6 +96,16 @@ describe("/ head — the canonical", () => {
 
     expect(canonicals).toHaveLength(1);
     expect(canonicals[0]?.href).toBe("https://www.fluncle.com/");
+  });
+});
+
+describe("/ head — the link preview image", () => {
+  it("declares its own og:image with alt text and dimensions right behind it", () => {
+    const properties = (headOf().meta ?? []).flatMap((entry) =>
+      entry.property?.startsWith("og:image") ? [entry.property] : [],
+    );
+
+    expect(properties).toEqual(["og:image", "og:image:width", "og:image:height", "og:image:alt"]);
   });
 });
 

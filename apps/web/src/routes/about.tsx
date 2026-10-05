@@ -10,6 +10,7 @@ import {
 import { fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import { spriteUrl } from "@fluncle/sprites";
+import { fluncleCoverImageMeta } from "@/lib/cover-meta";
 
 const title = "About Fluncle: the Galaxy, Log IDs, and the findings";
 
@@ -101,7 +102,7 @@ function aboutHead() {
       { content: metaDescription, name: "description" },
       { content: title, property: "og:title" },
       { content: metaDescription, property: "og:description" },
-      { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+      ...fluncleCoverImageMeta,
       { content: pageUrl, property: "og:url" },
     ],
 

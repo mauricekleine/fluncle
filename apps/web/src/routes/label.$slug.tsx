@@ -30,7 +30,7 @@ import {
 } from "@/lib/catalogue";
 import {
   formatNameList,
-  formatNameRange,
+  formatPageTitleSnippet,
   pagedCanonical,
   shouldNoindexPage,
 } from "@/lib/paged-indexing";
@@ -49,12 +49,14 @@ const fetchLabel = createServerFn({ method: "GET" })
     return resolveLabelPageData(slug, sort, page, upcomingPage);
   });
 
-function labelArtistGroupRange(
+function labelArtistGroupSnippet(
   groups: Extract<LabelPageData, { status: "found" }>["catalogue"]["groups"],
+  sort: CatalogueSort,
 ): string {
-  const names = groups.map((group) => group.name);
-
-  return formatNameRange(names[0], names[names.length - 1]);
+  return formatPageTitleSnippet(
+    groups.map((group) => group.name),
+    sort === "name",
+  );
 }
 
 function labelArtistGroupDescription(
@@ -101,7 +103,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
 
   const pageUrl = pagedCanonical(`${siteUrl}/label/${slug}`, catalogue.page);
 
-  const artistRange = catalogue.page > 1 ? labelArtistGroupRange(catalogue.groups) : "";
+  const artistSnippet = catalogue.page > 1 ? labelArtistGroupSnippet(catalogue.groups, sort) : "";
 
   const { description, title } =
     catalogue.page > 1
@@ -112,8 +114,8 @@ function labelHead(loaderData: LabelPageData | undefined) {
             catalogue.page,
             catalogue.pageCount,
           ),
-          title: artistRange
-            ? `${name}, page ${catalogue.page}: ${artistRange} · Fluncle`
+          title: artistSnippet
+            ? `${name}, page ${catalogue.page}: ${artistSnippet} · Fluncle`
             : `${name}, page ${catalogue.page} · Fluncle`,
         }
       : {

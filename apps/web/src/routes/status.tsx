@@ -23,6 +23,7 @@ import {
   type StatusEventRow,
 } from "@/lib/server/status";
 import { SELF_POSTED_AUTOMATION_ORDER } from "@/lib/status-services";
+import { fluncleCoverImageMeta } from "@/lib/cover-meta";
 
 export { SELF_POSTED_AUTOMATION_ORDER } from "@/lib/status-services";
 
@@ -145,6 +146,7 @@ function statusHead() {
       { content: description, name: "description" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
+      ...fluncleCoverImageMeta,
       { content: `${siteUrl}/status`, property: "og:url" },
     ],
   };

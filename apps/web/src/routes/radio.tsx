@@ -36,12 +36,11 @@ import {
 import { DESKTOP_QUERY, useMediaQuery } from "@/lib/use-media-query";
 import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 import radioCss from "../radio.css?url";
+import { fluncleCoverImageMeta, fluncleCoverUrl } from "@/lib/cover-meta";
 
 const title = "Fluncle, observing";
 const description =
   "Drum & bass bangers from another dimension. One continuous run of Fluncle's findings, each playing under the observation he logged when he got there.";
-
-const coverUrl = `${siteUrl}/fluncle-cover.png`;
 
 const COPY = {
   beginSubtitle: "One continuous run of findings. You drop in mid-flight, wherever I've got to.",
@@ -76,9 +75,9 @@ export const Route = createFileRoute("/radio")({
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
       { content: `${siteUrl}/radio`, property: "og:url" },
-      { content: coverUrl, property: "og:image" },
+      ...fluncleCoverImageMeta,
       { content: "summary_large_image", name: "twitter:card" },
-      { content: coverUrl, name: "twitter:image" },
+      { content: fluncleCoverUrl, name: "twitter:image" },
     ],
 
     scripts: [
@@ -88,7 +87,7 @@ export const Route = createFileRoute("/radio")({
         creator: fluncleEntityRef,
         description,
         genre: "Drum and Bass",
-        image: coverUrl,
+        image: fluncleCoverUrl,
         inLanguage: "en",
         isAccessibleForFree: true,
         name: title,

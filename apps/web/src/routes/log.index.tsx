@@ -5,6 +5,7 @@ import { formatDate } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { artistTitleLine } from "@/lib/log-prose";
 import { listLogIndexEntries, type LogIndexEntry } from "@/lib/server/tracks";
+import { fluncleCoverImageMeta } from "@/lib/cover-meta";
 
 const logIndexLimit = 500;
 
@@ -38,7 +39,7 @@ function logIndexHead(loaderData: LogIndexEntry[] | undefined) {
       { content: description, name: "description" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
-      { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+      ...fluncleCoverImageMeta,
       { content: `${siteUrl}/log`, property: "og:url" },
     ],
 

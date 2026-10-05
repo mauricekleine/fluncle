@@ -1,5 +1,6 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { siteUrl } from "@/lib/fluncle-links";
+import { fluncleCoverImageMeta } from "@/lib/cover-meta";
 
 const title = "Privacy · Fluncle";
 const description =
@@ -17,7 +18,7 @@ function privacyHead() {
       { content: description, name: "description" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
-      { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+      ...fluncleCoverImageMeta,
       { content: pageUrl, property: "og:url" },
     ],
   };

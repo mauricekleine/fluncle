@@ -5,6 +5,7 @@ import { IdentityLookupForm } from "@/components/identity-lookup-form";
 import { canonicalIdentityKey } from "@/lib/identity-key";
 import { siteUrl } from "@/lib/fluncle-links";
 import { type IdentityPageData } from "./-identity-page-data";
+import { fluncleCoverImageMeta } from "@/lib/cover-meta";
 
 const fetchIdentity = createServerFn({ method: "GET" })
   .validator((data: { key: string }) => data)
@@ -30,7 +31,7 @@ function identityHead(rawKey: string) {
       { content: "noindex, follow", name: "robots" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
-      { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+      ...fluncleCoverImageMeta,
       { content: pageUrl, property: "og:url" },
     ],
   };
