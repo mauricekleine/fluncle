@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { fluncleEntityId } from "./fluncle-links";
+
+const fluncleNode = {
+  "@id": fluncleEntityId,
+  "@type": "Person",
+  name: "Fluncle",
+  url: "https://www.fluncle.com/",
+};
 import { serializeJsonLd } from "./json-ld";
 import { definitionalProse } from "./log-prose";
 import {
@@ -457,9 +464,9 @@ describe("videoObjectJsonLd (the finding's video schema)", () => {
     expect(jsonLd.url).toBe("https://www.fluncle.com/log/004.7.2I");
   });
 
-  it("is created + published BY the one canonical Fluncle entity node (@id)", () => {
-    expect(jsonLd.creator).toEqual({ "@id": fluncleEntityId });
-    expect(jsonLd.publisher).toEqual({ "@id": fluncleEntityId });
+  it("is created + published BY an inline Person carrying the canonical Fluncle @id", () => {
+    expect(jsonLd.creator).toEqual(fluncleNode);
+    expect(jsonLd.publisher).toEqual(fluncleNode);
   });
 
   it("mirrors the visible prose and dates the upload from the freshest stamp", () => {
@@ -497,9 +504,9 @@ describe("observationAudioObjectJsonLd (the finding's spoken observation schema)
     expect(jsonLd.url).toBe("https://www.fluncle.com/log/004.7.2I");
   });
 
-  it("is created + published BY the one canonical Fluncle entity node (@id)", () => {
-    expect(jsonLd.creator).toEqual({ "@id": fluncleEntityId });
-    expect(jsonLd.publisher).toEqual({ "@id": fluncleEntityId });
+  it("is created + published BY an inline Person carrying the canonical Fluncle @id", () => {
+    expect(jsonLd.creator).toEqual(fluncleNode);
+    expect(jsonLd.publisher).toEqual(fluncleNode);
   });
 
   it("mirrors the visible prose and carries the ISO-8601 length + a zoned generated-at uploadDate", () => {
@@ -793,8 +800,8 @@ describe("mixtapeAlbumJsonLd", () => {
     expect(jsonLd["@type"]).toBe("MusicAlbum");
     expect(jsonLd.albumProductionType).toBe("https://schema.org/DJMixAlbum");
 
-    expect(jsonLd.byArtist).toEqual({ "@id": fluncleEntityId, "@type": "Person", name: "Fluncle" });
-    expect(jsonLd.publisher).toEqual({ "@id": fluncleEntityId });
+    expect(jsonLd.byArtist).toEqual(fluncleNode);
+    expect(jsonLd.publisher).toEqual(fluncleNode);
 
     expect(jsonLd.numTracks).toBe(1);
     expect(jsonLd.identifier).toEqual([
@@ -856,6 +863,9 @@ describe("mixtapeAlbumJsonLd", () => {
     expect(mixtapeAlbumJsonLd(mixtape).name).toBe("Fluncle Drum & Bass Mixtape #1");
     expect(video.name).toBe("Fluncle Drum & Bass Mixtape #1");
     expect(video.description).toBe("Fluncle drum & bass mixtape: Fluncle Drum & Bass Mixtape #1.");
+
+    expect(video.creator).toEqual(fluncleNode);
+    expect(video.publisher).toEqual(fluncleNode);
   });
 });
 

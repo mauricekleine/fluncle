@@ -1,4 +1,4 @@
-import { fluncleEntityId, logPageUrl, siteUrl } from "./fluncle-links";
+import { fluncleEntityRef, logPageUrl, siteUrl } from "./fluncle-links";
 import { trackPageUrl } from "./track-page";
 import { formatIsoDuration } from "./format";
 import { artistTitleLine, definitionalProse, type LogProseInput } from "./log-prose";
@@ -222,10 +222,10 @@ export function videoObjectJsonLd(
     "@type": "VideoObject",
     contentUrl,
 
-    creator: { "@id": fluncleEntityId },
+    creator: fluncleEntityRef,
     description: definitionalProse(track),
     name: artistTitleLine(track),
-    publisher: { "@id": fluncleEntityId },
+    publisher: fluncleEntityRef,
     thumbnailUrl,
     uploadDate: uploadDateIso(uploadDate),
     url: logPageUrl(track.logId),
@@ -238,7 +238,7 @@ export function observationAudioObjectJsonLd(track: LogSchemaInput): Record<stri
     "@type": "AudioObject",
     contentUrl: track.observationAudioUrl,
 
-    creator: { "@id": fluncleEntityId },
+    creator: fluncleEntityRef,
     description: definitionalProse(track),
 
     ...(track.observationDurationMs
@@ -246,7 +246,7 @@ export function observationAudioObjectJsonLd(track: LogSchemaInput): Record<stri
       : {}),
     encodingFormat: "audio/mpeg",
     name: artistTitleLine(track),
-    publisher: { "@id": fluncleEntityId },
+    publisher: fluncleEntityRef,
     ...(track.observationGeneratedAt
       ? { uploadDate: uploadDateIso(track.observationGeneratedAt) }
       : {}),
@@ -268,11 +268,11 @@ export function mixtapeVideoObjectJsonLd(
     "@context": "https://schema.org",
     "@type": "VideoObject",
     contentUrl,
-    creator: { "@id": fluncleEntityId },
+    creator: fluncleEntityRef,
     description:
       mixtape.note ?? `Fluncle drum & bass mixtape: ${mixtapeDisplayTitle(mixtape.title)}.`,
     name: mixtapeDisplayTitle(mixtape.title),
-    publisher: { "@id": fluncleEntityId },
+    publisher: fluncleEntityRef,
     thumbnailUrl,
     uploadDate: uploadDateIso(uploadDate),
     url: logPageUrl(logId),
@@ -287,7 +287,7 @@ export function mixtapeAlbumJsonLd(mixtape: MixtapeDTO): Record<string, unknown>
     "@type": "MusicAlbum",
     albumProductionType: "https://schema.org/DJMixAlbum",
 
-    byArtist: { "@id": fluncleEntityId, "@type": "Person", name: "Fluncle" },
+    byArtist: fluncleEntityRef,
     ...(mixtape.recordedAt ? { datePublished: mixtape.recordedAt.slice(0, 10) } : {}),
     description: mixtape.note,
     duration: mixtape.durationMs ? formatIsoDuration(mixtape.durationMs) : undefined,
@@ -300,7 +300,7 @@ export function mixtapeAlbumJsonLd(mixtape: MixtapeDTO): Record<string, unknown>
     name: mixtapeDisplayTitle(mixtape.title),
 
     numTracks: mixtape.members.filter((member) => member.logId).length,
-    publisher: { "@id": fluncleEntityId },
+    publisher: fluncleEntityRef,
     sameAs: Object.values(mixtape.externalUrls).filter(Boolean),
     track: {
       "@type": "ItemList",

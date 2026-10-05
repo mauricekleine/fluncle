@@ -19,7 +19,7 @@ import { findingToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { ScrollArea } from "@fluncle/ui/components/scroll-area";
 import { TooltipProvider } from "@fluncle/ui/components/tooltip";
 import { printConsoleGreeting } from "@/lib/console-greeting";
-import { fluncleEntityId, siteUrl } from "@/lib/fluncle-links";
+import { fluncleEntityRef, siteUrl } from "@/lib/fluncle-links";
 import { fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import { type FeedItem } from "@/lib/mixtapes";
@@ -76,7 +76,7 @@ export const Route = createFileRoute("/findings")({
         "@context": "https://schema.org",
         "@type": "MusicPlaylist",
 
-        creator: { "@id": fluncleEntityId },
+        creator: fluncleEntityRef,
         description: fluncleDescription,
         genre: "Drum and Bass",
         image: `${siteUrl}/fluncle-cover.png`,

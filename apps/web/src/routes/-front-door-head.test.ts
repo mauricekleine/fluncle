@@ -126,7 +126,12 @@ describe("/ head — the structured data", () => {
     );
 
     expect(website?.["@id"]).toBe(fluncleWebsiteId);
-    expect(website?.publisher).toEqual({ "@id": fluncleEntityId });
+    expect(website?.publisher).toEqual({
+      "@id": fluncleEntityId,
+      "@type": "Person",
+      name: "Fluncle",
+      url: "https://www.fluncle.com/",
+    });
   });
 
   it("credits the site's real-world maker, distinct from the in-universe publisher", () => {
