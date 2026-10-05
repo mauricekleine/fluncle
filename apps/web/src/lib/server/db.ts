@@ -30,8 +30,11 @@ import {
 } from "./database-observability";
 import {
   enterDatabaseRequestOperation,
+  enterDatabaseRequestTransaction,
   getRequestScopedDatabaseClient,
+  getRequestScopedTransactionLease,
   type DatabaseRequestOperationLease,
+  type DatabaseRequestTransactionLease,
 } from "./database-request-scope";
 import { readEnvs, readOptionalEnv } from "./env";
 
@@ -120,6 +123,28 @@ function baseSpanAttributes(
 
 function recordAdmission(span: Span | undefined, lease: WorkerDatabaseConcurrencyLease): void {
   span?.setAttribute("fluncle.queue_wait_ms", lease.queueWaitMs);
+}
+
+async function acquireDatabaseLease(
+  gate: WorkerDatabaseConcurrencyGate,
+  accessClass: DatabaseAccessClass,
+  span: Span | undefined,
+  startedAt: number,
+): Promise<WorkerDatabaseConcurrencyLease> {
+  try {
+    const lease =
+      getRequestScopedTransactionLease(gate) ??
+      (await gate.acquire(accessClass, () => getRequestScopedTransactionLease(gate)));
+    recordAdmission(span, lease);
+    return lease;
+  } catch (error) {
+    const queueWaitMs = Math.max(0, Date.now() - startedAt);
+    span?.setAttribute("fluncle.queue_wait_ms", queueWaitMs);
+    span?.setAttribute("fluncle.duration_ms", queueWaitMs);
+    span?.setAttribute("fluncle.outcome", "failure");
+    span?.setAttribute("fluncle.aggregate_in_flight_max", gate.snapshot().aggregateObservedMaximum);
+    throw error;
+  }
 }
 
 function finishSpan(
@@ -279,7 +304,7 @@ function readTransactionProperty(transaction: Transaction, property: PropertyKey
 
 function instrumentTransaction(
   transaction: Transaction,
-  lease: WorkerDatabaseConcurrencyLease,
+  transactionLease: DatabaseRequestTransactionLease,
   requestOperation: DatabaseRequestOperationLease,
   span: Span,
   startedAt: number,
@@ -294,7 +319,7 @@ function instrumentTransaction(
     finished = true;
     finishSpan(span, startedAt, outcome, requestOperation);
     requestOperation.release();
-    lease.release();
+    transactionLease.release();
     span.end();
   };
 
@@ -383,9 +408,8 @@ function instrument(
             },
             async (span) => {
               const startedAt = Date.now();
-              const lease = await gate.acquire(accessClass);
+              const lease = await acquireDatabaseLease(gate, accessClass, span, startedAt);
               const requestOperation = enterDatabaseRequestOperation();
-              recordAdmission(span, lease);
               const run = () =>
                 args !== undefined && typeof statement === "string"
                   ? target.execute(statement, args)
@@ -445,9 +469,8 @@ function instrument(
             },
             async (span) => {
               const startedAt = Date.now();
-              const lease = await gate.acquire(accessClass);
+              const lease = await acquireDatabaseLease(gate, accessClass, span, startedAt);
               const requestOperation = enterDatabaseRequestOperation();
-              recordAdmission(span, lease);
 
               const run = () => target.batch(stmts, mode);
 
@@ -479,18 +502,29 @@ function instrument(
             name: `db.query ${operationId}`,
             op: "db.query",
           });
-          const lease = await gate.acquire(accessClass);
-          const requestOperation = enterDatabaseRequestOperation();
-          recordAdmission(span, lease);
+          let lease: WorkerDatabaseConcurrencyLease | undefined;
+          let requestOperation: DatabaseRequestOperationLease | undefined;
+          let transactionLease: DatabaseRequestTransactionLease | undefined;
 
           try {
+            lease = await acquireDatabaseLease(gate, accessClass, span, startedAt);
+            requestOperation = enterDatabaseRequestOperation();
+            transactionLease = enterDatabaseRequestTransaction(gate, lease);
             const transaction =
               mode === undefined ? await target.transaction() : await target.transaction(mode);
-            return instrumentTransaction(transaction, lease, requestOperation, span, startedAt);
+            return instrumentTransaction(
+              transaction,
+              transactionLease,
+              requestOperation,
+              span,
+              startedAt,
+            );
           } catch (error) {
-            finishSpan(span, startedAt, "failure", requestOperation);
-            requestOperation.release();
-            lease.release();
+            if (requestOperation !== undefined) {
+              finishSpan(span, startedAt, "failure", requestOperation);
+              requestOperation.release();
+            }
+            (transactionLease ?? lease)?.release();
             span.end();
             throw error;
           }

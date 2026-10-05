@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  WORKER_DB_ADMISSION_POLL_MAX_MS,
+  WORKER_DB_AGGREGATE_CONCURRENCY,
+  WORKER_DB_LEASE_HOLD_MAX_MS,
+  WORKER_DB_QUEUE_WAIT_MAX_MS,
+  workerDatabaseConcurrencyGate,
+  workerTelemetryDatabaseConcurrencyGate,
+} from "../database-concurrency";
+
 const execute = vi.fn();
 const batch = vi.fn();
 const close = vi.fn();
@@ -45,9 +54,11 @@ vi.mock("@libsql/client/web", () => ({
 
 vi.mock("./env", () => ({
   readEnvs: async () => ({ TURSO_AUTH_TOKEN: "token", TURSO_DATABASE_URL: "libsql://scratch" }),
+  readOptionalEnv: async (name: string) =>
+    name === "TURSO_TELEMETRY_DATABASE_URL" ? "libsql://scratch-telemetry" : "token",
 }));
 
-const { DB_MAX_RETRIES, databaseOperationStatement, getDb } = await import("./db");
+const { DB_MAX_RETRIES, databaseOperationStatement, getDb, getTelemetryDb } = await import("./db");
 const { runWithDatabaseRequestScope } = await import("./database-request-scope");
 
 function gatewayError(status: number) {
@@ -72,6 +83,478 @@ function waitForAdmissionPoll(): Promise<void> {
     setTimeout(resolve, 2);
   });
 }
+
+describe("database admission timeout instrumentation", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it.each(["execute", "batch", "transaction"] as const)(
+    "records queue failure telemetry without starting a timed-out %s operation",
+    async (operation) => {
+      const held = await Promise.all(
+        Array.from({ length: WORKER_DB_AGGREGATE_CONCURRENCY }, () =>
+          workerDatabaseConcurrencyGate.acquire("write"),
+        ),
+      );
+      try {
+        const db = await getDb();
+        const pending = (
+          operation === "execute"
+            ? db.execute("select 1")
+            : operation === "batch"
+              ? db.batch(["select 1"], "read")
+              : db.transaction("write")
+        ).catch((error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(WORKER_DB_QUEUE_WAIT_MAX_MS);
+        expect(await pending).toMatchObject({ code: "database_busy", status: 503 });
+        expect(execute).not.toHaveBeenCalled();
+        expect(batch).not.toHaveBeenCalled();
+        expect(transaction).not.toHaveBeenCalled();
+        expect(spanAttributes[0]).toMatchObject({
+          "fluncle.aggregate_in_flight_max": WORKER_DB_AGGREGATE_CONCURRENCY,
+          "fluncle.duration_ms": WORKER_DB_QUEUE_WAIT_MAX_MS,
+          "fluncle.outcome": "failure",
+          "fluncle.queue_wait_ms": WORKER_DB_QUEUE_WAIT_MAX_MS,
+        });
+        if (operation === "transaction") {
+          expect(spanEnds[0]).toHaveBeenCalledOnce();
+        }
+      } finally {
+        for (const lease of held) {
+          lease.release();
+        }
+      }
+      expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
+    },
+  );
+});
+
+describe("request transaction admission", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("completes nested work in two transaction-holding request scopes behind a full gate", async () => {
+    execute.mockResolvedValue({ rows: [] });
+    const opened: Array<{ close: () => void }> = [];
+    let releaseBarrier: (() => void) | undefined;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    transaction.mockImplementation(async () => {
+      const tx = { close: vi.fn(), commit: vi.fn().mockResolvedValue(undefined) };
+      opened.push(tx);
+      if (opened.length === 2) {
+        releaseBarrier?.();
+      }
+      return tx;
+    });
+    const held = await Promise.all(
+      Array.from({ length: WORKER_DB_AGGREGATE_CONCURRENCY - 2 }, () =>
+        workerDatabaseConcurrencyGate.acquire("write"),
+      ),
+    );
+    const completed = vi.fn();
+    const pending = Promise.all(
+      Array.from({ length: 2 }, () =>
+        runWithDatabaseRequestScope(async () => {
+          const db = await getDb();
+          const tx = await db.transaction("write");
+          try {
+            await barrier;
+            await (await getDb()).execute("select 1");
+            await tx.commit();
+            completed();
+          } finally {
+            tx.close();
+          }
+        }),
+      ),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(WORKER_DB_ADMISSION_POLL_MAX_MS * 2);
+      expect(completed).toHaveBeenCalledTimes(2);
+      await pending;
+      expect(execute).toHaveBeenCalledTimes(2);
+      expect(spanAttributes).toHaveLength(4);
+      expect(spanAttributes.every((attributes) => attributes["fluncle.queue_wait_ms"] === 0)).toBe(
+        true,
+      );
+      expect(
+        spanAttributes.every((attributes) => attributes["fluncle.request_in_flight_max"] === 2),
+      ).toBe(true);
+      expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(held.length);
+    } finally {
+      for (const tx of opened) {
+        tx.close();
+      }
+      for (const lease of held) {
+        lease.release();
+      }
+      await vi.advanceTimersByTimeAsync(WORKER_DB_ADMISSION_POLL_MAX_MS);
+      await pending;
+    }
+    expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
+  });
+
+  it("shares transaction admission with a sibling that queued before the transaction opened", async () => {
+    execute.mockResolvedValue({ rows: [] });
+    const transactionClose = vi.fn();
+    transaction.mockResolvedValue({ close: transactionClose });
+    const held = await Promise.all(
+      Array.from({ length: WORKER_DB_AGGREGATE_CONCURRENCY }, () =>
+        workerDatabaseConcurrencyGate.acquire("write"),
+      ),
+    );
+    const completed = vi.fn();
+    const pending = runWithDatabaseRequestScope(async () => {
+      const db = await getDb();
+      const opening = db.transaction("write");
+      const sibling = db.execute("select 1");
+      const tx = await opening;
+      try {
+        await sibling;
+        completed();
+      } finally {
+        tx.close();
+      }
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(transaction).not.toHaveBeenCalled();
+      held[0]?.release();
+      await vi.advanceTimersByTimeAsync(WORKER_DB_ADMISSION_POLL_MAX_MS);
+      expect(transaction).toHaveBeenCalledOnce();
+      expect(completed).toHaveBeenCalledOnce();
+      await pending;
+      expect(spanAttributes[1]?.["fluncle.queue_wait_ms"]).toBe(0);
+    } finally {
+      for (const lease of held) {
+        lease.release();
+      }
+      await vi.advanceTimersByTimeAsync(WORKER_DB_ADMISSION_POLL_MAX_MS);
+      await pending;
+    }
+    expect(transactionClose).toHaveBeenCalledOnce();
+    expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
+  });
+
+  it.each(["execute", "batch"] as const)(
+    "retains a borrowed %s slot after its last transaction closes without granting further re-entrancy",
+    async (operation) => {
+      let settleBorrow: (() => void) | undefined;
+      const blocked = new Promise<{ rows: [] }>((resolve) => {
+        settleBorrow = () => resolve({ rows: [] });
+      });
+      if (operation === "execute") {
+        execute.mockReturnValueOnce(blocked).mockResolvedValue({ rows: [] });
+      } else {
+        batch.mockReturnValueOnce(blocked);
+        execute.mockResolvedValue({ rows: [] });
+      }
+      transaction.mockResolvedValue({ close: vi.fn() });
+      const held = await Promise.all(
+        Array.from({ length: WORKER_DB_AGGREGATE_CONCURRENCY - 1 }, () =>
+          workerDatabaseConcurrencyGate.acquire("write"),
+        ),
+      );
+      try {
+        await runWithDatabaseRequestScope(async () => {
+          const db = await getDb();
+          const tx = await db.transaction("write");
+          const borrowing =
+            operation === "execute" ? db.execute("select 1") : db.batch(["select 1"], "read");
+          tx.close();
+          const next = db.execute("select 2");
+          try {
+            await vi.advanceTimersByTimeAsync(100);
+            expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(4);
+            expect(execute.mock.calls.map(([statement]) => statement)).not.toContain("select 2");
+          } finally {
+            settleBorrow?.();
+            await borrowing;
+            await vi.advanceTimersByTimeAsync(WORKER_DB_ADMISSION_POLL_MAX_MS);
+            await next;
+          }
+          expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(3);
+          expect(spanAttributes[1]?.["fluncle.queue_wait_ms"]).toBe(0);
+          expect(spanAttributes[2]?.["fluncle.queue_wait_ms"]).toBeGreaterThanOrEqual(100);
+        });
+      } finally {
+        for (const lease of held) {
+          lease.release();
+        }
+      }
+      expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
+    },
+  );
+
+  it("retains a nested transaction's slot when its parent closes before registration", async () => {
+    execute.mockResolvedValue({ rows: [] });
+    transaction.mockImplementation(async () => ({ close: vi.fn() }));
+    const held = await Promise.all(
+      Array.from({ length: WORKER_DB_AGGREGATE_CONCURRENCY - 1 }, () =>
+        workerDatabaseConcurrencyGate.acquire("write"),
+      ),
+    );
+    try {
+      await runWithDatabaseRequestScope(async () => {
+        const db = await getDb();
+        const parent = await db.transaction("write");
+        const opening = db.transaction("write");
+        parent.close();
+        const nested = await opening;
+        try {
+          expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(4);
+          await db.execute("select 1");
+          expect(spanAttributes[2]?.["fluncle.queue_wait_ms"]).toBe(0);
+        } finally {
+          nested.close();
+        }
+        expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(3);
+      });
+    } finally {
+      for (const lease of held) {
+        lease.release();
+      }
+    }
+    expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
+  });
+
+  it.each(["commit", "rollback", "close", "failure"] as const)(
+    "retains admission after the outer transaction finishes by %s until its nested transaction closes",
+    async (finish) => {
+      execute.mockResolvedValue({ rows: [] });
+      batch.mockResolvedValue([{ rows: [] }]);
+      transaction.mockImplementation(async () => {
+        let closed = false;
+        return {
+          close: vi.fn(() => {
+            closed = true;
+          }),
+          get closed() {
+            return closed;
+          },
+          commit: vi.fn(async () => {
+            closed = true;
+          }),
+          execute: vi.fn(async () => {
+            closed = true;
+            throw new Error("Transaction is closed");
+          }),
+          rollback: vi.fn(async () => {
+            closed = true;
+          }),
+        };
+      });
+      const held = await Promise.all(
+        Array.from({ length: WORKER_DB_AGGREGATE_CONCURRENCY - 1 }, () =>
+          workerDatabaseConcurrencyGate.acquire("write"),
+        ),
+      );
+      try {
+        await runWithDatabaseRequestScope(async () => {
+          const db = await getDb();
+          const outer = await db.transaction("write");
+          const inner = await db.transaction("write");
+          try {
+            expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(4);
+            if (finish === "failure") {
+              await expect(outer.execute("select 1")).rejects.toThrow("Transaction is closed");
+            } else if (finish === "close") {
+              outer.close();
+            } else {
+              await outer[finish]();
+            }
+            outer.close();
+            expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(4);
+            await db.batch(["select 1"], "read");
+            expect(spanAttributes[2]?.["fluncle.queue_wait_ms"]).toBe(0);
+            expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(4);
+            inner.close();
+            inner.close();
+            expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(3);
+            const blocker = await workerDatabaseConcurrencyGate.acquire("write");
+            const pending = db.execute("select 1");
+            try {
+              await vi.advanceTimersByTimeAsync(100);
+              expect(execute).not.toHaveBeenCalled();
+            } finally {
+              blocker.release();
+              await vi.advanceTimersByTimeAsync(WORKER_DB_ADMISSION_POLL_MAX_MS);
+              await pending;
+            }
+          } finally {
+            outer.close();
+            inner.close();
+          }
+        });
+      } finally {
+        for (const lease of held) {
+          lease.release();
+        }
+      }
+      expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
+    },
+  );
+
+  it("preserves the parent's admission when a nested transaction fails to open", async () => {
+    execute.mockResolvedValue({ rows: [] });
+    transaction
+      .mockResolvedValueOnce({ close: vi.fn() })
+      .mockRejectedValueOnce(new Error("Transaction could not open"));
+    const held = await Promise.all(
+      Array.from({ length: WORKER_DB_AGGREGATE_CONCURRENCY - 1 }, () =>
+        workerDatabaseConcurrencyGate.acquire("write"),
+      ),
+    );
+    try {
+      await runWithDatabaseRequestScope(async () => {
+        const db = await getDb();
+        const parent = await db.transaction("write");
+        try {
+          await expect(db.transaction("write")).rejects.toThrow("Transaction could not open");
+          expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(4);
+          await db.execute("select 1");
+          expect(spanAttributes[2]?.["fluncle.queue_wait_ms"]).toBe(0);
+        } finally {
+          parent.close();
+        }
+        expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(3);
+      });
+    } finally {
+      for (const lease of held) {
+        lease.release();
+      }
+    }
+    expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
+  });
+
+  it.each(["primary", "telemetry"] as const)(
+    "does not borrow a %s transaction's slot for the other database gate",
+    async (holdingSlot) => {
+      execute.mockResolvedValue({ rows: [] });
+      transaction.mockResolvedValue({ close: vi.fn() });
+      const otherGate =
+        holdingSlot === "primary"
+          ? workerTelemetryDatabaseConcurrencyGate
+          : workerDatabaseConcurrencyGate;
+      const otherCeiling = holdingSlot === "primary" ? 3 : WORKER_DB_AGGREGATE_CONCURRENCY;
+      const held = await Promise.all(
+        Array.from({ length: otherCeiling }, () => otherGate.acquire("write")),
+      );
+      try {
+        await runWithDatabaseRequestScope(async () => {
+          const primary = await getDb();
+          const telemetry = await getTelemetryDb();
+          if (telemetry === undefined) {
+            throw new Error("Telemetry fixture must be configured");
+          }
+          const holder = holdingSlot === "primary" ? primary : telemetry;
+          const other = holdingSlot === "primary" ? telemetry : primary;
+          const tx = await holder.transaction("write");
+          const pending = other.execute("select 1");
+          try {
+            await vi.advanceTimersByTimeAsync(100);
+            expect(execute).not.toHaveBeenCalled();
+            held[0]?.release();
+            await vi.advanceTimersByTimeAsync(WORKER_DB_ADMISSION_POLL_MAX_MS);
+            await pending;
+            expect(execute).toHaveBeenCalledOnce();
+            expect(spanAttributes[1]?.["fluncle.queue_wait_ms"]).toBeGreaterThanOrEqual(100);
+          } finally {
+            tx.close();
+            for (const lease of held) {
+              lease.release();
+            }
+            await vi.advanceTimersByTimeAsync(WORKER_DB_ADMISSION_POLL_MAX_MS);
+            await pending;
+          }
+        });
+      } finally {
+        for (const lease of held) {
+          lease.release();
+        }
+      }
+      expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
+      expect(workerTelemetryDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
+    },
+  );
+
+  it("queues behind new owners after its transaction lease is reclaimed", async () => {
+    execute.mockResolvedValue({ rows: [] });
+    transaction.mockResolvedValue({ close: vi.fn() });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await runWithDatabaseRequestScope(async () => {
+      const db = await getDb();
+      const tx = await db.transaction("write");
+      vi.setSystemTime(WORKER_DB_LEASE_HOLD_MAX_MS);
+      const held = await Promise.all(
+        Array.from({ length: WORKER_DB_AGGREGATE_CONCURRENCY }, () =>
+          workerDatabaseConcurrencyGate.acquire("write"),
+        ),
+      );
+      const pending = db.execute("select 1");
+      try {
+        await vi.advanceTimersByTimeAsync(100);
+        expect(execute).not.toHaveBeenCalled();
+        held[0]?.release();
+        await vi.advanceTimersByTimeAsync(WORKER_DB_ADMISSION_POLL_MAX_MS);
+        await pending;
+        tx.close();
+        expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(3);
+      } finally {
+        tx.close();
+        for (const lease of held) {
+          lease.release();
+        }
+        await vi.advanceTimersByTimeAsync(WORKER_DB_ADMISSION_POLL_MAX_MS);
+        await pending;
+      }
+    });
+    expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
+  });
+
+  it("queues a request without an open transaction behind a full gate", async () => {
+    execute.mockResolvedValue({ rows: [] });
+    const held = await Promise.all(
+      Array.from({ length: WORKER_DB_AGGREGATE_CONCURRENCY }, () =>
+        workerDatabaseConcurrencyGate.acquire("write"),
+      ),
+    );
+    const pending = runWithDatabaseRequestScope(async () => (await getDb()).execute("select 1"));
+    try {
+      await vi.advanceTimersByTimeAsync(100);
+      expect(execute).not.toHaveBeenCalled();
+      held[0]?.release();
+      await vi.advanceTimersByTimeAsync(WORKER_DB_ADMISSION_POLL_MAX_MS);
+      await pending;
+      expect(execute).toHaveBeenCalledOnce();
+      expect(spanAttributes[0]?.["fluncle.queue_wait_ms"]).toBeGreaterThanOrEqual(100);
+    } finally {
+      for (const lease of held) {
+        lease.release();
+      }
+    }
+    expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
+  });
+});
 
 describe("getDb instrumentation", () => {
   it("returns the client's execute result unchanged and spans a string query", async () => {

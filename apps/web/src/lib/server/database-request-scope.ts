@@ -1,5 +1,9 @@
 import { type Client } from "@libsql/client/web";
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  type WorkerDatabaseConcurrencyGate,
+  type WorkerDatabaseConcurrencyLease,
+} from "../database-concurrency";
 
 export type DatabaseClientSlot = "primary" | "telemetry";
 
@@ -7,12 +11,24 @@ type DatabaseRequestScope = {
   clients: Map<DatabaseClientSlot, Promise<Client | undefined>>;
   inFlight: number;
   observedMaximum: number;
+  transactions: Map<WorkerDatabaseConcurrencyGate, RequestTransactionAdmission>;
   values: Map<symbol, unknown>;
 };
 
 export type DatabaseRequestOperationLease = {
   observedMaximum: () => number;
   release: () => void;
+};
+
+export type DatabaseRequestTransactionLease = {
+  release: () => void;
+};
+
+type RequestTransactionAdmission = {
+  borrowedLeases: WeakSet<WorkerDatabaseConcurrencyLease>;
+  borrowers: number;
+  ownedLeases: Set<WorkerDatabaseConcurrencyLease>;
+  refCount: number;
 };
 
 const databaseRequestScope = new AsyncLocalStorage<DatabaseRequestScope>();
@@ -23,9 +39,106 @@ export function runWithDatabaseRequestScope<Result>(run: () => Result): Result {
   }
 
   return databaseRequestScope.run(
-    { clients: new Map(), inFlight: 0, observedMaximum: 0, values: new Map() },
+    {
+      clients: new Map(),
+      inFlight: 0,
+      observedMaximum: 0,
+      transactions: new Map(),
+      values: new Map(),
+    },
     run,
   );
+}
+
+function releaseUnusedAdmission(
+  scope: DatabaseRequestScope,
+  gate: WorkerDatabaseConcurrencyGate,
+  admission: RequestTransactionAdmission,
+): void {
+  if (admission.refCount !== 0 || admission.borrowers !== 0) {
+    return;
+  }
+
+  scope.transactions.delete(gate);
+  for (const lease of admission.ownedLeases) {
+    lease.release();
+  }
+}
+
+export function getRequestScopedTransactionLease(
+  gate: WorkerDatabaseConcurrencyGate,
+): WorkerDatabaseConcurrencyLease | undefined {
+  const scope = databaseRequestScope.getStore();
+  const admission = scope?.transactions.get(gate);
+  if (scope === undefined || admission === undefined || admission.refCount === 0) {
+    return undefined;
+  }
+
+  const snapshot = gate.snapshot();
+  if (![...admission.ownedLeases].some((lease) => lease.isActive())) {
+    return undefined;
+  }
+
+  admission.borrowers += 1;
+  let released = false;
+  const lease: WorkerDatabaseConcurrencyLease = {
+    aggregateInFlight: snapshot.aggregateInFlight,
+    isActive: () =>
+      !released && [...admission.ownedLeases].some((ownedLease) => ownedLease.isActive()),
+    queueWaitMs: 0,
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      admission.borrowers -= 1;
+      releaseUnusedAdmission(scope, gate, admission);
+    },
+  };
+  admission.borrowedLeases.add(lease);
+  return lease;
+}
+
+export function enterDatabaseRequestTransaction(
+  gate: WorkerDatabaseConcurrencyGate,
+  lease: WorkerDatabaseConcurrencyLease,
+): DatabaseRequestTransactionLease {
+  const scope = databaseRequestScope.getStore();
+  if (scope === undefined) {
+    return lease;
+  }
+
+  let admission = scope.transactions.get(gate);
+  if (admission === undefined) {
+    admission = {
+      borrowedLeases: new WeakSet(),
+      borrowers: 0,
+      ownedLeases: new Set(),
+      refCount: 0,
+    };
+    scope.transactions.set(gate, admission);
+  }
+
+  const borrowed = admission.borrowedLeases.has(lease);
+  if (!borrowed) {
+    admission.ownedLeases.add(lease);
+  }
+  admission.refCount += 1;
+  if (borrowed) {
+    lease.release();
+  }
+  const heldAdmission = admission;
+  let released = false;
+  return {
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      heldAdmission.refCount -= 1;
+      releaseUnusedAdmission(scope, gate, heldAdmission);
+    },
+  };
 }
 
 export function getRequestScopedValue<Value>(key: symbol, create: () => Value): Value | undefined {
