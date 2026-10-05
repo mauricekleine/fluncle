@@ -43,6 +43,7 @@ https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.flun
 - **A failed cover falls back to the eclipse artwork.** `TrackArtwork` checks the image element on mount because an image can fail before React hydrates. A failed selected `currentSrc` candidate replaces the whole image with the eclipse fallback; changing the requested source retries the image.
 - **The DTO prefers the owned master server-side.** `bestAlbumCoverUrl` / `bestArtistAvatarUrl` return the CF Images URL once the sweep resolved one, else the stored source URL (the label `logoKey ?? image_url` precedent). The finding DTO (`toLeanTrackListItem`) emits it as `albumImageUrl`, so **web, mobile, and the video pipeline all upgrade at once** — no consumer changes.
 - **The `?v` bust.** A replaced master bumps `image_updated_at`; the `?v=<epoch>` rides the source URL, so Cloudflare re-keys every rendition. A transform cache survives a zone purge (the video-variants lesson), so the `?v` is the ONLY reliable rendition eviction.
+- **Bare masters are edge-cached by a dashboard Cache Rule.** `found.fluncle.com/albums/<slug>.jpg` falls under the media-by-extension rule (edge 1 day, browser 1 hour, 404s included); see [Edge caching on found.fluncle.com](video-variants.md#edge-caching-on-foundflunclecom).
 
 ## The sweep (agent-tier, Worker-paced)
 
