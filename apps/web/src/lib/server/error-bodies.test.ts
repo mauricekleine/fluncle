@@ -1,6 +1,10 @@
 import { ORPCError } from "@orpc/server";
 import * as Sentry from "@sentry/cloudflare";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  WORKER_DB_QUEUE_WAIT_MAX_MS,
+  WorkerDatabaseConcurrencyGate,
+} from "../database-concurrency";
 import { DueWorkMaintenancePendingError } from "./due-work";
 import { apiErrorResponse } from "./http-errors";
 import { apiFault, type ApiFaultData, isApiFaultData } from "./orpc/_shared";
@@ -12,10 +16,53 @@ vi.mock("@sentry/cloudflare", async (importOriginal) => ({
 }));
 
 afterEach(() => {
+  vi.clearAllTimers();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("apiFault — the oRPC catch converter", () => {
+  it("maps a database queue timeout to database_busy 503 without capturing an unexpected fault", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const sentrySpy = vi.mocked(Sentry.captureException);
+    sentrySpy.mockClear();
+    const gate = new WorkerDatabaseConcurrencyGate(1);
+    const held = await gate.acquire("write");
+    const rejected = vi.fn();
+    const pending = gate.acquire("read").catch((error: unknown) => {
+      rejected();
+      return error;
+    });
+
+    await vi.advanceTimersByTimeAsync(WORKER_DB_QUEUE_WAIT_MAX_MS - 1);
+    expect(rejected).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(rejected).toHaveBeenCalledOnce();
+    const error = await pending;
+    expect(error).toBeInstanceOf(ApiError);
+    const fault = apiFault(error);
+    expect(fault.status).toBe(503);
+    expect(fault.data).toMatchObject({ apiCode: "database_busy" });
+    expect(errSpy).not.toHaveBeenCalled();
+    expect(sentrySpy).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(warn.mock.calls[0]?.[0]))).toEqual({
+      accessClass: "read",
+      event: "database.admission-timeout",
+      queueWaitMs: WORKER_DB_QUEUE_WAIT_MAX_MS,
+    });
+    expect(gate.snapshot().aggregateInFlight).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+    held.release();
+    expect(gate.snapshot().aggregateInFlight).toBe(0);
+    const next = await gate.acquire("read");
+    expect(next.queueWaitMs).toBe(0);
+    next.release();
+  });
+
   it("maps expected due-work convergence to a quiet typed 503", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const sentrySpy = vi.mocked(Sentry.captureException);

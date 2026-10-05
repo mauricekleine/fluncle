@@ -3,15 +3,18 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSync } from "oxc-parser";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CATALOGUE_PUBLIC_ENTITY_COUNT_DB_CONCURRENCY,
   LOCAL_DB_CONCURRENCY,
   PRIMARY_DB_CONCURRENCY,
   REMOTE_DB_CONCURRENCY,
   TELEMETRY_DB_CONCURRENCY,
+  WORKER_DB_ADMISSION_POLL_MAX_MS,
   WORKER_DB_AGGREGATE_CONCURRENCY,
   WORKER_DB_HEAVY_READ_CONCURRENCY,
+  WORKER_DB_LEASE_HOLD_MAX_MS,
+  WorkerDatabaseConcurrencyGate,
   workerDatabaseConcurrencyGate,
   workerTelemetryDatabaseConcurrencyGate,
 } from "./database-concurrency";
@@ -475,6 +478,119 @@ function resolveExportedNumericValue(
 function describeCall(call: CallSite): string {
   return `${relative(REPO_ROOT, call.file)}:${call.line}`;
 }
+
+describe("Worker database admission", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("bounds polling work and admits a waiter promptly after a slot is released", async () => {
+    const gate = new WorkerDatabaseConcurrencyGate(1);
+    const held = await gate.acquire("write");
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    const admitted = vi.fn();
+    const pending = gate.acquire("read").then((lease) => {
+      admitted();
+      return lease;
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(admitted).not.toHaveBeenCalled();
+    expect(timer.mock.calls.length).toBeLessThan(150);
+    held.release();
+    await vi.advanceTimersByTimeAsync(WORKER_DB_ADMISSION_POLL_MAX_MS);
+    expect(admitted).toHaveBeenCalledOnce();
+    const lease = await pending;
+    expect(lease.queueWaitMs).toBeGreaterThanOrEqual(1_000);
+    expect(lease.queueWaitMs).toBeLessThanOrEqual(1_010);
+    expect(lease.aggregateInFlight).toBe(1);
+    lease.release();
+    expect(gate.snapshot()).toEqual({ aggregateInFlight: 0, aggregateObservedMaximum: 1 });
+  });
+
+  it.each(["heavy-read", "write"] as const)(
+    "reclaims a lost %s lease without releasing its replacement twice",
+    async (accessClass) => {
+      const gate = new WorkerDatabaseConcurrencyGate(1);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const lost = await gate.acquire(accessClass);
+      vi.setSystemTime(WORKER_DB_LEASE_HOLD_MAX_MS - 1_000);
+      const admitted = vi.fn();
+      const pending = gate.acquire(accessClass).then((lease) => {
+        admitted();
+        return lease;
+      });
+
+      await vi.advanceTimersByTimeAsync(990);
+      expect(admitted).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(20);
+      expect(admitted).toHaveBeenCalledOnce();
+      const replacement = await pending;
+      expect(warn).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(warn.mock.calls[0]?.[0]))).toEqual({
+        accessClass,
+        event: "database.lease-reclaimed",
+        heldMs: WORKER_DB_LEASE_HOLD_MAX_MS + replacement.queueWaitMs - 1_000,
+      });
+      expect(replacement.queueWaitMs).toBeGreaterThanOrEqual(1_000);
+      lost.release();
+      lost.release();
+      expect(gate.snapshot()).toEqual({ aggregateInFlight: 1, aggregateObservedMaximum: 1 });
+      replacement.release();
+      replacement.release();
+      expect(gate.snapshot().aggregateInFlight).toBe(0);
+    },
+  );
+
+  it("snapshots reclaim expired leases while preserving younger work", async () => {
+    const gate = new WorkerDatabaseConcurrencyGate(2);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const expired = await gate.acquire("heavy-read");
+    vi.setSystemTime(WORKER_DB_LEASE_HOLD_MAX_MS - 1);
+    const younger = await gate.acquire("read");
+    expect(gate.snapshot()).toEqual({ aggregateInFlight: 2, aggregateObservedMaximum: 2 });
+    vi.setSystemTime(WORKER_DB_LEASE_HOLD_MAX_MS);
+    expect(gate.snapshot()).toEqual({ aggregateInFlight: 1, aggregateObservedMaximum: 2 });
+    expect(warn).toHaveBeenCalledOnce();
+    expired.release();
+    expect(gate.snapshot().aggregateInFlight).toBe(1);
+    const heavy = await gate.acquire("heavy-read");
+    expect(heavy.queueWaitMs).toBe(0);
+    younger.release();
+    heavy.release();
+    expect(gate.snapshot().aggregateInFlight).toBe(0);
+  });
+
+  it("admits ordinary reads beside a held and a queued heavy read", async () => {
+    const gate = new WorkerDatabaseConcurrencyGate();
+    const heavy = await gate.acquire("heavy-read");
+    const admitted = vi.fn();
+    const pending = gate.acquire("heavy-read").then((lease) => {
+      admitted();
+      return lease;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const reads = await Promise.all(Array.from({ length: 3 }, () => gate.acquire("read")));
+    expect(admitted).not.toHaveBeenCalled();
+    expect(reads.every((lease) => lease.queueWaitMs === 0)).toBe(true);
+    expect(gate.snapshot().aggregateInFlight).toBe(4);
+    heavy.release();
+    await vi.advanceTimersByTimeAsync(WORKER_DB_ADMISSION_POLL_MAX_MS);
+    expect(admitted).toHaveBeenCalledOnce();
+    (await pending).release();
+    for (const lease of reads) {
+      lease.release();
+    }
+    expect(gate.snapshot()).toEqual({ aggregateInFlight: 0, aggregateObservedMaximum: 4 });
+  });
+});
 
 describe("the telemetry client's isolate gate", () => {
   it("admits telemetry work while every primary slot is held by a stalled write", async () => {
