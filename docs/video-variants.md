@@ -106,7 +106,7 @@ Edge and browser caching on `found.fluncle.com` comes from Cloudflare Cache Rule
 - **Masters: edge 30 days, browser 1 day.** `footage.mp4`, `footage.social.mp4`, `poster.jpg` and `cover.jpg`. The long edge TTL is safe only because finalize, `purge_video` and a clip re-cut purge these exact URLs through `videoPurgeUrls`. A path written outside those flows stays stale at the edge for up to 30 days unless purged by hand.
 - **Other media, matched by file extension: edge 1 day, browser 1 hour.** This covers album and artist masters under `albums/` and similar owned images.
 - **Excluded from caching:** `/cdn-cgi/` (Media Transformations and Images keep their own cache, keyed by `?v`), `plate.png` and `plate.background.png`, and `set.mp4`, which exceeds the 512 MB per-object cache limit on the Free plan.
-- **404s are cached for the same TTLs.** The Free plan cannot set a per-status TTL, so a request for a master before its upload lands can pin a 404 at the edge for up to 30 days. Purge the URL after a late upload; the finalize purge already does this for finding masters.
+- **404s are cached for the same TTLs.** The rules set no status-code TTL override, so a request for a master before its upload lands can pin a 404 at the edge for up to 30 days. Purge the URL after a late upload; the finalize purge already does this for finding masters. A status-code TTL in the same Cache Rule would shorten or disable caching of error responses.
 - **`found.fluncle.com/robots.txt` is an R2 object** in the `fluncle-videos` bucket, not served by the web app. Edit it by uploading the object.
 
 ## Layout compatibility
