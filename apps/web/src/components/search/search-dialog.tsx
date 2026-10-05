@@ -132,11 +132,14 @@ export function SearchDialog({
   onOpenChange,
   open,
   seed,
+  takePendingInput,
 }: {
   onOpenChange: (open: boolean) => void;
   open: boolean;
 
   seed?: { query: string; token: number };
+
+  takePendingInput?: () => string;
 }): ReactNode {
   const navigate = useNavigate();
   const [query, setQuery] = useState(seed?.query ?? "");
@@ -276,6 +279,14 @@ export function SearchDialog({
     >
       <Command shouldFilter={false}>
         <CommandInput
+          onFocus={() => {
+            const typed = takePendingInput?.() ?? "";
+
+            if (typed) {
+              exampleClick.current = false;
+              setQuery((current) => `${current}${typed}`);
+            }
+          }}
           onValueChange={(next) => {
             exampleClick.current = false;
             setQuery(next);

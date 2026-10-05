@@ -3,13 +3,17 @@ import {
   createContext,
   type ReactNode,
   Suspense,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { LazyPopupBoundary } from "@/components/lazy-popup-boundary";
 import { lazyNamed } from "@/lib/lazy-named";
+import { bufferPendingKey } from "@/lib/search-keystrokes";
+
 const loadSearchDialog = () => import("@/components/search/search-dialog");
 const SearchDialog = lazyNamed(loadSearchDialog, "SearchDialog");
 
@@ -51,8 +55,15 @@ export function SearchProvider({ children }: { children: ReactNode }): ReactNode
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
+      if (event.key === "Meta" || event.key === "Control") {
+        prefetchSearchDialog();
+
+        return;
+      }
+
       if (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
+        prefetchSearchDialog();
         setOpen((current) => !current);
       }
     }
@@ -77,6 +88,7 @@ export function SearchTrigger({ showTrigger = true }: { showTrigger?: boolean })
   const { open, seed, setOpen, state } = useSearchController();
   const isApple = useIsApple();
   const [activated, setActivated] = useState(false);
+  const pendingInput = useRef("");
 
   useEffect(() => {
     if (state) {
@@ -84,20 +96,63 @@ export function SearchTrigger({ showTrigger = true }: { showTrigger?: boolean })
     }
   }, [state]);
 
+  useEffect(() => {
+    pendingInput.current = "";
+
+    if (!state) {
+      return;
+    }
+
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.defaultPrevented || isInsideSearchDialog(document.activeElement)) {
+        return;
+      }
+
+      const action = bufferPendingKey(pendingInput.current, event);
+
+      if (action.kind === "pass") {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (action.kind === "close") {
+        setOpen(false);
+      } else if (action.kind === "buffer") {
+        pendingInput.current = action.buffer;
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown, true);
+
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [setOpen, state]);
+
+  const takePendingInput = useCallback(() => {
+    const typed = pendingInput.current;
+
+    pendingInput.current = "";
+
+    return typed;
+  }, []);
+
   return (
     <>
       {showTrigger ? (
         <button
           aria-keyshortcuts={isApple ? "Meta+K" : "Control+K"}
-          aria-label="Search the archive"
           className="search-trigger"
           onClick={() => open()}
           onFocus={prefetchSearchDialog}
+          onPointerDown={prefetchSearchDialog}
           onPointerEnter={prefetchSearchDialog}
           type="button"
         >
           <MagnifyingGlassIcon aria-hidden="true" className="search-trigger-icon" />
-          <span className="search-trigger-label">Search</span>
+          <span className="search-trigger-label">
+            Search<span className="sr-only"> the archive</span>
+          </span>
 
           <kbd aria-hidden="true" className="search-trigger-kbd">
             {isApple ? "⌘K" : "Ctrl K"}
@@ -108,12 +163,21 @@ export function SearchTrigger({ showTrigger = true }: { showTrigger?: boolean })
       {state || activated ? (
         <LazyPopupBoundary>
           <Suspense fallback={null}>
-            <SearchDialog onOpenChange={setOpen} open={state} seed={seed} />
+            <SearchDialog
+              onOpenChange={setOpen}
+              open={state}
+              seed={seed}
+              takePendingInput={takePendingInput}
+            />
           </Suspense>
         </LazyPopupBoundary>
       ) : undefined}
     </>
   );
+}
+
+function isInsideSearchDialog(element: Element | null): boolean {
+  return Boolean(element?.closest(".search-dialog"));
 }
 
 export function useIsApple(): boolean {
