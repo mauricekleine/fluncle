@@ -239,9 +239,10 @@ type AlbumWorkRow = {
   artwork_url_template: string | null;
   artwork_width: number | null;
 
-  cover_url: string | null;
+  caa_cover_url: string | null;
   image_failures: number;
   slug: string;
+  spotify_cover_url: string | null;
 };
 
 type ArtistWorkRow = {
@@ -254,9 +255,12 @@ const CAA_SOURCE_SQL = `(t.album_image_url glob 'http*://coverartarchive.org/rel
   or (t.album_image_url glob 'http*://coverartarchive.org/release/*/front-[0-9]*'
     and t.album_image_url not glob '*/front-*[^0-9]*'))`;
 const SPOTIFY_SOURCE_SQL = `t.album_image_url glob '${SPOTIFY_IMAGE_HOST}*'`;
-const ALBUM_COVER_SQL = `(select t.album_image_url from tracks t
-  where t.album_id = albums.id and (${CAA_SOURCE_SQL} or ${SPOTIFY_SOURCE_SQL})
-  order by case when ${CAA_SOURCE_SQL} then 0 else 1 end, t.track_id asc limit 1)`;
+const ALBUM_CAA_COVER_SQL = `(select t.album_image_url from tracks t
+  where t.album_id = albums.id and ${CAA_SOURCE_SQL}
+  order by t.track_id asc limit 1)`;
+const ALBUM_SPOTIFY_COVER_SQL = `(select t.album_image_url from tracks t
+  where t.album_id = albums.id and ${SPOTIFY_SOURCE_SQL}
+  order by t.track_id asc limit 1)`;
 
 type RetryPosition = { slug: string; tier: number };
 
@@ -264,7 +268,12 @@ function decodeRetryCursor(cursor: string | undefined): RetryPosition | undefine
   if (cursor === undefined) {
     return undefined;
   }
-  const position: unknown = JSON.parse(cursor);
+  let position: unknown;
+  try {
+    position = JSON.parse(cursor);
+  } catch {
+    throw new Error("Invalid cover-master retry cursor");
+  }
   if (
     !Array.isArray(position) ||
     position.length !== 2 ||
@@ -295,7 +304,8 @@ async function loadCoverMasterRows(
     const result = await db.execute({
       args: slugs,
       sql: `select slug, artwork_url_template, artwork_width, artwork_height, image_failures,
-                   ${ALBUM_COVER_SQL} as cover_url
+                   ${ALBUM_CAA_COVER_SQL} as caa_cover_url,
+                   ${ALBUM_SPOTIFY_COVER_SQL} as spotify_cover_url
             from albums where slug in (${placeholders})`,
     });
     return restoreCoverMasterOrder(typedRows<AlbumWorkRow>(result.rows), slugs);
@@ -379,7 +389,8 @@ async function listPendingAlbums(
 ): Promise<AlbumWorkRow[]> {
   const db = await getDb();
   const cooldownBefore = new Date(Date.now() - COOLDOWN_MS).toISOString();
-  const cover = `${ALBUM_COVER_SQL} as cover_url`;
+  const cover = `${ALBUM_CAA_COVER_SQL} as caa_cover_url,
+                 ${ALBUM_SPOTIFY_COVER_SQL} as spotify_cover_url`;
 
   const result = await db.execute({
     args: cursor ? [cooldownBefore, cursor, limit] : [cooldownBefore, limit],
@@ -525,7 +536,7 @@ async function requeueTerminalNone(
   const source =
     kind === "album"
       ? `((artwork_url_template is not null and artwork_url_template <> '' and artwork_width > 0 and artwork_height > 0)
-        or ${ALBUM_COVER_SQL} is not null)`
+        or ${ALBUM_CAA_COVER_SQL} is not null or ${ALBUM_SPOTIFY_COVER_SQL} is not null)`
       : `(image_url glob '${SPOTIFY_IMAGE_HOST}*' or lower(image_url) glob 'https://${DEEZER_IMAGE_HOSTNAME}/*')`;
   const publishedFinding =
     kind === "album"
@@ -605,7 +616,12 @@ async function tryRung(
     return undefined;
   }
 
-  const image = await downloadCappedImage(url);
+  let image: FetchedImage | undefined;
+  try {
+    image = await downloadCappedImage(url);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error), kind: "failed" };
+  }
 
   if (!image) {
     return undefined;
@@ -621,25 +637,24 @@ async function resolveOneAlbum(
   bucket: Pick<R2Bucket, "put">,
 ): Promise<ResolveOutcome> {
   try {
-    return (
-      (await tryRung(
-        bucket,
-        "album",
-        row.slug,
-        appleCoverMasterUrl(row.artwork_url_template, row.artwork_width, row.artwork_height),
-        "apple",
-      )) ??
-      (await tryRung(bucket, "album", row.slug, caaCoverMasterUrl(row.cover_url), "coverart")) ??
-      (await tryRung(
-        bucket,
-        "album",
-        row.slug,
-        spotifyCoverMasterUrl(row.cover_url),
-        "spotify",
-      )) ?? {
-        kind: "none",
+    const rungs: Array<{ source: CoverMasterSource; url: string | undefined }> = [
+      {
+        source: "apple",
+        url: appleCoverMasterUrl(row.artwork_url_template, row.artwork_width, row.artwork_height),
+      },
+      { source: "coverart", url: caaCoverMasterUrl(row.caa_cover_url) },
+      { source: "spotify", url: spotifyCoverMasterUrl(row.spotify_cover_url) },
+    ];
+    let firstError: string | undefined;
+    for (const rung of rungs) {
+      const outcome = await tryRung(bucket, "album", row.slug, rung.url, rung.source);
+      if (outcome?.kind === "failed") {
+        firstError ??= outcome.error;
+      } else if (outcome) {
+        return outcome;
       }
-    );
+    }
+    return firstError === undefined ? { kind: "none" } : { error: firstError, kind: "failed" };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error), kind: "failed" };
   }

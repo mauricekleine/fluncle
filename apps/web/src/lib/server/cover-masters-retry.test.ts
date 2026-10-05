@@ -109,6 +109,14 @@ async function seedArtist(artist: {
   });
 }
 
+async function seedAlbumTrackCover(slug: string, trackId: string, coverUrl: string): Promise<void> {
+  await seedTrack(db, { logId: null, trackId });
+  await db.execute({
+    args: [`alb_${slug}`, coverUrl, trackId],
+    sql: "update tracks set album_id = ?, album_image_url = ? where track_id = ?",
+  });
+}
+
 async function albumRow(slug: string): Promise<Record<string, unknown> | undefined> {
   const result = await db.execute({ args: [slug], sql: `select * from albums where slug = ?` });
 
@@ -151,7 +159,140 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe("resolveCoverMasters — album source fall-through", () => {
+  it.each([
+    { retryNone: false, status: 500 },
+    { retryNone: true, status: 500 },
+    { retryNone: false, status: 404 },
+    { retryNone: true, status: 404 },
+    { retryNone: false, status: 429 },
+  ])(
+    "resolves Spotify after CAA $status with retryNone=$retryNone",
+    async ({ retryNone, status }) => {
+      await seedAlbum({ slug: "fallback", state: retryNone ? "none" : "pending" });
+      await seedAlbumTrackCover(
+        "fallback",
+        "caa-track",
+        "https://coverartarchive.org/release/x/front-500",
+      );
+      await seedAlbumTrackCover(
+        "fallback",
+        "spotify-track",
+        "https://i.scdn.co/image/ab67616d00001e02abc",
+      );
+      const fetchMock = stubImageFetch(pngBytes(640, 640));
+      fetchMock.mockResolvedValueOnce(new Response(null, { status }));
+      const { bucket, put } = fakeBucket();
+
+      const result = await resolveCoverMasters(bucket, "album", 24, false, undefined, retryNone);
+
+      expect(result.resolved).toEqual(["fallback"]);
+      expect(result.failed).toEqual([]);
+      expect(result.none).toEqual([]);
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        "https://coverartarchive.org/release/x/front-1200",
+        "https://i.scdn.co/image/ab67616d0000b273abc",
+      ]);
+      expect(put).toHaveBeenCalledTimes(1);
+      expect(await albumRow("fallback")).toMatchObject({
+        image_failures: 0,
+        image_key: "albums/fallback.png",
+        image_source: "spotify",
+        image_state: "resolved",
+      });
+    },
+  );
+
+  it("keeps a CAA-only album retryable after a transient source failure", async () => {
+    await seedAlbum({ slug: "caa-only" });
+    await seedAlbumTrackCover(
+      "caa-only",
+      "caa-track",
+      "https://coverartarchive.org/release/x/front-500",
+    );
+    const fetchMock = stubImageFetch();
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 500 }));
+    const { bucket, put } = fakeBucket();
+
+    const result = await resolveCoverMasters(bucket, "album", 24, false);
+
+    expect(result.failed).toEqual([
+      { error: "transient source error 500 from coverartarchive.org", slug: "caa-only" },
+    ]);
+    expect(result.failedCount).toBe(1);
+    expect(result.none).toEqual([]);
+    expect(put).not.toHaveBeenCalled();
+    expect(await albumRow("caa-only")).toMatchObject({
+      image_attempted_at: expect.any(String),
+      image_failures: 1,
+      image_state: "pending",
+    });
+  });
+
+  it.each([404, 503])(
+    "preserves the first source error when later rungs end in %s",
+    async (status) => {
+      await seedAlbum({ slug: "unresolved", withAppleSource: true });
+      await seedAlbumTrackCover(
+        "unresolved",
+        "caa-track",
+        "https://coverartarchive.org/release/x/front-500",
+      );
+      await seedAlbumTrackCover("unresolved", "spotify-track", "https://i.scdn.co/image/x");
+      const fetchMock = stubImageFetch();
+      fetchMock
+        .mockResolvedValueOnce(new Response(null, { status: 500 }))
+        .mockResolvedValueOnce(new Response(null, { status: 404 }))
+        .mockResolvedValueOnce(new Response(null, { status }));
+      const { bucket, put } = fakeBucket();
+
+      const result = await resolveCoverMasters(bucket, "album", 24, false);
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(result.failed).toEqual([
+        { error: "transient source error 500 from is1-ssl.mzstatic.com", slug: "unresolved" },
+      ]);
+      expect(result.none).toEqual([]);
+      expect(put).not.toHaveBeenCalled();
+      expect(await albumRow("unresolved")).toMatchObject({
+        image_failures: 1,
+        image_state: "pending",
+      });
+    },
+  );
+
+  it("stops the ladder when storing a downloaded master fails", async () => {
+    await seedAlbum({ slug: "storage-failure", withAppleSource: true });
+    await seedAlbumTrackCover("storage-failure", "spotify-track", "https://i.scdn.co/image/x");
+    const fetchMock = stubImageFetch();
+    const { bucket, put } = fakeBucket();
+    put.mockRejectedValueOnce(new Error("R2 unavailable"));
+
+    const result = await resolveCoverMasters(bucket, "album", 24, false);
+
+    expect(result.failed).toEqual([{ error: "R2 unavailable", slug: "storage-failure" }]);
+    expect(result.resolved).toEqual([]);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://is1-ssl.mzstatic.com/image/thumb/abc/1200x1200bb.jpg",
+    ]);
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(await albumRow("storage-failure")).toMatchObject({
+      image_failures: 1,
+      image_key: null,
+      image_state: "pending",
+    });
+  });
+});
+
 describe("resolveCoverMasters — retry=none re-queues terminal none rows", () => {
+  it("rejects a malformed retry cursor with the cursor validation error", async () => {
+    const { bucket } = fakeBucket();
+
+    await expect(resolveCoverMasters(bucket, "album", 24, false, "not-json", true)).rejects.toThrow(
+      /^Invalid cover-master retry cursor$/,
+    );
+  });
+
   it("dry run re-queues ONLY the kind's terminal none rows and writes nothing", async () => {
     await seedAlbum({ slug: "none-1", state: "none", withAppleSource: true });
     await seedAlbum({ slug: "none-2", state: "none", withAppleSource: true });
@@ -265,11 +406,7 @@ describe("resolveCoverMasters — retry=none re-queues terminal none rows", () =
       ["spotify-second", "spotify", "https://i.scdn.co/image/x"],
     ]) {
       if (trackId && album && cover) {
-        await seedTrack(db, { logId: null, trackId });
-        await db.execute({
-          args: [`alb_${album}`, cover, trackId],
-          sql: "update tracks set album_id = ?, album_image_url = ? where track_id = ?",
-        });
+        await seedAlbumTrackCover(album, trackId, cover);
       }
     }
     stubImageFetch(pngBytes(640, 640));

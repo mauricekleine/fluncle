@@ -22,6 +22,8 @@ The `backfill_cover_masters` sweep (`apps/web/src/lib/server/cover-masters.ts`) 
 2. **`coverart`** — Cover Art Archive by MB release. The crawler stores a `coverartarchive.org/release/<mbid>/front-500` URL on catalogue rows; the sweep requests `front-1200` (CAA's own ≤1200 thumbnail).
 3. **`spotify`** — the stored `tracks.album_image_url` (i.scdn.co) at its largest 640 prefix. The floor.
 
+A transient source failure (5xx/429) falls through to the next rung; if no rung resolves, the album stays retryable (`failed`, not `none`).
+
 **Artist:**
 
 1. **`spotify` or `deezer`** — the stored `artists.image_url` (Spotify oEmbed's 640px `i.scdn.co` rendition or Deezer's `picture_xl`). The source host determines `image_source`; the owned master remains a bounded display derivative. Raw source URLs are served until the owned master exists, so both hosts are allowed by the web image policy. This is the only artist rung today. An Apple artist-artwork template would slot in above.
