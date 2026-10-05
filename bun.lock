@@ -183,6 +183,7 @@
         "fumadocs-mdx": "~15.4.5",
         "fumadocs-ui": "~16.15.17",
         "jpeg-js": "~0.4.4",
+        "lucide-react": "~1.49.0",
         "react": "catalog:",
         "react-dom": "catalog:",
         "simple-icons": "~16.33.0",

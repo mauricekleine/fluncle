@@ -17,15 +17,10 @@
 # the first match wins; written this way the caching above is untouched and the header
 # lands under either reading.
 
-# Content-hashed build output (e.g. /assets/index-CkMwHc4n.css): the hash in the
+# Content-hashed build output (CSS, JavaScript and self-hosted fonts): the hash in the
 # filename changes whenever the bytes change, so these are safe to freeze.
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
-  X-Content-Type-Options: nosniff
-
-# Self-hosted fonts are named per-face and only change when the face changes.
-/fonts/*
-  Cache-Control: public, max-age=31536000
   X-Content-Type-Options: nosniff
 
 # Galaxy game sprite/audio assets.

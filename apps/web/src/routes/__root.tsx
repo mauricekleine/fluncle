@@ -18,6 +18,8 @@ import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
 import { isStaleBuildError, recoverFromStaleBuild } from "@/lib/stale-build-recovery";
 import { siteUrl } from "../lib/fluncle-links";
 import { fluncleMetaDescription } from "../lib/identity";
+import oxaniumLatinFont from "../fonts/oxanium-latin.woff2?url";
+import spaceGroteskLatinFont from "../fonts/space-grotesk-latin.woff2?url";
 import appCss from "../styles.css?url";
 
 const title = "Fluncle: drum & bass bangers from another dimension";
@@ -38,14 +40,14 @@ export const Route = createRootRoute({
       {
         as: "font",
         crossOrigin: "anonymous",
-        href: "/fonts/space-grotesk-latin.woff2",
+        href: spaceGroteskLatinFont,
         rel: "preload",
         type: "font/woff2",
       },
       {
         as: "font",
         crossOrigin: "anonymous",
-        href: "/fonts/oxanium-latin.woff2",
+        href: oxaniumLatinFont,
         rel: "preload",
         type: "font/woff2",
       },

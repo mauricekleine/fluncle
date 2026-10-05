@@ -7,7 +7,7 @@ The OG cards (`routes/api/og.$logId.ts`, `routes/api/og.set.ts`) and the mixtape
 (`lib/server/mixtape-cover.ts`) render through workers-og → Satori → resvg, inside a
 Cloudflare Worker. Three facts collide there:
 
-  1. Satori does NOT read woff2. It takes TTF/OTF/WOFF only — so `public/fonts/*.woff2`,
+  1. Satori does NOT read woff2. It takes TTF/OTF/WOFF only — so `src/fonts/*.woff2`,
      the faces the web app ships, are unusable as-is.
   2. A Worker has no system fonts, no `assets` binding (see `cloudflare.config.ts`), and cannot
      fetch its own origin (that loops to the SPA fallback). So the bytes must be IN the
