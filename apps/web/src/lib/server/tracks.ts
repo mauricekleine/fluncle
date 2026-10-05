@@ -789,7 +789,9 @@ export async function listRelatedFindings(
           limit ?`,
   });
 
-  return typedRows<TrackRow>(result.rows).map(toGraphFindingItem);
+  return typedRows<TrackRow>(result.rows).map((row) =>
+    toPublicTrackListItem(toGraphFindingItem(row)),
+  );
 }
 
 export type LogIndexEntry = {

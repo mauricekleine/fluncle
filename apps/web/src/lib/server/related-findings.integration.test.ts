@@ -200,6 +200,26 @@ describe("what a related findings band never shows", () => {
     expect(ids(related)).toStrictEqual(["kept"]);
   });
 
+  it("strips the private capture and analysis fields from every row", async () => {
+    await catalogueTrack("seed", {});
+    await finding("captured", "500.2.1A", "2026-07-01T00:00:00.000Z");
+    await db.execute(
+      `update tracks set source_audio_key = '500.2.1A/abc.m4a', analyzed_at = '2026-07-02',
+         analyzed_from = 'preview', bpm = 174, bpm_source = 'essentia', key = '8A',
+         key_source = 'essentia'
+       where track_id = 'captured'`,
+    );
+
+    const [row] = await listRelatedFindings({ kind: "track", trackId: "seed" });
+
+    expect(row).toMatchObject({ trackId: "captured" });
+    expect(row).not.toHaveProperty("sourceAudioKey", expect.anything());
+    expect(row).not.toHaveProperty("analyzedAt", expect.anything());
+    expect(row).not.toHaveProperty("analyzedFrom", expect.anything());
+    expect(row).not.toHaveProperty("bpmSource", expect.anything());
+    expect(row).not.toHaveProperty("keySource", expect.anything());
+  });
+
   it("stops at the band's size", async () => {
     await catalogueTrack("seed", {});
 
