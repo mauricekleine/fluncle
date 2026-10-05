@@ -311,7 +311,7 @@ describe("--confirm", () => {
 test.each([false, true])(
   "a restore purges restored tracks and both surviving and restored graph pages only after writing (%j)",
   async (confirm) => {
-    const db = createClient({ url: ":memory:" });
+    const db = createClient({ concurrency: 1, url: ":memory:" });
     try {
       await db.executeMultiple(`
       create table albums (id text primary key, name text, slug text);
