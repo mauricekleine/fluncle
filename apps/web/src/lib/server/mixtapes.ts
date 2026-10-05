@@ -5,7 +5,7 @@ import { getDb, typedRow, typedRows } from "./db";
 import { purgeLogCache } from "./edge-cache";
 import { ApiError } from "./api-error";
 import { postMixtapeToTelegram } from "./telegram";
-import { getTrackByIdOrLogId, getTracksForMixtape } from "./tracks";
+import { getTrackByIdOrLogId, getTracksForMixtape, toPublicTrackListItem } from "./tracks";
 
 function purgeMixtapeLogCache(mixtape: MixtapeDTO): MixtapeDTO {
   purgeLogCache(mixtape.logId);
@@ -487,7 +487,13 @@ export async function getMixtapeByLogId(logId: string): Promise<MixtapeDTO | und
   });
   const row = typedRow<MixtapeRow>(result.rows);
 
-  return row ? hydrateMixtape(row) : undefined;
+  if (!row) {
+    return undefined;
+  }
+
+  const mixtape = await hydrateMixtape(row);
+
+  return { ...mixtape, members: mixtape.members.map(toPublicTrackListItem) };
 }
 
 export async function getMixtapeForRender(logId: string): Promise<MixtapeDTO | undefined> {

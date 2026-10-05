@@ -124,17 +124,23 @@ describe("galaxy — the named-galaxy DTO field", () => {
   });
 });
 
-describe("sourceAudioKey — admin carries, public strips", () => {
-  const CAPTURED_ROW: TrackRow = { ...BASE_ROW, source_audio_key: "004.7.2I/abc123.m4a" };
+describe("sourceAudioKey/sourceAudioFailures — admin carries, public strips", () => {
+  const CAPTURED_ROW: TrackRow = {
+    ...BASE_ROW,
+    source_audio_failures: 3,
+    source_audio_key: "004.7.2I/abc123.m4a",
+  };
 
   it("the admin DTO (toTrackListItem) carries the captured source key", () => {
     expect(toTrackListItem(CAPTURED_ROW).sourceAudioKey).toBe("004.7.2I/abc123.m4a");
+    expect(toTrackListItem(CAPTURED_ROW).sourceAudioFailures).toBe(3);
   });
 
   it("toPublicTrackListItem strips the key from a captured finding", () => {
     const publicItem = toPublicTrackListItem(toTrackListItem(CAPTURED_ROW));
 
     expect(publicItem.sourceAudioKey).toBeUndefined();
+    expect(publicItem.sourceAudioFailures).toBeUndefined();
 
     expect(publicItem.trackId).toBe(CAPTURED_ROW.track_id);
     expect(publicItem.title).toBe(CAPTURED_ROW.title);

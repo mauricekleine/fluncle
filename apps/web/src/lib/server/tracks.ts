@@ -455,11 +455,12 @@ export function toGraphFindingItem(row: LeanTrackRow): GraphFindingItem {
   return graph;
 }
 
-const PRIVATE_TRACK_FIELDS = [
+export const PRIVATE_TRACK_FIELDS = [
   "analyzedAt",
   "analyzedFrom",
   "bpmSource",
   "keySource",
+  "sourceAudioFailures",
   "sourceAudioKey",
 ] as const;
 
@@ -623,7 +624,9 @@ export async function getFindingsByArtist(
             ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
           order by findings.added_at desc, tracks.track_id desc`,
   });
-  return typedRows<TrackRow>(result.rows).map(toGraphFindingItem);
+  return typedRows<TrackRow>(result.rows).map((row) =>
+    toPublicTrackListItem(toGraphFindingItem(row)),
+  );
 }
 
 export async function getGraphFindingsByIds(ids: string[]): Promise<GraphFindingItem[]> {
@@ -675,7 +678,9 @@ async function findingsByEntity(
           order by findings.added_at desc, tracks.track_id desc`,
   });
 
-  return typedRows<TrackRow>(result.rows).map(toGraphFindingItem);
+  return typedRows<TrackRow>(result.rows).map((row) =>
+    toPublicTrackListItem(toGraphFindingItem(row)),
+  );
 }
 
 export const RELATED_FINDINGS_LIMIT = 4;
@@ -1319,7 +1324,9 @@ export async function getSimilarFindings(
           order by winners.dist asc, winners.track_id asc`,
   });
 
-  return typedRows<TrackRow>(rankedResult.rows).map((row) => toTrackListItem(row));
+  return typedRows<TrackRow>(rankedResult.rows).map((row) =>
+    toPublicTrackListItem(toTrackListItem(row)),
+  );
 }
 
 async function hydrateSimilarFindings(matches: SonarMatch[]): Promise<TrackListItem[]> {
@@ -1337,7 +1344,7 @@ async function hydrateSimilarFindings(matches: SonarMatch[]): Promise<TrackListI
       return typedRows<TrackRow>(result.rows);
     },
     (row) => row.track_id,
-    (row) => toTrackListItem(row),
+    (row) => toPublicTrackListItem(toTrackListItem(row)),
   );
 }
 
