@@ -31,6 +31,8 @@ type FindingsSearch = {
   story?: string;
 };
 
+const findingsCoverSizes = "(min-width: 1024px) 268px, 308px";
+
 const findingsPageUrl = `${siteUrl}/findings`;
 
 const findingsTitle = "Every drum & bass finding, newest first · Fluncle";
@@ -57,9 +59,11 @@ export const Route = createFileRoute("/findings")({
       {
         as: "image",
         fetchPriority: "high",
-        href: "/fluncle-cover.webp",
+        href: "/fluncle-cover.avif",
+        imageSizes: findingsCoverSizes,
+        imageSrcSet: "/fluncle-cover-320.avif 320w, /fluncle-cover.avif 512w",
         rel: "preload",
-        type: "image/webp",
+        type: "image/avif",
       },
     ],
     meta: [
@@ -111,7 +115,16 @@ const coverArt = (
   <>
     <span className="cover-story-gap">
       <picture>
-        <source srcSet="/fluncle-cover.webp" type="image/webp" />
+        <source
+          sizes={findingsCoverSizes}
+          srcSet="/fluncle-cover-320.avif 320w, /fluncle-cover.avif 512w"
+          type="image/avif"
+        />
+        <source
+          sizes={findingsCoverSizes}
+          srcSet="/fluncle-cover-320.webp 320w, /fluncle-cover.webp 512w"
+          type="image/webp"
+        />
         <img
           alt="Fluncle cover art"
           className="aspect-square w-full object-cover"

@@ -12,10 +12,13 @@ import {
 } from "@/lib/discovery-tracks";
 import { artistTitleLine } from "@/lib/log-prose";
 import { hasTrackPageIdentity } from "@/lib/track-page";
-import { albumCoverAtSize } from "@/lib/media";
+import { albumCoverAtSize, coverSrcSet } from "@/lib/media";
 import { type GraphPageTrack } from "@/lib/log-schema";
 import { type ArtistChip } from "@/lib/server/artists";
 import { type CatalogueTrackItem, type TrackListItem } from "@/lib/server/tracks";
+
+const FINDING_COVER_SIZES = "(min-width: 40rem) 9rem, 45vw";
+const SIMILAR_COVER_SIZES = "(min-width: 40rem) 6.5rem, 30vw";
 
 export function graphPageTracks(
   findings: TrackListItem[],
@@ -113,12 +116,16 @@ function FindingGridTile({
   size: TileSize;
 }) {
   const track = findingToDiscoveryTrack(finding);
+  const coverSizes =
+    coverClassName === "log-similar-cover" ? SIMILAR_COVER_SIZES : FINDING_COVER_SIZES;
   const cover = (
     <TrackArtwork
       alt=""
       className={coverClassName}
       priority={priority}
+      sizes={priority ? coverSizes : `auto, ${coverSizes}`}
       src={albumCoverAtSize(finding.albumImageUrl, size)}
+      srcSet={coverSrcSet(finding.albumImageUrl)}
     />
   );
 
@@ -197,7 +204,9 @@ export function ArtistChips({ artists, title }: { artists: ArtistChip[]; title: 
               <ArtistAvatar
                 className="artist-similar-avatar"
                 name={artist.name}
+                sizes="1.5rem"
                 src={albumCoverAtSize(artist.imageUrl, "small")}
+                srcSet={coverSrcSet(artist.imageUrl)}
               />
               <span>{artist.name}</span>
             </GraphLink>

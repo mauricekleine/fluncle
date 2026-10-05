@@ -5,7 +5,9 @@ import { PlayCover } from "@/components/player/playable-list";
 import { TrackArtwork } from "@/components/track-artwork";
 import { discoveryQueueTrack, findingToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { artistTitleLine } from "@/lib/log-prose";
-import { COVER_TILE_SIZE, albumCoverAtSize } from "@/lib/media";
+import { COVER_TILE_SIZE, albumCoverAtSize, coverSrcSet } from "@/lib/media";
+
+const FINDING_COVER_SIZES = "auto, (min-width: 40rem) 10rem, 50vw";
 
 export function FrontDoorFindings({ findings }: { findings: TrackListItem[] }): ReactNode {
   const tiles = findings.filter((finding) => finding.logId);
@@ -38,7 +40,9 @@ function FindingTileCover({ finding }: { finding: TrackListItem }): ReactNode {
     <TrackArtwork
       alt=""
       className="fd-finding-cover"
+      sizes={FINDING_COVER_SIZES}
       src={albumCoverAtSize(finding.albumImageUrl, COVER_TILE_SIZE)}
+      srcSet={coverSrcSet(finding.albumImageUrl)}
     />
   );
   const track = findingToDiscoveryTrack(finding);

@@ -2,7 +2,7 @@ import { CheckIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { TrackChips } from "@/components/track-row";
 import { formatKey, type KeyNotation } from "@/lib/key-notation";
-import { albumCoverAtSize } from "@/lib/media";
+import { albumCoverAtSize, coverSrcSet } from "@/lib/media";
 
 export function TrackReadout({
   bpm,
@@ -50,7 +50,16 @@ export function RecCover({ url }: { url?: string }) {
   const cover = albumCoverAtSize(url, "small");
 
   return cover ? (
-    <img alt="" className="rec-cover" height={40} loading="lazy" src={cover} width={40} />
+    <img
+      alt=""
+      className="rec-cover"
+      height={40}
+      loading="lazy"
+      sizes="40px"
+      src={cover}
+      srcSet={coverSrcSet(url)}
+      width={40}
+    />
   ) : (
     <span aria-hidden className="rec-cover rec-cover--empty" />
   );

@@ -26,10 +26,10 @@ export function TrackArtwork({
   useEffect(() => {
     const img = imgRef.current;
 
-    if (img && img.complete && img.naturalWidth === 0 && img.src) {
-      setFailedSrc(img.src);
+    if (img && img.complete && img.naturalWidth === 0 && (img.currentSrc || img.src)) {
+      setFailedSrc(src);
     }
-  }, [src]);
+  }, [src, srcSet]);
 
   const failed =
     src !== undefined &&

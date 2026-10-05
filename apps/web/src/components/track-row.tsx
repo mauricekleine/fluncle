@@ -16,7 +16,7 @@ import {
 } from "@fluncle/ui/components/dropdown-menu";
 import { discoveryQueueTrack, findingToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { bangersCount, formatAlbumDuration, formatDuration } from "@/lib/format";
-import { albumCoverAtSize } from "@/lib/media";
+import { albumCoverAtSize, coverSrcSet } from "@/lib/media";
 import { type FeedItem, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { savableTrack, similarSearchHref } from "@/lib/player-tracks";
 import { type QueueTrack } from "@/lib/preview-player";
@@ -27,6 +27,7 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
   if (track.type === "mixtape") {
     const logId = track.logId as string;
     const bangersLabel = bangersCount(track.memberCount);
+    const cover = logId ? mixtapeCoverUrl(logId, "thumb") : track.coverImageUrl;
 
     return (
       <li className="track-row track-row-checkpoint">
@@ -41,7 +42,9 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
 
         <TrackArtwork
           alt={`${track.title} cover art`}
-          src={logId ? mixtapeCoverUrl(logId, "thumb") : track.coverImageUrl}
+          sizes="3.25rem"
+          src={cover}
+          srcSet={coverSrcSet(cover)}
         />
         <span className="min-w-0">
           <Link
@@ -80,7 +83,9 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
   const artwork = (
     <TrackArtwork
       alt={`${trackLine} cover art`}
+      sizes="3.25rem"
       src={albumCoverAtSize(track.albumImageUrl, "small")}
+      srcSet={coverSrcSet(track.albumImageUrl)}
     />
   );
 

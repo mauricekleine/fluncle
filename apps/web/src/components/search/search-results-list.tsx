@@ -6,7 +6,7 @@ import { SearchFilterChips } from "@/components/search/search-filter-chips";
 import { searchHitToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { galaxySoundLine } from "@/lib/galaxy-sound";
 import { queueTrackFromHit } from "@/lib/player-tracks";
-import { albumCoverAtSize } from "@/lib/media";
+import { albumCoverAtSize, coverSrcSet } from "@/lib/media";
 import {
   ENTITY_GROUPS,
   entityHref,
@@ -29,7 +29,9 @@ function Cover({ src }: { src?: string }): ReactNode {
       className="search-cover"
       decoding="async"
       loading="lazy"
+      sizes="2.25rem"
       src={albumCoverAtSize(src, "small")}
+      srcSet={coverSrcSet(src)}
     />
   );
 }

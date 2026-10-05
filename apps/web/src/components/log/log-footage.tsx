@@ -5,10 +5,10 @@ import {
   type CropOrientation,
   type RenditionWidth,
   albumCoverAtSize,
-  trackMedia,
   videoCrop,
   videoCropPoster,
   videoPoster,
+  videoPosterImage,
   videoRendition,
   videoVersion,
 } from "@/lib/media";
@@ -39,13 +39,14 @@ export function firstPaintFootagePoster(track: Track): string | undefined {
 
   const version = videoVersion(track.videoSquaredAt);
 
-  return track.videoSquaredAt
-    ? videoCropPoster(track.logId, "portrait", FIRST_PAINT_POSTER_WIDTH, 0, version)
-    : videoPoster(track.logId, undefined, version);
+  return videoPosterImage(track.logId, {
+    orientation: track.videoSquaredAt ? "portrait" : undefined,
+    version,
+    width: FIRST_PAINT_POSTER_WIDTH,
+  });
 }
 
 export function LogFootage({ track }: { track: Track }) {
-  const media = track.logId ? trackMedia(track.logId) : undefined;
   const masterVideoUrl = track.videoUrl;
 
   const squared = Boolean(track.videoSquaredAt);
@@ -103,6 +104,13 @@ export function LogFootage({ track }: { track: Track }) {
   const [framePosterFailed, setFramePosterFailed] = useState(false);
 
   const posterWidth = stepDownRenditionWidth(paneWidth ?? PANE_CEILING_WIDTH[orientation], 1);
+  const posterImage = track.logId
+    ? videoPosterImage(track.logId, {
+        orientation: squared ? orientation : undefined,
+        version,
+        width: posterWidth,
+      })
+    : undefined;
   const framePoster =
     track.logId && !framePosterFailed
       ? squared
@@ -110,23 +118,31 @@ export function LogFootage({ track }: { track: Track }) {
         : videoPoster(track.logId, undefined, version)
       : undefined;
   const posterUrl =
+    (!posterFailed ? posterImage : undefined) ??
     framePoster ??
-    (!posterFailed ? media?.posterUrl : undefined) ??
     albumCoverAtSize(track.albumImageUrl, "large");
 
+  const onPosterError = useCallback(() => {
+    if (!posterFailed && posterUrl === posterImage) {
+      setPosterFailed(true);
+    } else if (posterUrl === framePoster) {
+      setFramePosterFailed(true);
+    }
+  }, [framePoster, posterFailed, posterImage, posterUrl]);
+
   useEffect(() => {
-    if (!framePoster) {
+    if (!posterUrl || (posterUrl !== posterImage && posterUrl !== framePoster)) {
       return;
     }
 
     const probe = new Image();
-    probe.onerror = () => setFramePosterFailed(true);
-    probe.src = framePoster;
+    probe.onerror = onPosterError;
+    probe.src = posterUrl;
 
     return () => {
       probe.onerror = null;
     };
-  }, [framePoster]);
+  }, [framePoster, onPosterError, posterImage, posterUrl]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -206,7 +222,7 @@ export function LogFootage({ track }: { track: Track }) {
           className="log-footage-media"
           decoding="async"
           fetchPriority="high"
-          onError={() => setPosterFailed(true)}
+          onError={onPosterError}
           src={posterUrl}
         />
       )}

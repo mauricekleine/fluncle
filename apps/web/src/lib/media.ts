@@ -187,6 +187,55 @@ export function albumCoverAtSize(url: string | undefined, size: CoverSize): stri
   return url;
 }
 
+type CoverLadder = readonly (readonly [CoverSize, number])[];
+
+const OWNED_COVER_LADDER: CoverLadder = [
+  ["small", 64],
+  ["hub", 128],
+  ["medium", 300],
+  ["large", 640],
+];
+const SPOTIFY_ALBUM_LADDER: CoverLadder = [
+  ["small", 64],
+  ["medium", 300],
+  ["large", 640],
+];
+const SPOTIFY_ARTIST_LADDER: CoverLadder = [
+  ["small", 160],
+  ["medium", 320],
+  ["large", 640],
+];
+const COVER_ART_ARCHIVE_LADDER: CoverLadder = [
+  ["small", 250],
+  ["medium", 500],
+];
+
+function coverLadder(url: string): CoverLadder | undefined {
+  if (OWNED_COVER_WIDTH_RE.test(url)) {
+    return OWNED_COVER_LADDER;
+  }
+
+  if (SPOTIFY_ALBUM_IMAGE_RE.test(url)) {
+    return SPOTIFY_ALBUM_LADDER;
+  }
+
+  if (SPOTIFY_ARTIST_IMAGE_RE.test(url)) {
+    return SPOTIFY_ARTIST_LADDER;
+  }
+
+  return COVER_ART_ARCHIVE_FRONT_RE.test(url) ? COVER_ART_ARCHIVE_LADDER : undefined;
+}
+
+export function coverSrcSet(url: string | undefined): string | undefined {
+  if (!url) {
+    return undefined;
+  }
+
+  return coverLadder(url)
+    ?.map(([size, width]) => `${albumCoverAtSize(url, size)} ${width}w`)
+    .join(", ");
+}
+
 export function hubCoverSrcSet(url: string | undefined): string | undefined {
   if (!url) {
     return undefined;
@@ -329,6 +378,24 @@ export function videoPoster(logId: string, master = "footage.mp4", version?: num
 }
 
 export type CropOrientation = "landscape" | "portrait";
+
+export function videoPosterImage(
+  logId: string,
+  {
+    orientation,
+    version,
+    width,
+  }: { orientation?: CropOrientation; version?: number; width: number },
+): string {
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/poster.jpg`, version);
+  const height = orientation
+    ? Math.round((width * (orientation === "portrait" ? 16 / 9 : 9 / 16)) / 2) * 2
+    : undefined;
+  const crop =
+    height === undefined ? `width=${width}` : `fit=cover,width=${width},height=${height}`;
+
+  return `${IMAGE_TRANSFORM_BASE}/${crop},format=auto/${source}`;
+}
 
 const CROP_GEOMETRY: Record<CropOrientation, { nativeWidth: number; ratio: number }> = {
   landscape: { nativeWidth: 1920, ratio: 9 / 16 },
