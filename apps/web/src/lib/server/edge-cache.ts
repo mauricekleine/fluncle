@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { Data, Duration, Effect } from "effect";
-import { SENTRY_RELEASE } from "../sentry-config";
+import { clientAssets } from "./client-assets";
 import { runServerEffect } from "./effect/runtime";
 import { keepAlive } from "./effect/wait-until";
 
@@ -82,7 +82,7 @@ const FRESH_UNTIL_HEADER = "x-edge-fresh-until";
 const CRAWLER_FRESH_UNTIL_HEADER = "x-edge-crawler-fresh-until";
 const EXPIRES_AT_HEADER = "x-edge-expires-at";
 const STALE_UNTIL_HEADER = "x-edge-stale-until";
-const BUILD_HEADER = "x-edge-build-id";
+const ASSETS_HEADER = "x-edge-assets";
 
 export function isCacheableLogPath(pathname: string): boolean {
   return pathname === "/log" || pathname === "/log/" || pathname.startsWith("/log/");
@@ -245,6 +245,28 @@ export function edgeCachePolicyFor(
 
 const CANONICAL_ORIGIN = "https://www.fluncle.com";
 
+export function extractAssetReferences(html: string): string[] {
+  const paths = new Set<string>();
+  const references = /(["'])((?:https:\/\/www\.fluncle\.com)?\/assets\/[^"'<>\\\s]+)\1/g;
+  for (const match of html.matchAll(references)) {
+    const reference = match[2];
+    if (reference) {
+      const path = new URL(reference, CANONICAL_ORIGIN).pathname;
+      if (path.startsWith("/assets/")) {
+        paths.add(path);
+      }
+    }
+  }
+  return [...paths];
+}
+
+function assetsCompatible(references: string | null, available: ReadonlySet<string>): boolean {
+  return (
+    references !== null &&
+    (references === "" || references.split("|").every((path) => available.has(path)))
+  );
+}
+
 function cacheKeyForPath(pathname: string): Request {
   return new Request(`${CANONICAL_ORIGIN}${pathname}`, { method: "GET" });
 }
@@ -281,21 +303,22 @@ export async function withEdgeCache(
   const browserNavigation =
     request.headers.get("sec-fetch-mode") === "navigate" ||
     request.headers.get("sec-fetch-dest") === "document";
-  const sameBuild = !htmlPolicy || hit?.headers.get(BUILD_HEADER) === (SENTRY_RELEASE ?? "dev");
+  const compatible =
+    !htmlPolicy || assetsCompatible(hit?.headers.get(ASSETS_HEADER) ?? null, clientAssets);
   const staleUntil = Number(hit?.headers.get(STALE_UNTIL_HEADER));
   const browserCanUse =
     !htmlPolicy ||
     !browserNavigation ||
-    (sameBuild && Number.isFinite(staleUntil) && Date.now() < staleUntil);
+    (compatible && Number.isFinite(staleUntil) && Date.now() < staleUntil);
   const withinRetention =
     !crossesReleaseDay && Number.isFinite(expiresAt) && Date.now() < expiresAt;
-  if (hit && withinRetention && browserCanUse) {
+  if (hit && compatible && withinRetention && browserCanUse) {
     const crawler = htmlPolicy && !browserNavigation;
     const freshUntil = Number(
       hit.headers.get(crawler ? CRAWLER_FRESH_UNTIL_HEADER : FRESH_UNTIL_HEADER),
     );
 
-    if ((crawler || sameBuild) && Number.isFinite(freshUntil) && Date.now() < freshUntil) {
+    if (Number.isFinite(freshUntil) && Date.now() < freshUntil) {
       return tagHit(hit, "fresh", cachePolicy);
     }
 
@@ -312,7 +335,11 @@ export async function withEdgeCache(
     return tagHit(hit, "stale", cachePolicy);
   }
 
-  const { response, servedStale } = await renderOrServeStale(render, hit, cachePolicy);
+  const { response, servedStale } = await renderOrServeStale(
+    render,
+    compatible ? hit : undefined,
+    cachePolicy,
+  );
 
   if (servedStale) {
     return response;
@@ -323,7 +350,7 @@ export async function withEdgeCache(
     cacheKey,
     response,
     cachePolicy,
-    hit !== undefined && !withinRetention,
+    hit !== undefined && (!withinRetention || !compatible),
   );
 
   return tagResponse(response, "miss", cachePolicy);
@@ -342,7 +369,8 @@ async function storeRendered(
         "edge-cache.store-failed",
         Effect.tryPromise({
           catch: (cause) => new EdgeCacheFailed({ cause }),
-          try: () => cache.put(cacheKey, toStoredResponse(response.clone(), cachePolicy, cacheKey)),
+          try: async () =>
+            cache.put(cacheKey, await toStoredResponse(response.clone(), cachePolicy, cacheKey)),
         }),
       ),
     );
@@ -379,7 +407,7 @@ async function refresh(
   const response = await render();
 
   if (isStorable(response, cachePolicy)) {
-    await cache.put(cacheKey, toStoredResponse(response, cachePolicy, cacheKey));
+    await cache.put(cacheKey, await toStoredResponse(response, cachePolicy, cacheKey));
   } else if (response.status < 500) {
     await cache.delete(cacheKey);
   }
@@ -395,12 +423,16 @@ function isStorable(response: Response, cachePolicy: EdgeCachePolicy): boolean {
   );
 }
 
-function toStoredResponse(
+async function toStoredResponse(
   response: Response,
   cachePolicy: EdgeCachePolicy,
   cacheKey: Request,
-): Response {
-  const stored = new Response(response.body, response);
+): Promise<Response> {
+  const html = cachePolicy.contentType === "text/html" ? await response.text() : undefined;
+  const stored = new Response(html ?? response.body, response);
+  if (html !== undefined) {
+    stored.headers.set(ASSETS_HEADER, extractAssetReferences(html).join("|"));
+  }
   const storedAt = Date.now();
   const storedPolicy = releaseSensitivePath(new URL(cacheKey.url).pathname)
     ? releaseBoundPolicy(cachePolicy, new Date(storedAt))
@@ -410,7 +442,6 @@ function toStoredResponse(
     `public, s-maxage=${storedPolicy.retainSeconds + STALE_IF_ERROR_SECONDS}`,
   );
   stored.headers.set(STAMP_HEADER, String(storedAt));
-  stored.headers.set(BUILD_HEADER, SENTRY_RELEASE ?? "dev");
   stored.headers.set(FRESH_UNTIL_HEADER, String(storedAt + storedPolicy.freshSeconds * 1_000));
   stored.headers.set(
     CRAWLER_FRESH_UNTIL_HEADER,
@@ -437,7 +468,7 @@ function tagHit(
   out.headers.delete(CRAWLER_FRESH_UNTIL_HEADER);
   out.headers.delete(EXPIRES_AT_HEADER);
   out.headers.delete(STALE_UNTIL_HEADER);
-  out.headers.delete(BUILD_HEADER);
+  out.headers.delete(ASSETS_HEADER);
   out.headers.set("x-edge-cache", status);
 
   return out;

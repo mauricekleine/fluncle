@@ -2,6 +2,21 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  plugins: [
+    {
+      load(id) {
+        if (id === "\0virtual:fluncle-client-assets") {
+          return "export const clientAssetPaths = [];";
+        }
+      },
+      name: "fluncle-test-client-assets",
+      resolveId(id) {
+        if (id === "virtual:fluncle-client-assets") {
+          return `\0${id}`;
+        }
+      },
+    },
+  ],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
