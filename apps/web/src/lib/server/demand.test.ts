@@ -420,6 +420,32 @@ describe("readSocialReferrers", () => {
   });
 });
 
+describe("Simple Analytics page filtering", () => {
+  it("reserves the pages limit for artist and label demand while keeping referrals site-wide", async () => {
+    const requests: URL[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      requests.push(url);
+
+      return Response.json({ [url.searchParams.get("fields") ?? ""]: [] });
+    }) as typeof fetch;
+
+    await recordDemand({ fetchImpl, now: NOW });
+    await readSocialReferrers({ fetchImpl, now: NOW });
+
+    expect(
+      requests.map((url) => ({
+        field: url.searchParams.get("fields"),
+        limit: url.searchParams.get("limit"),
+        pages: url.searchParams.get("pages"),
+      })),
+    ).toEqual([
+      { field: "pages", limit: "1000", pages: "/artist/*,/label/*" },
+      { field: "referrers", limit: "1000", pages: null },
+    ]);
+  });
+});
+
 describe("Simple Analytics request deadlines and diagnostics", () => {
   const operations = [
     { field: "pages", operation: "read", read: recordDemand },

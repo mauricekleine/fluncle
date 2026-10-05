@@ -7,12 +7,11 @@ import {
   markDueWorkSourceMaintenanceFromSelectStatements,
 } from "./due-work";
 import { markCrawlProjectionRepairsFromSelectStatement } from "./crawl-due-work";
+import { SA_HOSTNAME } from "./simple-analytics";
 
 export const DEMAND_WINDOW_DAYS = 30;
 
 export const DEMAND_PAGE_LIMIT = 1000;
-
-const SA_HOSTNAME = "fluncle.com";
 
 const SA_TIMEOUT_MS = 20_000;
 
@@ -155,7 +154,8 @@ function fetchAnalytics<T>(
 ): Promise<T[]> {
   const url =
     `https://simpleanalytics.com/${SA_HOSTNAME}.json` +
-    `?version=5&fields=${field}&start=${window.start}&end=${window.end}&limit=${DEMAND_PAGE_LIMIT}`;
+    `?version=5&fields=${field}&start=${window.start}&end=${window.end}&limit=${DEMAND_PAGE_LIMIT}` +
+    (field === "pages" ? "&pages=/artist/*,/label/*" : "");
   const operation = field === "pages" ? "read" : "referrers read";
 
   return runServerEffect(

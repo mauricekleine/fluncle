@@ -26,6 +26,7 @@ import {
   emitDiscoveryFromHref,
 } from "@/lib/discovery-events";
 import { albumCoverAtSize } from "@/lib/media";
+import { createPaletteSearchCommit } from "@/lib/palette-search-commit";
 import {
   EMPTY_SEARCH,
   ENTITY_GROUPS,
@@ -141,6 +142,11 @@ export function SearchDialog({
   const [query, setQuery] = useState(seed?.query ?? "");
   const [debounced, setDebounced] = useState("");
   const exampleClick = useRef(false);
+  const [searchCommit] = useState(() =>
+    createPaletteSearchCommit((settled) =>
+      emitDiscoveryEvent("discovery_search", { kind: classifySearchQueryKind(settled) }),
+    ),
+  );
   const seedToken = seed?.token;
   const seedQuery = seed?.query;
 
@@ -149,6 +155,7 @@ export function SearchDialog({
       return;
     }
 
+    exampleClick.current = false;
     setQuery(seedQuery);
 
     setDebounced(seedQuery.trim());
@@ -159,20 +166,26 @@ export function SearchDialog({
       const next = query.trim();
 
       setDebounced(next);
-
-      if (exampleClick.current) {
-        exampleClick.current = false;
-
-        return;
-      }
-
-      if (next.length >= MIN_QUERY_LENGTH) {
-        emitDiscoveryEvent("discovery_search", { kind: classifySearchQueryKind(next) });
-      }
     }, 180);
 
     return () => clearTimeout(timer);
   }, [query]);
+
+  useEffect(() => {
+    if (!open) {
+      searchCommit.commit(query, exampleClick.current);
+      searchCommit.reset();
+      exampleClick.current = false;
+      setQuery("");
+      setDebounced("");
+
+      return;
+    }
+
+    searchCommit.settle(query, exampleClick.current);
+
+    return searchCommit.cancelIdle;
+  }, [open, query, searchCommit]);
 
   const enabled = debounced.length >= MIN_QUERY_LENGTH;
   const { data = EMPTY_SEARCH, isFetching } = useQuery({
@@ -185,10 +198,13 @@ export function SearchDialog({
   });
 
   const close = useCallback(() => {
+    searchCommit.commit(query, exampleClick.current);
+    searchCommit.reset();
+    exampleClick.current = false;
     onOpenChange(false);
     setQuery("");
     setDebounced("");
-  }, [onOpenChange]);
+  }, [onOpenChange, query, searchCommit]);
 
   const goTo = useCallback(
     (to: string) => {
@@ -202,10 +218,11 @@ export function SearchDialog({
     (entity: SearchEntity) => {
       const href = entityHref(entity);
 
+      searchCommit.commit(query, exampleClick.current);
       emitDiscoveryFromHref(href);
       goTo(href);
     },
-    [goTo],
+    [goTo, query, searchCommit],
   );
 
   const pick = useCallback(
@@ -216,6 +233,7 @@ export function SearchDialog({
         return;
       }
 
+      searchCommit.commit(query, exampleClick.current);
       emitDiscoveryFromHref(destination.href);
 
       if (destination.external) {
@@ -227,10 +245,10 @@ export function SearchDialog({
 
       goTo(destination.href);
     },
-    [close, goTo],
+    [close, goTo, query, searchCommit],
   );
 
-  const openPage = useCallback(() => goTo(searchPagePath(debounced)), [debounced, goTo]);
+  const openPage = useCallback(() => goTo(searchPagePath(query.trim())), [query, goTo]);
 
   const showExamples = query.trim().length === 0;
   const nothing = enabled && !isFetching && data.results.length === 0 && data.entities.length === 0;
@@ -258,7 +276,10 @@ export function SearchDialog({
     >
       <Command shouldFilter={false}>
         <CommandInput
-          onValueChange={setQuery}
+          onValueChange={(next) => {
+            exampleClick.current = false;
+            setQuery(next);
+          }}
           placeholder="A name, a coordinate, or the sound of it…"
           value={query}
         />

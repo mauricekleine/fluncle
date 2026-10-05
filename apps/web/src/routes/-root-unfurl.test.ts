@@ -29,3 +29,13 @@ describe("root head — the inherited X card tags", () => {
     }
   });
 });
+
+describe("root analytics script", () => {
+  it("ignores admin pageviews and keeps public pages such as pipeline visible", () => {
+    const script = root.match(
+      /\{[^{}]*src: "https:\/\/scripts\.simpleanalyticscdn\.com\/latest\.js"[^{}]*\}/,
+    )?.[0];
+    expect(script).toBeDefined();
+    expect(script).toContain('"data-ignore-pages": "/admin,/admin/*"');
+  });
+});
