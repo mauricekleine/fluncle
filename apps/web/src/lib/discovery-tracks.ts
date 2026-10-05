@@ -1,5 +1,6 @@
 import { type TrackListItem } from "@fluncle/contracts";
 import { type FreshEntry } from "./fresh-releases";
+import { type ListenLink } from "./listen-out";
 import { type QueueTrack } from "./preview-player";
 import { type SearchHit } from "./search-results";
 import { type SonicNeighbour } from "./server/track-page";
@@ -23,6 +24,7 @@ export type DiscoveryTrack = {
   key?: string;
   label?: DiscoveryCredit;
 
+  listen?: ListenLink[];
   lit: boolean;
   logId?: string;
 
@@ -41,6 +43,7 @@ export function discoveryQueueTrack(track: DiscoveryTrack): QueueTrack {
     coverUrl: track.coverUrl,
     href: track.href,
     id: track.trackId,
+    listen: track.listen,
     lit: track.lit,
     logId: track.logId,
     similar: track.similar,
@@ -87,6 +90,7 @@ export function findingToDiscoveryTrack(
     href: finding.logId ? `/log/${finding.logId}` : unlitHref(finding),
     key: finding.key,
     label: finding.label ? { name: finding.label, slug: finding.labelSlug } : undefined,
+    listen: finding.appleMusicUrl ? [{ href: finding.appleMusicUrl, kind: "apple" }] : undefined,
     lit: true,
     logId: finding.logId,
     previewable: hasPreviewSource(finding),

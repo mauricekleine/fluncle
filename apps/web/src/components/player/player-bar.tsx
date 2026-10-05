@@ -2,8 +2,11 @@ import { CaretRightIcon, PauseIcon, PlayIcon, SkipForwardIcon, XIcon } from "@ph
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { BrandIcon } from "@/components/brand-icon";
+import { LISTEN_META } from "@/components/listen-meta";
 import { TrackActionsMenu } from "@/components/player/track-actions-menu";
 import { TrackArtwork } from "@/components/track-artwork";
+import { type ListenLink, listenOutLink } from "@/lib/listen-out";
 import { albumCoverAtSize } from "@/lib/media";
 import { loadSimilarTracks, similarSearchHref, trackCredit } from "@/lib/player-tracks";
 import {
@@ -151,6 +154,17 @@ export function nearestSeedIndex(trail: readonly QueueTrack[], here: string | un
   return trail.length - 1;
 }
 
+function ListenOut({ link }: { link: ListenLink }): ReactNode {
+  const meta = LISTEN_META[link.kind];
+
+  return (
+    <a className="player-listen-out" href={link.href} rel="noreferrer" target="_blank">
+      <BrandIcon className="player-listen-out-mark" icon={meta.icon} />
+      <span className="player-listen-out-label">{meta.label}</span>
+    </a>
+  );
+}
+
 function ProgressLine({ lit }: { lit: boolean }): ReactNode {
   const { currentTime, duration } = usePreviewProgress();
   const fraction = duration > 0 ? Math.min(1, currentTime / duration) : 0;
@@ -216,6 +230,7 @@ export function PlayerBar(): ReactNode {
   }
 
   const playing = status === "playing" || status === "loading";
+  const listenOut = playing ? undefined : listenOutLink(track);
   const position = `${queue.index + 1}/${queue.tracks.length}`;
   const cover = albumCoverAtSize(track.coverUrl, "small");
 
@@ -256,7 +271,13 @@ export function PlayerBar(): ReactNode {
   };
 
   return createPortal(
-    <section aria-label="Player" className="player-bar" data-lit={track.lit ? "" : undefined}>
+    <section
+      aria-label="Player"
+      className="player-bar"
+      data-keep-going={queue.ended && !noWayOn ? "" : undefined}
+      data-listen-out={listenOut ? "" : undefined}
+      data-lit={track.lit ? "" : undefined}
+    >
       <ProgressLine lit={track.lit === true} />
       <div className="player-bar-inner">
         <SonicTrail trail={trail} />
@@ -325,13 +346,14 @@ export function PlayerBar(): ReactNode {
           ) : (
             <button
               aria-label="Next track"
-              className="player-button"
+              className="player-button player-button--next"
               onClick={skipNext}
               type="button"
             >
               <SkipForwardIcon />
             </button>
           )}
+          {listenOut ? <ListenOut link={listenOut} /> : undefined}
           <TrackActionsMenu className="player-button" side="top" track={track} />
           <button
             aria-label="Close the player"

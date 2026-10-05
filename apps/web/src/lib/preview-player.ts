@@ -4,6 +4,7 @@ import {
   shouldEmitDiscoveryPreview,
   type StartPreviewOptions,
 } from "./discovery-emit";
+import { type ListenLink } from "./listen-out";
 
 export type { StartPreviewOptions };
 
@@ -34,6 +35,7 @@ export type QueueTrack = {
   href?: string;
   id: string;
 
+  listen?: ListenLink[];
   lit?: boolean;
   logId?: string;
   similar?: boolean;
