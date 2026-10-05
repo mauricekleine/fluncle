@@ -1,59 +1,38 @@
+#!/usr/bin/env bun
+
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+  APP_HOSTS,
+  edgeCacheUrl,
+  purgeCredentialsFromEnv,
+  purgeEdgeCacheHosts,
+  purgeEdgeCacheUrls,
+} from "./lib/edge-cache-purge";
 
-const APP_HOSTS = ["www.fluncle.com", "galaxy.fluncle.com", "radio.fluncle.com"];
+const argv = process.argv.slice(2);
+const fileIndex = argv.indexOf("--urls-file");
+const filePath = fileIndex >= 0 ? argv[fileIndex + 1] : undefined;
+const targets = [
+  ...(fileIndex >= 0 ? argv.slice(0, fileIndex).concat(argv.slice(fileIndex + 2)) : argv),
+  ...(filePath ? readFileSync(filePath, "utf8").split("\n") : []),
+]
+  .map((line) => line.trim())
+  .filter((line) => line !== "");
+const urls = targets.map((target) => (target.startsWith("/") ? edgeCacheUrl(target) : target));
 
-const token = process.env.CF_CACHE_PURGE_TOKEN;
+const credentials = purgeCredentialsFromEnv();
 
-if (!token) {
-  console.log(
-    "purge-edge-cache: CF_CACHE_PURGE_TOKEN is not in the build env — skipping the post-deploy purge (cached HTML may reference retired asset hashes until its TTL expires; add the token to the Cloudflare build environment to close the window).",
-  );
-  process.exit(0);
-}
-
-const configPath = join(dirname(fileURLToPath(import.meta.url)), "..", "cloudflare.config.ts");
-const config = readFileSync(configPath, "utf8");
-const zoneMatch = config.match(/CF_CACHE_PURGE_ZONE_ID:\s*bindings\.text\("([0-9a-f]{32})"\)/);
-
-if (!zoneMatch) {
+if (!credentials) {
   console.error(
-    "purge-edge-cache: CF_CACHE_PURGE_ZONE_ID not found in cloudflare.config.ts — skipping.",
+    "cache:purge: set CF_CACHE_PURGE_TOKEN (op read op://$FLUNCLE_1PASSWORD_ENV_ITEM/CF_CACHE_PURGE_TOKEN).",
   );
-  process.exit(0);
+  process.exit(1);
 }
 
-const zoneId = zoneMatch[1];
-
-async function purge(body: Record<string, unknown>): Promise<Response> {
-  return fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/purge_cache`, {
-    body: JSON.stringify(body),
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    method: "POST",
-  });
+if (urls.length === 0) {
+  await purgeEdgeCacheHosts(credentials);
+  console.log(`cache:purge: purged by hostname (${APP_HOSTS.join(", ")}).`);
+} else {
+  const count = await purgeEdgeCacheUrls(urls, credentials);
+  console.log(`cache:purge: purged ${count} URL(s).`);
 }
-
-const byHost = await purge({ hosts: APP_HOSTS });
-
-if (byHost.ok) {
-  console.log(`purge-edge-cache: purged by hostname (${APP_HOSTS.join(", ")}).`);
-  process.exit(0);
-}
-
-const hostErr = await byHost.text();
-console.log(
-  `purge-edge-cache: hostname purge unavailable (${byHost.status}) — falling back to purge_everything. ${hostErr.slice(0, 200)}`,
-);
-
-const everything = await purge({ purge_everything: true });
-
-if (everything.ok) {
-  console.log("purge-edge-cache: purged everything.");
-  process.exit(0);
-}
-
-console.error(
-  `purge-edge-cache: purge failed (${everything.status}) ${(await everything.text()).slice(0, 200)} — continuing; the TTL window applies.`,
-);
-process.exit(0);

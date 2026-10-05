@@ -102,6 +102,8 @@ The shared track delete also clears every due-work row for that track in the sam
 
 **After a purge, the hub counts lag.** The maintained `renderable_track_count` / `certified_finding_count` on artists/labels/albums are delta-maintained by the server's write paths, and this purge writes straight to prod out of band — so they overstate the truth until the nightly `reconcile_hub_counts` sweep recomputes them (within a day; it names this skill as one of its three drift sources). To correct them immediately instead of waiting, fire that sweep's trigger by hand: `POST /api/v1/admin/hub-counts/reconcile` with an admin token.
 
+**Export `CF_CACHE_PURGE_TOKEN` before a confirmed run** (`op read "op://$FLUNCLE_1PASSWORD_ENV_ITEM/CF_CACHE_PURGE_TOKEN"`). The Worker serves detail pages to crawlers from its edge cache for up to 7 days, and only its own write paths purge them, so every delete here (`purge.ts`, `purge-artists.ts`, `purge-albums.ts`, `split-artist.ts --strip`) purges the deleted track, album and artist pages plus the albums and labels the deleted tracks sat on. Without the token the delete still runs, prints `EDGE CACHE NOT PURGED`, and writes the URLs to `$PRUNE_OUT_DIR/edge-cache-purge-urls.txt`; finish with `bun run --cwd apps/web cache:purge --urls-file <that file>`.
+
 Track deletion also queues public aggregate and artist qualification repairs in the same database batch. The projection maintenance timer drains those repairs and advances the release hub order epoch before rebuilding anchors.
 
 ### 5 — Verify

@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { Data, Duration, Effect } from "effect";
+import { SENTRY_RELEASE } from "../sentry-config";
 import { runServerEffect } from "./effect/runtime";
 import { keepAlive } from "./effect/wait-until";
 
@@ -18,9 +19,11 @@ export type EdgeCachePolicy = {
 
   readonly contentType: "application/xml" | "text/html";
 
+  readonly crawlerFreshSeconds: number;
+
   readonly freshSeconds: number;
 
-  readonly storedMaxAge: number;
+  readonly retainSeconds: number;
 
   readonly swrSeconds: number;
 };
@@ -29,12 +32,15 @@ function policy(
   freshSeconds: number,
   swrSeconds: number,
   contentType: EdgeCachePolicy["contentType"] = "text/html",
+  retainSeconds: number = freshSeconds + swrSeconds,
+  crawlerFreshSeconds: number = freshSeconds,
 ): EdgeCachePolicy {
   return {
     cacheControl: `public, max-age=0, s-maxage=${freshSeconds}, stale-while-revalidate=${swrSeconds}`,
     contentType,
+    crawlerFreshSeconds,
     freshSeconds,
-    storedMaxAge: freshSeconds + swrSeconds,
+    retainSeconds,
     swrSeconds,
   };
 }
@@ -43,13 +49,19 @@ export const FRESH_SECONDS = 300;
 
 export const SWR_SECONDS = 3_600;
 
-export const PAGE_CACHE_POLICY = policy(FRESH_SECONDS, SWR_SECONDS);
+export const PAGE_CACHE_POLICY = policy(
+  FRESH_SECONDS,
+  SWR_SECONDS,
+  "text/html",
+  7 * 86_400,
+  7 * 86_400,
+);
 
 export const HUB_FRESH_SECONDS = 60;
 
 export const HUB_SWR_SECONDS = 600;
 
-export const HUB_CACHE_POLICY = policy(HUB_FRESH_SECONDS, HUB_SWR_SECONDS);
+export const HUB_CACHE_POLICY = policy(HUB_FRESH_SECONDS, HUB_SWR_SECONDS, "text/html", 86_400);
 
 export const SITEMAP_FRESH_SECONDS = 3_600;
 
@@ -65,7 +77,10 @@ export const PUBLIC_CACHE_CONTROL = PAGE_CACHE_POLICY.cacheControl;
 
 const STAMP_HEADER = "x-edge-cached-at";
 const FRESH_UNTIL_HEADER = "x-edge-fresh-until";
+const CRAWLER_FRESH_UNTIL_HEADER = "x-edge-crawler-fresh-until";
 const EXPIRES_AT_HEADER = "x-edge-expires-at";
+const STALE_UNTIL_HEADER = "x-edge-stale-until";
+const BUILD_HEADER = "x-edge-build-id";
 
 export function isCacheableLogPath(pathname: string): boolean {
   return pathname === "/log" || pathname === "/log/" || pathname.startsWith("/log/");
@@ -186,12 +201,18 @@ function secondsUntilNextUtcMidnight(now: Date): number {
 
 export function releaseBoundPolicy(base: EdgeCachePolicy, now: Date): EdgeCachePolicy {
   const remaining = secondsUntilNextUtcMidnight(now);
-  if (base.storedMaxAge <= remaining) {
+  if (base.retainSeconds <= remaining) {
     return base;
   }
   const fresh = Math.min(base.freshSeconds, remaining);
   const stale = Math.min(base.swrSeconds, remaining - fresh);
-  return policy(fresh, stale, base.contentType);
+  return policy(
+    fresh,
+    stale,
+    base.contentType,
+    remaining,
+    Math.min(base.crawlerFreshSeconds, remaining),
+  );
 }
 
 export function releaseBoundFeedCacheControl(now: Date = new Date()): string {
@@ -254,10 +275,25 @@ export async function withEdgeCache(
     Number.isFinite(storedAt) &&
     new Date(storedAt).toISOString().slice(0, 10) !== new Date().toISOString().slice(0, 10);
   const expiresAt = Number(hit?.headers.get(EXPIRES_AT_HEADER));
-  if (hit && !crossesReleaseDay && Number.isFinite(expiresAt) && Date.now() < expiresAt) {
-    const freshUntil = Number(hit.headers.get(FRESH_UNTIL_HEADER));
+  const htmlPolicy = cachePolicy.contentType === "text/html";
+  const browserNavigation =
+    request.headers.get("sec-fetch-mode") === "navigate" ||
+    request.headers.get("sec-fetch-dest") === "document";
+  const sameBuild = !htmlPolicy || hit?.headers.get(BUILD_HEADER) === (SENTRY_RELEASE ?? "dev");
+  const staleUntil = Number(hit?.headers.get(STALE_UNTIL_HEADER));
+  const browserCanUse =
+    !htmlPolicy ||
+    !browserNavigation ||
+    (sameBuild && Number.isFinite(staleUntil) && Date.now() < staleUntil);
+  const withinRetention =
+    !crossesReleaseDay && Number.isFinite(expiresAt) && Date.now() < expiresAt;
+  if (hit && withinRetention && browserCanUse) {
+    const crawler = htmlPolicy && !browserNavigation;
+    const freshUntil = Number(
+      hit.headers.get(crawler ? CRAWLER_FRESH_UNTIL_HEADER : FRESH_UNTIL_HEADER),
+    );
 
-    if (Number.isFinite(freshUntil) && Date.now() < freshUntil) {
+    if ((crawler || sameBuild) && Number.isFinite(freshUntil) && Date.now() < freshUntil) {
       return tagHit(hit, "fresh", cachePolicy);
     }
 
@@ -274,7 +310,7 @@ export async function withEdgeCache(
     return tagHit(hit, "stale", cachePolicy);
   }
 
-  if (hit) {
+  if (hit && !withinRetention) {
     await cache.delete(cacheKey);
   }
 
@@ -286,7 +322,7 @@ export async function withEdgeCache(
         "edge-cache.store-failed",
         Effect.tryPromise({
           catch: (cause) => new EdgeCacheFailed({ cause }),
-          try: () => cache.put(cacheKey, toStoredResponse(response.clone(), cachePolicy)),
+          try: () => cache.put(cacheKey, toStoredResponse(response.clone(), cachePolicy, cacheKey)),
         }),
       ),
     );
@@ -304,7 +340,7 @@ async function refresh(
   const response = await render();
 
   if (isStorable(response, cachePolicy)) {
-    await cache.put(cacheKey, toStoredResponse(response, cachePolicy));
+    await cache.put(cacheKey, toStoredResponse(response, cachePolicy, cacheKey));
   } else {
     await cache.delete(cacheKey);
   }
@@ -313,17 +349,36 @@ async function refresh(
 function isStorable(response: Response, cachePolicy: EdgeCachePolicy): boolean {
   return (
     response.status === 200 &&
+    !/(?:^|,)\s*(?:private|no-store)\s*(?:=|,|$)/i.test(
+      response.headers.get("cache-control") ?? "",
+    ) &&
     (response.headers.get("content-type")?.includes(cachePolicy.contentType) ?? false)
   );
 }
 
-function toStoredResponse(response: Response, cachePolicy: EdgeCachePolicy): Response {
+function toStoredResponse(
+  response: Response,
+  cachePolicy: EdgeCachePolicy,
+  cacheKey: Request,
+): Response {
   const stored = new Response(response.body, response);
   const storedAt = Date.now();
-  stored.headers.set("Cache-Control", `public, s-maxage=${cachePolicy.storedMaxAge}`);
+  const storedPolicy = releaseSensitivePath(new URL(cacheKey.url).pathname)
+    ? releaseBoundPolicy(cachePolicy, new Date(storedAt))
+    : cachePolicy;
+  stored.headers.set("Cache-Control", `public, s-maxage=${storedPolicy.retainSeconds}`);
   stored.headers.set(STAMP_HEADER, String(storedAt));
-  stored.headers.set(FRESH_UNTIL_HEADER, String(storedAt + cachePolicy.freshSeconds * 1_000));
-  stored.headers.set(EXPIRES_AT_HEADER, String(storedAt + cachePolicy.storedMaxAge * 1_000));
+  stored.headers.set(BUILD_HEADER, SENTRY_RELEASE ?? "dev");
+  stored.headers.set(FRESH_UNTIL_HEADER, String(storedAt + storedPolicy.freshSeconds * 1_000));
+  stored.headers.set(
+    CRAWLER_FRESH_UNTIL_HEADER,
+    String(storedAt + storedPolicy.crawlerFreshSeconds * 1_000),
+  );
+  stored.headers.set(
+    STALE_UNTIL_HEADER,
+    String(storedAt + (storedPolicy.freshSeconds + storedPolicy.swrSeconds) * 1_000),
+  );
+  stored.headers.set(EXPIRES_AT_HEADER, String(storedAt + storedPolicy.retainSeconds * 1_000));
 
   return stored;
 }
@@ -337,7 +392,10 @@ function tagHit(
   out.headers.set("Cache-Control", cachePolicy.cacheControl);
   out.headers.delete(STAMP_HEADER);
   out.headers.delete(FRESH_UNTIL_HEADER);
+  out.headers.delete(CRAWLER_FRESH_UNTIL_HEADER);
   out.headers.delete(EXPIRES_AT_HEADER);
+  out.headers.delete(STALE_UNTIL_HEADER);
+  out.headers.delete(BUILD_HEADER);
   out.headers.set("x-edge-cache", status);
 
   return out;

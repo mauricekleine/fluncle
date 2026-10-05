@@ -129,7 +129,9 @@ describe("Cache-Control on the edge-cached HTML surfaces", () => {
 
     expect(PAGE_CACHE_POLICY.cacheControl).not.toContain("86400");
     expect(edgeCachePolicyFor("/log/2026.A.7Q", "")).toBe(PAGE_CACHE_POLICY);
-    expect(edgeCachePolicyFor("/artist/sub-focus", "")).toBe(PAGE_CACHE_POLICY);
+    expect(edgeCachePolicyFor("/artist/sub-focus", "")?.cacheControl).toBe(
+      PAGE_CACHE_POLICY.cacheControl,
+    );
   });
 
   it("the hub, index, static, legal and docs pages carry the minute-fresh directive", async () => {
@@ -162,7 +164,7 @@ describe("Cache-Control on the edge-cached HTML surfaces", () => {
       "/docs",
       "/docs/api",
     ]) {
-      expect(edgeCachePolicyFor(path, "")).toBe(HUB_CACHE_POLICY);
+      expect(edgeCachePolicyFor(path, "")?.cacheControl).toBe(HUB_CACHE_POLICY.cacheControl);
     }
 
     expect(edgeCachePolicyFor("/artists", "?page=3")).toBe(HUB_CACHE_POLICY);

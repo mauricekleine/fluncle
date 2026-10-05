@@ -86,7 +86,7 @@ Cloudflare deploys via Workers Builds, and migrations run as part of the **deplo
 
 ```jsonc
 // apps/web/package.json
-"deploy:cf": "bun run db:migrate:production && bun run db:migrate:telemetry:production && bun run scripts/repair-hidden-graph-counts.ts && cf deploy --prebuilt && bun run scripts/backfill-mixable-artists-projection.ts --activate && bun scripts/purge-edge-cache.ts"
+"deploy:cf": "bun run db:migrate:production && bun run db:migrate:telemetry:production && bun run scripts/repair-hidden-graph-counts.ts && cf deploy --prebuilt && bun run scripts/backfill-mixable-artists-projection.ts --activate"
 ```
 
 `db:migrate:production` validates the generated journal against the loaded migration files, reads the target database's Drizzle ledger, and sends the complete pending journal suffix as one atomic libSQL migration batch. Each migration's ledger stamp is part of the same transaction, so a failed statement rolls back the schema changes and stamps together. The local `db:migrate` command and the `dev` startup path remain the ordinary full-journal Drizzle path.
@@ -100,6 +100,8 @@ The telemetry migration is required and runs after the primary migration but bef
 The run ledger stays in a separate telemetry database so a stalled primary writer cannot hide the sweep failures it should report. The database-admission lease store and the primary write-probe samples live there for the same reason: a stalled primary writer cannot stall the coordinator that decides who may write to it (see [database-performance.md](./database-performance.md), § Mutation laws). The primary and telemetry Drizzle configs use distinct schema entrypoints, migration folders, and credential pairs; neither schema imports the other's tables. A default added to an existing `tracks` column can make Drizzle rebuild the table and its indexes, so review the generated migration before changing a default on that table.
 
 The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build still runs separately as the Build command). Prod `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` and `TURSO_TELEMETRY_DATABASE_URL` / `TURSO_TELEMETRY_AUTH_TOKEN` come from the Cloudflare build/deploy environment, so the two migration steps inspect and migrate their disjoint production databases there.
+
+`deploy:cf` ends with the projection activation and does not purge the edge cache. Every cached HTML entry is stamped with the build that rendered it (`SENTRY_RELEASE`, the production commit SHA), so a browser navigation never reuses an entry from another build; per-write targeted purges still evict the pages a content write changes. To wipe the store by hand, run `CF_CACHE_PURGE_TOKEN=... bun run --cwd apps/web cache:purge` (paths as arguments purge only those pages).
 
 ## Files
 
