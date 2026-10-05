@@ -10,6 +10,8 @@ import {
   chunk,
   countTrackRefs,
   deleteTracksWithEdges,
+  pagesTouchedByDelete,
+  purgeEdgeCachePaths,
   entanglementHits,
   getOrSet,
   orphanAlbums,
@@ -220,6 +222,11 @@ async function applySplitPlan(
   newId: () => string,
 ): Promise<void> {
   if (mode === "strip") {
+    const pages = await pagesTouchedByDelete(cat.db, {
+      albumIds: plan.albumIds,
+      artistIds: [artist.id],
+      trackIds: plan.impostorTrackIds,
+    });
     const removed = await deleteTracksWithEdges(cat.db, plan.impostorTrackIds);
     console.log(`  deleted track_artists.track_id: ${removed.edges}`);
     console.log(`  deleted tracks.track_id: ${removed.tracks}`);
@@ -231,6 +238,7 @@ async function applySplitPlan(
       });
       console.log(`  deleted albums: ${Number(result.rowsAffected)}`);
     }
+    await purgeEdgeCachePaths(pages);
     return;
   }
 

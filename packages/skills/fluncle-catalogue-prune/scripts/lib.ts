@@ -1,6 +1,14 @@
+import { writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { $ } from "bun";
 import { createClient, type Client, type Row } from "@libsql/client/web";
 
+import {
+  edgeCacheUrl,
+  purgeCredentialsFromEnv,
+  purgeEdgeCacheUrls,
+} from "../../../../apps/web/scripts/lib/edge-cache-purge";
 import { markPublicProjectionSourceChangedStatements } from "../../../../apps/web/src/lib/server/public-projection-source-maintenance";
 
 const CATALOGUE_PRUNE_DB_CONCURRENCY = 1;
@@ -468,12 +476,84 @@ export async function captureArtistCascadeRollback(
   };
 }
 
+export async function pagesTouchedByDelete(
+  db: Client,
+  ids: { albumIds: string[]; artistIds: string[]; trackIds: string[] },
+): Promise<string[]> {
+  const paths = new Set(ids.trackIds.map((id) => `/track/${encodeURIComponent(id)}`));
+  const add = (kind: string, rows: Row[]) => {
+    for (const row of rows) {
+      if (typeof row.slug === "string" && row.slug.trim() !== "") {
+        paths.add(`/${kind}/${encodeURIComponent(row.slug.trim())}`);
+      }
+    }
+  };
+  const lookup = async (sql: (holes: string) => string, list: string[]): Promise<Row[]> => {
+    const out: Row[] = [];
+    for (const c of chunk(list)) {
+      out.push(...(await db.execute({ args: c, sql: sql(c.map(() => "?").join(",")) })).rows);
+    }
+    return out;
+  };
+
+  add("artist", await lookup((h) => `select slug from artists where id in (${h})`, ids.artistIds));
+  add("album", await lookup((h) => `select slug from albums where id in (${h})`, ids.albumIds));
+  add(
+    "album",
+    await lookup(
+      (h) =>
+        `select albums.slug as slug from tracks join albums on albums.id = tracks.album_id where tracks.track_id in (${h})`,
+      ids.trackIds,
+    ),
+  );
+  add(
+    "label",
+    await lookup(
+      (h) =>
+        `select labels.slug as slug from tracks join labels on labels.id = tracks.label_id where tracks.track_id in (${h})`,
+      ids.trackIds,
+    ),
+  );
+
+  return [...paths];
+}
+
+export async function purgeEdgeCachePaths(
+  paths: string[],
+  purge: (urls: string[]) => Promise<void> = async (urls) => {
+    const credentials = purgeCredentialsFromEnv();
+    if (!credentials) {
+      throw new Error("CF_CACHE_PURGE_TOKEN is not set");
+    }
+    await purgeEdgeCacheUrls(urls, credentials);
+  },
+): Promise<void> {
+  if (paths.length === 0) {
+    return;
+  }
+  const urls = paths.map(edgeCacheUrl);
+  try {
+    await purge(urls);
+    console.log(`  purged edge cache: ${urls.length} page(s)`);
+  } catch (error) {
+    const file = resolve(process.env.PRUNE_OUT_DIR ?? ".", "edge-cache-purge-urls.txt");
+    writeFileSync(file, `${urls.join("\n")}\n`);
+    console.log(
+      `\n  ⚠ EDGE CACHE NOT PURGED (${error instanceof Error ? error.message : String(error)}).` +
+        ` Crawlers keep the deleted pages for up to 7 days. Run:\n` +
+        `    CF_CACHE_PURGE_TOKEN=... bun run --cwd apps/web cache:purge --urls-file ${file}`,
+    );
+  }
+}
+
 export async function deleteArtistCascade(
   db: Client,
   artistIds: string[],
   trackIds: string[],
   albumIds: string[],
+  purge?: (urls: string[]) => Promise<void>,
 ): Promise<void> {
+  const pages = await pagesTouchedByDelete(db, { albumIds, artistIds, trackIds });
   const del = async (table: string, col: string, ids: string[]) => {
     console.log(`  deleted ${table}.${col}: ${await deleteIn(db, table, col, ids)}`);
   };
@@ -489,4 +569,5 @@ export async function deleteArtistCascade(
   console.log(`  deleted tracks.track_id: ${removed.tracks}`);
   await del("albums", "id", albumIds);
   await del("artists", "id", artistIds);
+  await purgeEdgeCachePaths(pages, purge);
 }
