@@ -14,29 +14,13 @@ import { handleOrpc } from "./lib/server/orpc";
 import { withSecurityHeaders } from "./lib/server/security-headers";
 import { presenceRedirect, withPresenceRobots } from "./lib/server/presence-hosts";
 import { subdomainSurfaceRoute } from "./router-rewrite";
-import { serverSentryIntegrations, serverSentryScrubHooks } from "./lib/server/sentry-options";
+import {
+  serverSentryIntegrations,
+  serverSentryScrubHooks,
+  serverTracesSampler,
+} from "./lib/server/sentry-options";
 import { SENTRY_RELEASE, WORKER_SENTRY_DSN } from "./lib/sentry-config";
 
-const TRACE_RATE_ALWAYS = 1.0;
-const TRACE_RATE_NONE = 0;
-const TRACE_RATE_BASELINE = 0.2;
-
-const HIGH_VALUE_TRACE_MATCHERS = ["recommend", "search", "frontier"];
-
-const NOISE_TRACE_MATCHERS = [
-  "/status",
-  "/health",
-  "/robots",
-  "/sitemap",
-  "/llms.txt",
-  "/.well-known",
-  "/og/",
-  "/mixtape-cover",
-  "/preview/",
-  "/favicon",
-  "/assets/",
-  "/cdn-cgi",
-];
 const serverEntry = createServerEntry({
   fetch(request) {
     const response = runWithDatabaseRequestScope(async () =>
@@ -150,25 +134,7 @@ export default Sentry.withSentry(
 
     sendDefaultPii: false,
 
-    tracesSampler: (samplingContext) => {
-      const name = samplingContext.name;
-
-      if (typeof name !== "string") {
-        return TRACE_RATE_BASELINE;
-      }
-
-      const lower = name.toLowerCase();
-
-      if (HIGH_VALUE_TRACE_MATCHERS.some((matcher) => lower.includes(matcher))) {
-        return TRACE_RATE_ALWAYS;
-      }
-
-      if (NOISE_TRACE_MATCHERS.some((matcher) => lower.includes(matcher))) {
-        return TRACE_RATE_NONE;
-      }
-
-      return TRACE_RATE_BASELINE;
-    },
+    tracesSampler: serverTracesSampler,
   }),
   cfHandler,
 );
