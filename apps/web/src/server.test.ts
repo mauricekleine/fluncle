@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { takeWaitUntilPromises } from "./test/cloudflare-workers-stub";
 import { noteTransientDatabaseFailure } from "./lib/server/db";
+import { BROWSER_SENTRY_DSN, SENTRY_TUNNEL_PATH } from "./lib/sentry-config";
 import {
   CONTENT_POLICY,
   CONTENT_POLICY_WITH_REPORTING,
@@ -18,11 +19,15 @@ const hoisted = vi.hoisted(() => {
     handleMcp: vi.fn(async (_request: Request): Promise<Response | undefined> => undefined),
     makeRouterResponse,
     routerFetch: vi.fn(async (_request: Request) => makeRouterResponse()),
+    sentryFetch: vi.fn(),
   };
 });
 
 vi.mock("@sentry/cloudflare", () => ({
-  withSentry: (_options: unknown, handler: unknown) => handler,
+  withSentry: (_options: unknown, handler: { fetch: (request: Request) => Promise<Response> }) => ({
+    ...handler,
+    fetch: hoisted.sentryFetch.mockImplementation((request: Request) => handler.fetch(request)),
+  }),
 }));
 
 vi.mock("@tanstack/react-start/server-entry", () => ({
@@ -69,9 +74,42 @@ beforeEach(() => {
   hoisted.handleAgentDiscovery.mockResolvedValue(undefined);
   hoisted.routerFetch.mockReset();
   hoisted.routerFetch.mockImplementation(async () => hoisted.makeRouterResponse());
+  hoisted.sentryFetch.mockClear();
 });
 
 describe("server.ts dispatch spine", () => {
+  it.each([
+    "https://www.fluncle.com",
+    "https://status.fluncle.com",
+    "https://radio.fluncle.com",
+    "https://galaxy.fluncle.com",
+    "http://mirror.onion",
+  ])("relays browser envelopes on %s outside Sentry and dispatch", async (origin) => {
+    const upstreamFetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("ingested"));
+
+    try {
+      const response = await worker.fetch(
+        new Request(`${origin}${SENTRY_TUNNEL_PATH}`, {
+          body: `${JSON.stringify({ dsn: BROWSER_SENTRY_DSN })}\n{}\n{}`,
+          method: "POST",
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("ingested");
+      expect(upstreamFetch).toHaveBeenCalledTimes(1);
+      expect(hoisted.sentryFetch).not.toHaveBeenCalled();
+      expect(hoisted.handleMcp).not.toHaveBeenCalled();
+      expect(hoisted.handleAgentDiscovery).not.toHaveBeenCalled();
+      expect(hoisted.routerFetch).not.toHaveBeenCalled();
+      expect(takeWaitUntilPromises()).toHaveLength(0);
+    } finally {
+      upstreamFetch.mockRestore();
+    }
+  });
+
   it("keeps oRPC, MCP and discovery ahead of surface redirects and wraps every HTML result", async () => {
     const api = await dispatch("https://radio.fluncle.com/api/v1/search?q=a");
     expect(api.status).toBe(400);
@@ -138,6 +176,7 @@ describe("server.ts dispatch spine", () => {
   it("falls a non-contract path through to the TanStack router when every earlier stage passes", async () => {
     const response = await dispatch("https://www.fluncle.com/", { accept: "text/html" });
 
+    expect(hoisted.sentryFetch).toHaveBeenCalledTimes(1);
     expect(hoisted.handleMcp).toHaveBeenCalledTimes(1);
     expect(hoisted.handleAgentDiscovery).toHaveBeenCalledTimes(1);
     expect(hoisted.routerFetch).toHaveBeenCalledTimes(1);

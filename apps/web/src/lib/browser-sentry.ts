@@ -1,6 +1,6 @@
 import { type StartSpanOptions } from "@sentry/core";
 import { getRouterInstance } from "@tanstack/react-start";
-import { BROWSER_SENTRY_DSN, SENTRY_RELEASE } from "./sentry-config";
+import { BROWSER_SENTRY_DSN, SENTRY_RELEASE, SENTRY_TUNNEL_PATH } from "./sentry-config";
 import {
   BROWSER_TRACE_RATE,
   isAutomatedUserAgent,
@@ -71,6 +71,7 @@ async function loadBrowserSentry() {
         release: SENTRY_RELEASE,
         sendDefaultPii: false,
         tracesSampler: () => browserTracesSampler(window.location.hostname, navigator.userAgent),
+        tunnel: SENTRY_TUNNEL_PATH,
       },
       router,
       tracingOptions,

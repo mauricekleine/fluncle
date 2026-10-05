@@ -21,6 +21,7 @@ import {
 } from "./lib/server/sentry-options";
 import { SENTRY_RELEASE, WORKER_SENTRY_DSN } from "./lib/sentry-config";
 import { withTransientDatabaseFailure } from "./lib/server/transient-failure";
+import { handleSentryTunnel, isSentryTunnelRequest } from "./lib/server/sentry-tunnel";
 
 const serverEntry = createServerEntry({
   fetch(request) {
@@ -130,7 +131,7 @@ const cfHandler: ExportedHandler<Env> = {
   },
 };
 
-export default Sentry.withSentry(
+const sentryHandler = Sentry.withSentry(
   () => ({
     ...serverSentryScrubHooks,
     dsn: import.meta.env.PROD ? WORKER_SENTRY_DSN : undefined,
@@ -143,6 +144,22 @@ export default Sentry.withSentry(
   }),
   cfHandler,
 );
+
+const workerHandler: ExportedHandler<Env> = {
+  fetch(request, env, ctx) {
+    if (isSentryTunnelRequest(request)) {
+      return handleSentryTunnel(request);
+    }
+
+    if (!sentryHandler.fetch) {
+      throw new Error("Sentry handler has no fetch handler.");
+    }
+
+    return sentryHandler.fetch(request, env, ctx);
+  },
+};
+
+export default workerHandler;
 
 function hasAdminCookie(request: Request): boolean {
   const cookie = request.headers.get("cookie");

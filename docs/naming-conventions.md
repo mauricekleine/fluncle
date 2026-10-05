@@ -70,7 +70,7 @@ Flags are consistently `--kebab-case` (`--dry-run`, `--scheduled-for`, `--video-
 
 ### 1.2 HTTP API (`apps/web/src/routes/api/v1/**`)
 
-oRPC contracts are served under `/api/v1/*`. File-route handlers may expose `/api/*` compatibility aliases through `apps/web/src/routes/api/-alias.ts`.
+oRPC contracts are served under `/api/v1/*`. File-route handlers may expose `/api/*` compatibility aliases through `apps/web/src/routes/api/-alias.ts`. `POST /api/v1/monitoring` is the Sentry envelope relay, a transport rather than a JSON operation, so it has no oRPC contract, operationId, or OpenAPI entry and is handled in `server.ts` ahead of the Sentry wrapper.
 
 Public + private (`/me`) operations, with their OpenAPI `operationId`:
 
