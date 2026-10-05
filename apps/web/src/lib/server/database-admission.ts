@@ -72,6 +72,8 @@ export type DatabaseAdmissionRequest = Readonly<{
 }>;
 
 export type DatabaseAdmissionResult = Readonly<{
+  activeConflictCount: number | null;
+  aheadCount: number | null;
   contenderId: string;
   enforced: boolean;
   fencingToken: number | null;
@@ -601,6 +603,7 @@ function enforcedResult(
   request: DatabaseAdmissionRequest,
   profile: AdmissionResourceProfile,
   options: {
+    activeConflictCount?: number;
     aheadCount?: number;
     contender?: ContenderRow;
     nowMs: number;
@@ -617,6 +620,9 @@ function enforcedResult(
     options.outcome === "acquired" ? leaseRemainingMs(options.contender, options.nowMs) : null;
   const yieldReason = options.yieldReason ?? null;
   return {
+    activeConflictCount:
+      options.outcome === "queued" ? (options.activeConflictCount ?? null) : null,
+    aheadCount: options.outcome === "queued" ? (options.aheadCount ?? null) : null,
     contenderId: `${request.owner}:${request.runId}`,
     enforced: true,
     fencingToken: options.contender?.fencing_token ?? null,
@@ -761,6 +767,7 @@ async function acquireEnforcedDatabaseAdmissionFor(
   }
   if (before !== undefined && waitsWithoutWriting(before, guardrails)) {
     return enforcedResult(request, profile, {
+      activeConflictCount: before.active_conflict_count,
       aheadCount: before.ahead_count,
       contender: before,
       nowMs: guardrails.nowMs,
@@ -887,6 +894,7 @@ async function acquireEnforcedDatabaseAdmissionFor(
     throw new Error("database admission contender was not persisted");
   }
   return enforcedResult(request, profile, {
+    activeConflictCount: contender.active_conflict_count,
     aheadCount: contender.ahead_count,
     contender,
     nowMs: guardrails.nowMs,
@@ -1013,6 +1021,8 @@ function shadowResult(
   yieldReason: DatabaseAdmissionYieldReason | null,
 ): DatabaseAdmissionResult {
   return {
+    activeConflictCount: null,
+    aheadCount: null,
     contenderId: `${request.owner}:${request.runId}`,
     enforced: false,
     fencingToken: null,

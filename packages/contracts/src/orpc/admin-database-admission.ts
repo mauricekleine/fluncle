@@ -44,6 +44,8 @@ const DatabaseAdmissionInputSchema = z
   );
 
 export const DatabaseAdmissionResponseSchema = z.object({
+  activeConflictCount: z.number().int().nonnegative().nullable(),
+  aheadCount: z.number().int().nonnegative().nullable(),
   contenderId: z.string().min(1).max(192),
   enforced: z.boolean(),
   fencingToken: z.number().int().positive().nullable(),

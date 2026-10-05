@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -361,7 +362,210 @@ const STALL_TOLERANT_GRANT = (leaseRemainingMs: number, heartbeatAfterMs: number
   `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":7,"heavyRead":false,"heartbeatAfterMs":${heartbeatAfterMs},"holdMs":0,"lane":"write","leaseExpiresAtMs":91000,"leaseRemainingMs":${leaseRemainingMs},"operationId":"track.enrich","outcome":"acquired","queueAgeMs":12,"recovered":false,"retryAfterMs":null,"waitMs":12,"yieldReason":null}'`;
 const MALFORMED_YIELD_QUEUED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"queued","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":"queue\\\\malformed"}'`;
 
+function queuedWithPosition(
+  aheadCount: number | null,
+  activeConflictCount: number | null,
+  retryAfterMs = 2_000,
+  lane = "write",
+  heavyRead = false,
+): string {
+  const response = JSON.parse(QUEUED_RESPONSE.slice(6, -1)) as Record<string, unknown>;
+  return `echo '${JSON.stringify({ ...response, activeConflictCount, aheadCount, heavyRead, lane, retryAfterMs })}'`;
+}
+
+function timedQueuedAcquire(response: string): string {
+  const timeline = join(directory, "acquire-times");
+  fakeCurl(`
+if [[ "$*" == *'"action":"acquire"'* ]]; then
+  perl -MTime::HiRes=time -e 'printf "%.0f\\n", time() * 1000' >> "${timeline}"
+  if [ "$(wc -l < "${timeline}")" -eq 1 ]; then
+    ${response}
+    exit 0
+  fi
+fi
+${STALL_TOLERANT_GRANT(90_000, 30_000)}
+`);
+  return timeline;
+}
+
+function publishBeacon(lane: string, content: string): void {
+  const stateDirectory = join(directory, ".database-admission");
+  mkdirSync(stateDirectory, { recursive: true });
+  const temporary = join(stateDirectory, "test-release");
+  writeFileSync(temporary, `${content}\n`);
+  renameSync(temporary, join(stateDirectory, `released-${lane}`));
+}
+
+function acquireDelay(timeline: string): number {
+  const times = readFileSync(timeline, "utf8").trim().split("\n").map(Number);
+  expect(times).toHaveLength(2);
+  return (times[1] ?? 0) - (times[0] ?? 0);
+}
+
 describe("database admission unit runner", () => {
+  it(
+    "releases an immediately completed payload with less than 700 ms held",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeCurl(STALL_TOLERANT_GRANT(90_000, 30_000));
+      const result = await run(["true"]);
+      expect(result.status).toBe(0);
+      expect(readFileSync(curlLog, "utf8").match(/"action":"release"/g)).toHaveLength(1);
+      const event = result.stderr.split("\n").find((line) => line.includes('"outcome":"released"'));
+      expect(event).toBeDefined();
+      expect((JSON.parse(event ?? "{}") as { hold_ms: number }).hold_ms).toBeLessThan(700);
+      expect(
+        readFileSync(join(directory, ".database-admission", "released-write"), "utf8"),
+      ).toMatch(/^\d+ \S+ \d+\n$/);
+      expect(existsSync(join(directory, ".database-admission", "released-heavy-read"))).toBe(false);
+    },
+  );
+
+  it(
+    "preserves a non-zero payload exit status through the interruptible wait and release",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeCurl(STALL_TOLERANT_GRANT(90_000, 30_000));
+      const result = await run(["bash", "-c", "sleep 0.2; exit 23"]);
+      expect(result.status).toBe(23);
+      expect(result.stderr).toContain('"outcome":"released"');
+      expect(readFileSync(curlLog, "utf8").match(/"action":"release"/g)).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ["write", false, "write", "heavy-read"],
+    ["heavy-read", true, "heavy-read", "write"],
+    ["write", true, "heavy-read", undefined],
+  ])(
+    "wakes a %s heavyRead=%s waiter on its conflicting release",
+    async (lane, heavyRead, beacon, unrelated) => {
+      const timeline = timedQueuedAcquire(queuedWithPosition(0, 1, 2_000, lane, heavyRead));
+      const pending = run(["true"]);
+      await waitUntil(() => existsSync(timeline));
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
+      if (unrelated !== undefined) {
+        publishBeacon(unrelated, "unrelated");
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+      }
+      const beforeRelease = readFileSync(timeline, "utf8").trim().split("\n").length;
+      const releasedAt = Date.now();
+      publishBeacon(beacon, "holder-release");
+      const result = await pending;
+      expect(beforeRelease).toBe(1);
+      expect(result.status).toBe(0);
+      expect(acquireDelay(timeline)).toBeLessThan(1_000);
+      expect(
+        Number(readFileSync(timeline, "utf8").trim().split("\n")[1]) - releasedAt,
+      ).toBeLessThan(700);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it("waits for the local jitter floor when no release arrives", PROCESS_TEST_OPTIONS, async () => {
+    const timeline = timedQueuedAcquire(queuedWithPosition(0, 1, 100));
+    const result = await run(["true"], { env: { DATABASE_ADMISSION_LOCAL_WAKE_MAX_SECS: "3" } });
+    expect(result.status).toBe(0);
+    expect(acquireDelay(timeline)).toBeGreaterThanOrEqual(1_500);
+    expect(acquireDelay(timeline)).toBeLessThan(3_700);
+  });
+
+  it("caps a local beacon wait at the acquisition deadline", PROCESS_TEST_OPTIONS, async () => {
+    fakeCurl(queuedWithPosition(0, 1));
+    const clock = fakeVirtualClock(2_000);
+    advancingVirtualSleep(clock);
+    const result = await run(["true"], { maxWaitSecs: 1, phase: true });
+    expect(result.status).toBe(75);
+    expect(Number(readFileSync(clock, "utf8").trim())).toBe(3_000);
+    const calls = readFileSync(curlLog, "utf8");
+    expect(calls.match(/"action":"acquire"/g)).toHaveLength(1);
+    expect(calls.match(/"action":"cancel"/g)).toHaveLength(1);
+    expect(result.stderr).toContain('"outcome":"wait-expired"');
+  });
+
+  it.each([false, true])(
+    "needs two distinct releases with a holder and predecessor, mixed=%s",
+    async (mixed) => {
+      const timeline = timedQueuedAcquire(queuedWithPosition(1, 1, 2_000, "write", mixed));
+      const pending = run(["true"]);
+      await waitUntil(() => existsSync(timeline));
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
+      publishBeacon("write", "first-release");
+      if (mixed) {
+        publishBeacon("heavy-read", "first-release");
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 350));
+      const afterFirst = readFileSync(timeline, "utf8").trim().split("\n").length;
+      publishBeacon("write", "second-release");
+      const result = await pending;
+      expect(afterFirst).toBe(1);
+      expect(result.status).toBe(0);
+      expect(acquireDelay(timeline)).toBeLessThan(1_200);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    ["absent counts", QUEUED_RESPONSE.replace('"waitMs":12', '"retryAfterMs":200,"waitMs":12'), {}],
+    ["null count", queuedWithPosition(null, 1, 200), {}],
+    ["no conflicts", queuedWithPosition(0, 0, 200), {}],
+    [
+      "unusable state directory",
+      queuedWithPosition(0, 1, 200),
+      { DATABASE_ADMISSION_STATE_DIR: "/dev/null/state" },
+    ],
+  ])(
+    "keeps server-hint polling with %s",
+    async (_label, response, env) => {
+      const timeline = timedQueuedAcquire(response);
+      const result = await run(["true"], { env });
+      expect(result.status).toBe(0);
+      expect(acquireDelay(timeline)).toBeGreaterThanOrEqual(100);
+      expect(acquireDelay(timeline)).toBeLessThan(700);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it.each(["", "0", "16", "1.5", "-1", "bad"])(
+    "rejects local wake setting %j before any request",
+    async (value) => {
+      fakeCurl(ACQUIRED_RESPONSE);
+      const result = await run(["true"], {
+        env: { DATABASE_ADMISSION_LOCAL_WAKE_MAX_SECS: value },
+      });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("DATABASE_ADMISSION_LOCAL_WAKE_MAX_SECS must be");
+      expect(existsSync(curlLog)).toBe(false);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it.each(["release", "cancel"])(
+    "publishes both mixed-resource beacons after a failed terminal %s",
+    async (action) => {
+      const response =
+        action === "release"
+          ? STALL_TOLERANT_GRANT(90_000, 30_000).replace('"heavyRead":false', '"heavyRead":true')
+          : queuedWithPosition(0, 1, 2_000, "write", true);
+      fakeCurl(`if [[ "$*" == *'"action":"${action}"'* ]]; then
+  printf '%s\\n%s\\n' '{}' '503'
+  exit 0
+fi
+${response}`);
+      const result = await run(["true"], {
+        breakerFailures: 1,
+        maxWaitSecs: action === "cancel" ? 0 : 5,
+      });
+      expect(result.status).toBe(0);
+      expect(readFileSync(curlLog, "utf8")).toContain(`"action":"${action}"`);
+      const stateDirectory = join(directory, ".database-admission");
+      const writer = readFileSync(join(stateDirectory, "released-write"), "utf8");
+      expect(writer).toMatch(/^\d+ \S+ \d+\n$/);
+      expect(readFileSync(join(stateDirectory, "released-heavy-read"), "utf8")).toBe(writer);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
   it(
     "cleanup does not wait for an exit from a child that never spawned",
     PROCESS_TEST_OPTIONS,
