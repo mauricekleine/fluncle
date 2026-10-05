@@ -1,9 +1,11 @@
 const CHUNK_RELOAD_KEY = "fluncle-chunk-reload";
 const CHUNK_RELOAD_WINDOW_MS = 60_000;
+const RELOAD_PENDING_MS = 10_000;
 
 type ChunkReloadDependencies = {
   location: Pick<Location, "href" | "reload">;
   now: () => number;
+  setTimeout: (callback: () => void, ms: number) => unknown;
   storage: Pick<Storage, "getItem" | "setItem">;
 };
 
@@ -51,6 +53,9 @@ export function createChunkReloadGuard(deps: ChunkReloadDependencies) {
       }
 
       reloading = true;
+      deps.setTimeout(() => {
+        reloading = false;
+      }, RELOAD_PENDING_MS);
       event.preventDefault();
       deps.location.reload();
     },

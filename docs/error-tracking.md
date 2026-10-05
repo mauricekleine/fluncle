@@ -34,7 +34,7 @@ The Team plan's 5M spans/mo is the budget the sampler is tuned against. The **p9
 
 ## What is covered today
 
-**Browser** — `apps/web/src/client.tsx` initializes the SDK (`@sentry/tanstackstart-react`) before hydration, which installs the global `error` and `unhandledrejection` handlers, so an unhandled client exception is captured with its stack. A failed route-chunk load after a deploy reloads the page once per URL within a 60-second window. Error events raised while that reload is pending are dropped.
+**Browser** — `apps/web/src/client.tsx` initializes the SDK (`@sentry/tanstackstart-react`) before hydration, which installs the global `error` and `unhandledrejection` handlers, so an unhandled client exception is captured with its stack. A failed route-chunk load after a deploy reloads the page once per URL within a 60-second window; `client.tsx` registers the only `vite:preloadError` listener. Error events raised while that reload is pending (up to 10 seconds) are dropped.
 
 **The root error boundary** — `apps/web/src/components/root-error-state.tsx` is the root route's `errorComponent` (sibling of `NotFoundBlackHole`, the `notFoundComponent`). A custom error boundary is **not** auto-captured by the router, so it reports the caught error itself via `captureException`. It renders a quiet, canon-styled "rough re-entry" state with a way back — never raw error detail on a public surface.
 

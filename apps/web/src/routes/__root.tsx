@@ -192,17 +192,6 @@ function RootLayout(): ReactNode {
   const [queryClient] = useState(() => new QueryClient());
   const { galaxiesLive } = useLoaderData({ from: Route.id });
 
-  useEffect(() => {
-    const onPreloadError = (event: Event): void => {
-      event.preventDefault();
-      recoverFromStaleBuild();
-    };
-
-    window.addEventListener("vite:preloadError", onPreloadError);
-
-    return () => window.removeEventListener("vite:preloadError", onPreloadError);
-  }, []);
-
   return (
     <html lang="en">
       <head>

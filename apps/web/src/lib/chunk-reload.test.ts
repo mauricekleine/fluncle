@@ -1,5 +1,10 @@
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { createChunkReloadGuard } from "./chunk-reload";
+
+const srcRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function setup() {
   const store = new Map<string, string>();
@@ -11,9 +16,17 @@ function setup() {
       store.set(key, value);
     },
   };
-  const deps = { location, now: () => clock.at, storage };
+  const timers: Array<{ callback: () => void; ms: number }> = [];
+  const deps = {
+    location,
+    now: () => clock.at,
+    setTimeout: (callback: () => void, ms: number): void => {
+      timers.push({ callback, ms });
+    },
+    storage,
+  };
 
-  return { clock, deps, guard: createChunkReloadGuard(deps), location, store };
+  return { clock, deps, guard: createChunkReloadGuard(deps), location, store, timers };
 }
 
 function preloadError() {
@@ -137,5 +150,38 @@ describe("createChunkReloadGuard", () => {
     expect(location.reload).toHaveBeenCalledTimes(1);
     expect(event.defaultPrevented).toBe(true);
     expect(guard.isReloading()).toBe(true);
+  });
+
+  it("stops suppressing errors when the reload never unloads the page", () => {
+    const { guard, timers } = setup();
+
+    guard.handlePreloadError(preloadError());
+
+    expect(guard.isReloading()).toBe(true);
+    expect(timers).toHaveLength(1);
+    timers[0]?.callback();
+    expect(guard.isReloading()).toBe(false);
+  });
+});
+
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+
+    if (statSync(path).isDirectory()) {
+      return sourceFiles(path);
+    }
+
+    return /\.(ts|tsx)$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
+  });
+}
+
+describe("vite:preloadError handling", () => {
+  it("has exactly one listener, so no other handler cancels an event the guard lets through", () => {
+    const registrations = sourceFiles(srcRoot).filter((path) =>
+      /addEventListener\(\s*["']vite:preloadError["']/.test(readFileSync(path, "utf8")),
+    );
+
+    expect(registrations.map((path) => relative(srcRoot, path))).toEqual(["client.tsx"]);
   });
 });

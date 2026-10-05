@@ -12,6 +12,7 @@ configureZod({ jitless: true });
 const chunkReloadGuard = createChunkReloadGuard({
   location: window.location,
   now: Date.now,
+  setTimeout: (callback, ms) => window.setTimeout(callback, ms),
   get storage() {
     return window.sessionStorage;
   },
