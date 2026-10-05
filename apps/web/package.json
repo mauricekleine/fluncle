@@ -111,7 +111,7 @@
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "~6.1.1",
     "@vitest/coverage-v8": "~5.0.3",
-    "cf": "1.0.0-beta.10",
+    "cf": "1.0.0-beta.12",
     "drizzle-kit": "catalog:",
     "oxc-parser": "~0.146.0",
     "playwright-core": "catalog:",
