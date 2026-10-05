@@ -23,7 +23,17 @@ function docsOnDisk(): string[] {
 
 describe("DOCS_PAGES", () => {
   it("matches content/docs/ exactly — add a doc, add its path", () => {
-    expect([...DOCS_PAGES]).toEqual(docsOnDisk());
+    expect(DOCS_PAGES.map((page) => page.path)).toEqual(docsOnDisk());
+  });
+
+  it("dates every page with a valid ISO timestamp no later than now", () => {
+    for (const { lastmod } of DOCS_PAGES) {
+      expect(lastmod).toMatch(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/,
+      );
+      expect(Number.isFinite(Date.parse(lastmod))).toBe(true);
+      expect(Date.parse(lastmod)).toBeLessThanOrEqual(Date.now());
+    }
   });
 
   it("has docs to list at all (a silently empty list would look like a clean pass)", () => {
@@ -31,15 +41,15 @@ describe("DOCS_PAGES", () => {
   });
 
   it("excludes the /docs hub — the sitemap's `pages` child owns it", () => {
-    expect(DOCS_PAGES).not.toContain("/docs");
+    expect(DOCS_PAGES.map((page) => page.path)).not.toContain("/docs");
   });
 
   it("excludes /docs/api — a route, not a page in the content tree", () => {
-    expect(DOCS_PAGES).not.toContain("/docs/api");
+    expect(DOCS_PAGES.map((page) => page.path)).not.toContain("/docs/api");
   });
 
   it("lists absolute /docs paths, never bare slugs", () => {
-    for (const path of DOCS_PAGES) {
+    for (const { path } of DOCS_PAGES) {
       expect(path.startsWith("/docs/")).toBe(true);
     }
   });

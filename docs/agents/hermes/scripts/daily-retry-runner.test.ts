@@ -299,6 +299,26 @@ describe("daily and weekly retry", () => {
     expect(existsSync(nestedSignal)).toBe(true);
   }, 8000);
 
+  test("an IndexNow rejection retries once while a successful partial walk completes its daily slot", () => {
+    const setup = fixture("indexnow");
+    const rejected = join(setup.root, "rejected.md");
+    const accepted = join(setup.root, "accepted.md");
+    writeFileSync(
+      rejected,
+      '# Cron Job\n\n{"checked":250,"produced":0,"queueDepth":12,"status":429,"errors":1,"ok":false}\n',
+    );
+    writeFileSync(
+      accepted,
+      '# Cron Job\n\n{"checked":250,"produced":12,"queueDepth":0,"status":202,"errors":0,"ok":true,"partial":true,"reason":"wall_budget"}\n',
+    );
+    expect(run(setup, "indexnow", "13:00", { exit: 1, resultMarker: rejected }).status).toBe(0);
+    expect(attempts(setup.attempts)).toBe(1);
+    expect(run(setup, "indexnow", "11:00", { resultMarker: accepted }).status).toBe(0);
+    expect(attempts(setup.attempts)).toBe(2);
+    expect(run(setup, "indexnow", "11:00", { resultMarker: accepted }).status).toBe(0);
+    expect(attempts(setup.attempts)).toBe(2);
+  });
+
   test("a zero-window reconcile admission pause retries, while work from one window never repeats", () => {
     const setup = fixture("reconcile-hub-counts");
     const paused = JSON.stringify({
@@ -990,6 +1010,7 @@ describe("daily and weekly retry", () => {
       "newsletter",
       "reach",
       "reconcile-hub-counts",
+      "indexnow",
       "sentry-triage",
       "social-metrics",
     ];

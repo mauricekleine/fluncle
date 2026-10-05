@@ -23,6 +23,7 @@ retry_final_slot() {
 	fluncle-demand.service) echo "Europe/Amsterdam 05:50" ;;
 	fluncle-funnel-snapshot.service) echo "UTC 23:57" ;;
 	fluncle-follow-digest.service) echo "Europe/Amsterdam 18:15 Fri" ;;
+	fluncle-indexnow.service) echo "Europe/Amsterdam 07:15" ;;
 	fluncle-label-outliers.service) echo "Europe/Amsterdam 06:30" ;;
 	fluncle-label-triage.service) echo "Europe/Amsterdam 07:50" ;;
 	fluncle-logbook.service) echo "Europe/Amsterdam 01:50" ;;

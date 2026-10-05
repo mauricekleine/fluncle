@@ -76,6 +76,7 @@ test("other sweep failures retain the missing marker alert", () => {
 test("a first-slot kill of a retry-runner job stays quiet until its final slot decides", () => {
   expect(runNotifier("fluncle-backup.service", "137", { time: "0305", weekday: "Sat" })).toBe("");
   expect(runNotifier("fluncle-audit.service", "255", { time: "0130", weekday: "Sat" })).toBe("");
+  expect(runNotifier("fluncle-indexnow.service", "137", { time: "0605", weekday: "Sat" })).toBe("");
 });
 
 test("a retry-runner job failing at or after its final slot alerts once", () => {
@@ -85,6 +86,9 @@ test("a retry-runner job failing at or after its final slot alerts once", () => 
   expect(runNotifier("fluncle-backup.service", "75", { time: "0305", weekday: "Sat" })).toContain(
     "The daily payload is incomplete or unconfirmed",
   );
+  expect(
+    runNotifier("fluncle-indexnow.service", "137", { time: "0715", weekday: "Sat" }),
+  ).toContain("fluncle-indexnow.service");
 });
 
 test("a final attempt that started at 23:57 and failed after midnight still alerts", () => {

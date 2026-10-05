@@ -5,6 +5,8 @@ import {
   buildFindingIndexNowUrls,
   buildIndexNowPayload,
   INDEXNOW_KEY,
+  IndexNowFailed,
+  submitIndexNowUrls,
   submitFindingToIndexNow,
 } from "@/lib/server/indexnow";
 
@@ -82,6 +84,96 @@ describe("IndexNow submission lifecycle", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it.each([200, 202])("accepts HTTP %i", async (status) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status })),
+    );
+    await expect(submitIndexNowUrls([`${siteUrl}/log/004.7.2I`])).resolves.toBe(status);
+  });
+
+  it("acknowledges accepted responses without waiting for body cancellation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              cancel: () => new Promise<void>(() => {}),
+            }),
+            { status: 202 },
+          ),
+      ),
+    );
+    await expect(submitIndexNowUrls([`${siteUrl}/log/004.7.2I`])).resolves.toBe(202);
+  });
+
+  it.each([201, 403, 422, 429, 500])(
+    "rejects HTTP %i with a bounded body excerpt",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("denied ".repeat(1000), { status })),
+      );
+      const error = await submitIndexNowUrls([`${siteUrl}/log/004.7.2I`]).catch(
+        (cause: unknown) => cause,
+      );
+      expect(error).toBeInstanceOf(IndexNowFailed);
+      expect(error).toMatchObject({ excerpt: expect.stringContaining("denied"), status });
+      if (error instanceof IndexNowFailed) {
+        expect(error.excerpt?.length).toBeLessThanOrEqual(512);
+      }
+    },
+  );
+
+  it("carries the rejected HTTP status in the publish background log", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("invalid key", { status: 403 })),
+    );
+    submitFindingToIndexNow("004.7.2I");
+    await vi.waitFor(() => expect(workers.takeWaitUntilPromises()).toHaveLength(1));
+    await vi.waitFor(() => expect(logged).toHaveBeenCalled());
+    expect(JSON.parse(String(logged.mock.calls[0]?.[0]))).toMatchObject({
+      event: "indexnow.submit-failed",
+      excerpt: "invalid key",
+      status: 403,
+    });
+  });
+
+  it("retains a rejection status when its body cannot be read", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(new Error("broken body"));
+              },
+            }),
+            { status: 422 },
+          ),
+      ),
+    );
+    await expect(submitIndexNowUrls([`${siteUrl}/log/004.7.2I`])).rejects.toMatchObject({
+      excerpt: "response body unavailable",
+      status: 422,
+    });
+  });
+
+  it("bounds reading a rejected body and retains the received status", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new ReadableStream(), { status: 429 })),
+    );
+    const result = submitIndexNowUrls([`${siteUrl}/log/004.7.2I`]).catch((cause: unknown) => cause);
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(await result).toMatchObject({ cause: "timeout", status: 429 });
   });
 
   it("submits in the background and bounds a hung request", async () => {

@@ -21,7 +21,9 @@ vi.mock("../lib/server/galaxies-map", () => ({
   GALAXY_INDEX_MIN_FINDINGS: 3,
   countPublicIndexableGalaxies: vi.fn(async () => 0),
   isGalaxyMapFullyNamed: vi.fn(async () => false),
+  listGalaxySitemapRows: vi.fn(async () => []),
   listPublicGalaxies: vi.fn(async () => []),
+  maxGalaxySitemapLastmod: vi.fn(async () => undefined),
 }));
 vi.mock("../lib/server/tracks", () => ({
   getMixChainDepth: vi.fn(async () => ({ open: false })),

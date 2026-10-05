@@ -200,6 +200,11 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
     0,
   ),
   "catalogue.demand": wholeLifetime("One bounded demand-projection write is the payload."),
+  "catalogue.indexnow": phased(
+    `${SCRIPTS}/indexnow.ts`,
+    "Each bounded page-version window and the final submission run in separate admitted phases; cursor persistence and work between requests hold no lease.",
+    1,
+  ),
   "catalogue.isrc-recovery": phased(
     `${SCRIPTS}/isrc-recovery-sweep.ts`,
     "One claim window reads the worklist, every paced Deezer search runs between phase processes with no lease, and the resolver verdicts settle in windows bounded by rows and by elapsed time.",
@@ -398,6 +403,14 @@ export const DATABASE_MUTATION_POLICIES = {
     kind: "replay-safe-idempotent",
     rationale: "Demand values are cleared and recomputed from current source truth.",
     reconciliation: "Repeat the bounded recompute; the derived rows converge on current truth.",
+  },
+  "catalogue.indexnow": {
+    evidenceSource: "apps/web/src/lib/server/indexnow-catalogue.ts",
+    kind: "replay-safe-idempotent",
+    rationale:
+      "Observation writes only new or changed fingerprints, and accepted submission stamps compare the current fingerprint and change date; replayed notifications leave page content unchanged.",
+    reconciliation:
+      "Read the remaining due page versions and repeat the bounded submission; accepted matching versions leave the due worklist.",
   },
   "catalogue.isrc-recovery": {
     evidenceSource: "apps/web/src/lib/server/recording-mbids.ts",
@@ -685,6 +698,7 @@ export const TRIGGER_MUTATION_POLICY_IDS = {
   "catalogue.crawl": "catalogue.crawl",
   "catalogue.crawl.commit-batch": "catalogue.crawl",
   "catalogue.demand": "catalogue.demand",
+  "catalogue.indexnow": "catalogue.indexnow",
   "catalogue.isrc-recovery.queue": "due-work.queue-maintenance",
   "catalogue.isrc-recovery.resolve": "catalogue.isrc-recovery",
   "catalogue.label-outliers.acknowledge": "catalogue.label-outliers",
@@ -2566,6 +2580,31 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
       ),
     ],
     wrapperSource: `${SCRIPTS}/reach-sweep.sh`,
+  }),
+  defineOperation({
+    accessClass: "write",
+    cadence: withRetrySlot(
+      calendar("*-*-* 06:00:00 Europe/Amsterdam"),
+      "*-*-* 07:15:00 Europe/Amsterdam",
+    ),
+    directory: "indexnow-timer",
+    heavy: true,
+    mutationTarget: "primary",
+    operationId: "catalogue.indexnow",
+    service: "fluncle-indexnow.service",
+    telemetryUnit: "indexnow",
+    timer: "fluncle-indexnow.timer",
+    triggers: [
+      endpoint(
+        "catalogue.indexnow",
+        "write",
+        "POST",
+        "/api/v1/admin/indexnow/submit",
+        `${SCRIPTS}/indexnow.ts`,
+        { mutationTarget: "primary" },
+      ),
+    ],
+    wrapperSource: `${SCRIPTS}/indexnow.sh`,
   }),
   defineOperation({
     accessClass: "write",

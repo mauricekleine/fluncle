@@ -202,6 +202,48 @@ export async function countPublicIndexableGalaxies(minFindings: number): Promise
   return Number(row?.n ?? 0);
 }
 
+const GALAXY_SITEMAP_WHERE = `galaxy.name is not null and galaxy.slug is not null
+  and galaxy.retired_at is null
+  and not exists (
+    select 1 from galaxies as unnamed
+    where unnamed.retired_at is null and (unnamed.name is null or unnamed.slug is null)
+  )
+  and (select count(*) from findings as member indexed by findings_galaxy_id_idx
+       where member.galaxy_id = galaxy.id) >= ?`;
+
+const GALAXY_SITEMAP_LASTMOD = `max(galaxy.updated_at, coalesce((
+  select max(max(coalesce(member.video_squared_at, ''), coalesce(version.changed_at, member.updated_at, ''), member.added_at))
+  from findings as member indexed by findings_galaxy_id_idx
+  left join search_page_versions version on version.kind = 'log' and version.subject_id = member.log_id
+  where member.galaxy_id = galaxy.id
+), ''))`;
+
+export async function listGalaxySitemapRows(
+  minFindings: number,
+): Promise<{ lastmod: string; slug: string }[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [minFindings],
+    sql: `select galaxy.slug, ${GALAXY_SITEMAP_LASTMOD} as lastmod
+          from galaxies as galaxy where ${GALAXY_SITEMAP_WHERE}
+          order by (select count(*) from findings as member indexed by findings_galaxy_id_idx
+                    where member.galaxy_id = galaxy.id) desc, galaxy.name collate nocase`,
+  });
+
+  return typedRows<{ lastmod: string; slug: string }>(result.rows);
+}
+
+export async function maxGalaxySitemapLastmod(minFindings: number): Promise<string | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [minFindings],
+    sql: `select max(${GALAXY_SITEMAP_LASTMOD}) as lastmod
+          from galaxies as galaxy where ${GALAXY_SITEMAP_WHERE}`,
+  });
+
+  return typedRow<{ lastmod: string | null }>(result.rows)?.lastmod ?? undefined;
+}
+
 export async function getPublicGalaxyBySlug(
   slug: string,
   limit: number,
@@ -362,8 +404,22 @@ export async function updateGalaxyFields(
     throw new Error("update_galaxy needs at least one of name, slug, requestSplit");
   }
 
-  sets.push("updated_at = ?");
-  args.push(now);
+  const materialChanges: string[] = [];
+
+  if (fields.name !== undefined) {
+    materialChanges.push("name is not ?");
+    args.push(fields.name.trim() || null);
+  }
+
+  if (fields.slug !== undefined) {
+    materialChanges.push("slug is not ?");
+    args.push(fields.slug.trim() || null);
+  }
+
+  if (materialChanges.length > 0) {
+    sets.push(`updated_at = case when ${materialChanges.join(" or ")} then ? else updated_at end`);
+    args.push(now);
+  }
   args.push(id);
 
   await db.execute({ args, sql: `update galaxies set ${sets.join(", ")} where id = ?` });
@@ -430,22 +486,22 @@ export async function updateGalaxyMap(
     if (cluster.retire) {
       statements.push({
         args: [now, now, cluster.id],
-        sql: "update galaxies set retired_at = ?, updated_at = ? where id = ?",
+        sql: "update galaxies set retired_at = ?, updated_at = ? where id = ? and retired_at is null",
       });
       continue;
     }
 
     if (cluster.clearSplitRequest) {
       statements.push({
-        args: [centroidJson, now, cluster.id],
-        sql: "update galaxies set centroid_json = ?, split_requested_at = null, updated_at = ? where id = ?",
+        args: [centroidJson, centroidJson, now, cluster.id],
+        sql: "update galaxies set centroid_json = ?, split_requested_at = null, updated_at = case when centroid_json <> ? then ? else updated_at end where id = ?",
       });
       continue;
     }
 
     statements.push({
-      args: [centroidJson, now, cluster.id],
-      sql: "update galaxies set centroid_json = ?, updated_at = ? where id = ?",
+      args: [centroidJson, now, cluster.id, centroidJson],
+      sql: "update galaxies set centroid_json = ?, updated_at = ? where id = ? and centroid_json <> ?",
     });
   }
 

@@ -26,6 +26,7 @@ import {
   type EntitySitemapLight,
   type EntitySitemapRow,
   entitySitemapLight,
+  entitySitemapLastmod,
   sitemapSlugSpan,
   hubCountsBySlug,
   hubFindingCountsBySlug,
@@ -375,8 +376,9 @@ export function albumSitemapWindowStatement(minTracks: number, limit: number, af
 
   return {
     args: [afterSlug ?? "", minTracks, limit],
-    sql: `select albums.slug as slug, ${ALBUM_COVER_SELECT}
+    sql: `select albums.slug as slug, version.changed_at, ${ALBUM_COVER_SELECT}
           from albums
+          left join search_page_versions version on version.kind = 'album' and version.subject_id = albums.slug
           where ${seek} and albums.renderable_track_count >= ?
           order by albums.slug asc
           limit ?`,
@@ -406,7 +408,7 @@ export async function listAlbumSitemapRows(
   const db = await getDb();
 
   if (window) {
-    const rows = typedRows<AlbumCoverRow & { slug: string }>(
+    const rows = typedRows<AlbumCoverRow & { changed_at: string | null; slug: string }>(
       (await db.execute(albumSitemapWindowStatement(minTracks, window.limit, window.afterSlug)))
         .rows,
     );
@@ -417,7 +419,7 @@ export async function listAlbumSitemapRows(
 
     return rows.map((row) => ({
       coverImageUrl: albumCover({ ...row, cover_url: light.get(row.slug)?.coverUrl }),
-      lastmod: light.get(row.slug)?.lastmod,
+      lastmod: entitySitemapLastmod(row.changed_at, light.get(row.slug)?.lastmod),
       slug: row.slug,
     }));
   }
@@ -425,7 +427,7 @@ export async function listAlbumSitemapRows(
   const result = await db.execute({
     args: [minTracks],
     sql: `select albums.slug as slug, ${ALBUM_COVER_SELECT},
-                 max(findings.added_at) as lastmod,
+                 nullif(max(coalesce(version.changed_at, ''), coalesce(max(findings.added_at), '')), '') as lastmod,
                  (select t2.album_image_url
                     from findings f2 join tracks t2 on t2.track_id = f2.track_id
                     where t2.album_id = albums.id and f2.log_id is not null
@@ -433,6 +435,7 @@ export async function listAlbumSitemapRows(
           from albums
           join tracks on tracks.album_id = albums.id
           left join findings on findings.track_id = tracks.track_id
+          left join search_page_versions version on version.kind = 'album' and version.subject_id = albums.slug
           where albums.renderable_track_count >= ?
           group by albums.id
           order by albums.slug asc`,
@@ -450,8 +453,13 @@ export async function listAlbumSitemapRows(
 export async function maxAlbumSitemapLastmod(minTracks: number): Promise<string | undefined> {
   const db = await getDb();
   const result = await db.execute({
-    args: [minTracks],
-    sql: `select max(findings.added_at) as lastmod
+    args: [minTracks, minTracks],
+    sql: `select nullif(max(coalesce(max(findings.added_at), ''), coalesce((
+                   select version.changed_at from search_page_versions version
+                   cross join albums on albums.slug = version.subject_id
+                   where version.kind = 'album' and albums.renderable_track_count >= ?
+                   order by version.changed_at desc limit 1
+                 ), '')), '') as lastmod
           from findings
           cross join tracks on tracks.track_id = findings.track_id
           cross join albums on albums.id = tracks.album_id

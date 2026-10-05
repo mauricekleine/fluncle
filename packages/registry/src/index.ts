@@ -1796,6 +1796,23 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    exposedContent: [
+      "daily observed catalogue page versions and bounded IndexNow submissions (--no-agent)",
+    ],
+    kind: "cron",
+    name: "cron.indexnow",
+    operatorNotes:
+      "06:00 Europe/Amsterdam, after nightly hub reconciliation, with a 07:15 retry. Calls the agent-tier submit_indexnow op directly in bounded admitted windows, then submits at most 10,000 currently indexable due URLs. HTTP 200/202 stamp the submitted versions; rejections stay due and fail the run ledger summary. Source: docs/agents/hermes/scripts/indexnow.* and docs/agents/hermes/indexnow-timer/.",
+    operatorOnly: "Search-engine notification is plumbing, not a listener-facing automation.",
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-indexnow",
+      kind: "cron",
+      schedule: { time: "06:00", tz: "Europe/Amsterdam" },
+    },
+    weights: {},
+  },
+  {
     command:
       "fluncle admin projections get --json; fluncle admin projections advance --target <track_due_work|crawl_due_work> --action repair --limit 500 --max-steps <adaptive> --no-terminal-status --json; fluncle admin projections advance --target <public_aggregates|artist_qualification> --action repair --limit 500 --max-steps <adaptive> --no-terminal-status --json",
     exposedContent: [

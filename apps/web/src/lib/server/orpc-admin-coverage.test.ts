@@ -331,6 +331,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 
   "POST /admin/hub-counts/reconcile": "reconcile_hub_counts",
 
+  "POST /admin/indexnow/submit": "submit_indexnow",
+
   "POST /admin/labels": "mint_label",
 
   "POST /admin/labels/aliases/{id}/confirm": "confirm_label_alias",

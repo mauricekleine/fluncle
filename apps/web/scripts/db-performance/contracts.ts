@@ -314,6 +314,7 @@ export const TRACK_SITEMAP_PERFORMANCE_WINDOW = {
     .replaceAll("tracks.track_id", "perf_tracks.id")
     .replace(/\btracks\b/g, "perf_tracks")
     .replace(/\balbums\b/g, "perf_albums")
+    .replace(/\bsearch_page_versions\b/g, "perf_search_page_versions")
     .replace("select perf_tracks.id,", "select perf_tracks.id as track_id,"),
 } satisfies PerformanceStatement;
 
@@ -365,10 +366,11 @@ performanceRegistry.register(
     plan: {
       policy: {
         forbidTempSort: true,
-        growingTables: ["perf_tracks", "perf_albums"],
+        growingTables: ["perf_tracks", "perf_albums", "perf_search_page_versions", "version"],
         requiredDetails: [
           /SEARCH perf_tracks USING INDEX perf_tracks_catalogue_active_track_id_idx \(is_catalogue=\? AND dismissed_at=\? AND id>\?\)/i,
           /SEARCH perf_albums USING INDEX sqlite_autoindex_perf_albums_1 \(id=\?\)/i,
+          /SEARCH version USING INDEX sqlite_autoindex_perf_search_page_versions_1 \(kind=\? AND subject_id=\?\)/i,
         ],
       },
       statement: TRACK_SITEMAP_PERFORMANCE_WINDOW,

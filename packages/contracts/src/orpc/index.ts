@@ -26,6 +26,7 @@ import { adminFrontierContract } from "./admin-frontier";
 import { adminFunnelContract } from "./admin-funnel";
 import { adminHealthContract } from "./admin-health";
 import { adminHubCountsContract } from "./admin-hub-counts";
+import { adminIndexNowContract } from "./admin-indexnow";
 import { adminLabelOutliersContract } from "./admin-label-outliers";
 import { adminLabelsContract } from "./admin-labels";
 import { adminLogbookContract } from "./admin-logbook";
@@ -476,6 +477,7 @@ export {
 export { adminFrontierContract, refreshFrontierPlaylists } from "./admin-frontier";
 export { adminFunnelContract, getFunnel, recordCatalogueSnapshot } from "./admin-funnel";
 export { adminHubCountsContract, reconcileHubCounts } from "./admin-hub-counts";
+export { adminIndexNowContract, submitIndexNow } from "./admin-indexnow";
 export {
   FrontierEditionSummarySchema,
   FrontierEditionTrackSchema,
@@ -629,6 +631,7 @@ export const contract = {
   ...adminFunnelContract,
   ...adminHealthContract,
   ...adminHubCountsContract,
+  ...adminIndexNowContract,
   ...followDigestContract,
   ...adminLabelOutliersContract,
   ...adminLabelsContract,

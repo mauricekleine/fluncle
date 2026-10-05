@@ -34,6 +34,7 @@ import { adminFrontierHandlers } from "./orpc/admin-frontier";
 import { adminFunnelHandlers } from "./orpc/admin-funnel";
 import { adminHealthHandlers } from "./orpc/admin-health";
 import { adminHubCountsHandlers } from "./orpc/admin-hub-counts";
+import { adminIndexNowHandlers } from "./orpc/admin-indexnow";
 import { adminLabelsHandlers } from "./orpc/admin-labels";
 import { adminLogbookHandlers } from "./orpc/admin-logbook";
 import { adminMigrationsHandlers } from "./orpc/admin-migrations";
@@ -103,6 +104,7 @@ export const router = os.use(dueWorkMaintenancePendingMiddleware).router({
   ...adminFunnelHandlers(os),
   ...adminHealthHandlers(os),
   ...adminHubCountsHandlers(os),
+  ...adminIndexNowHandlers(os),
   ...followDigestHandlers(os),
   ...adminLabelsHandlers(os),
   ...adminLogbookHandlers(os),

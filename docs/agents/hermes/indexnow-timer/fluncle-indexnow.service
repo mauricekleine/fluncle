@@ -1,0 +1,16 @@
+[Unit]
+Description=Fluncle daily catalogue IndexNow submission
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/indexnow-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+OnFailure=fluncle-sweep-failure@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/daily-retry-runner.sh fluncle-indexnow Europe/Amsterdam 06:00 07:15 -- bash /opt/hermes-scripts/indexnow.sh
+TimeoutStartSec=1570
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

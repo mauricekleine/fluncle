@@ -47,6 +47,7 @@ export const FIXTURE_TABLES = [
   "perf_operation_receipts",
   "perf_database_admission_contenders",
   "perf_artist_rules",
+  "perf_search_page_versions",
 ] as const;
 
 export type FixtureTable = (typeof FIXTURE_TABLES)[number];
@@ -257,6 +258,7 @@ export function expectedFixtureTableCardinalities(
     perf_public_aggregate_counts: projectionCounts.perf_public_aggregate_counts,
     perf_public_aggregate_membership: projectionCounts.perf_public_aggregate_membership,
     perf_public_aggregate_state: projectionCounts.perf_public_aggregate_state,
+    perf_search_page_versions: counts.tracks,
     perf_track_artists: counts.trackArtists,
     perf_track_embeddings: counts.trackEmbeddings,
     perf_tracks: counts.tracks,
@@ -536,6 +538,14 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   `create index if not exists perf_findings_added_at_track_id_idx
     on perf_findings(added_at, track_id)`,
   `create unique index if not exists perf_findings_log_id_unique on perf_findings(log_id)`,
+  `create table if not exists perf_search_page_versions (
+    kind text not null check (kind in ('track', 'artist', 'album', 'label', 'log')),
+    subject_id text not null,
+    fingerprint text not null,
+    changed_at text not null,
+    submitted_at text,
+    primary key (kind, subject_id)
+  )`,
   `create table if not exists perf_galaxies (
     id text primary key,
     name text
@@ -1423,6 +1433,17 @@ export async function* generateFixture(
         }
       : null,
   );
+
+  yield* generatedChunks("perf_search_page_versions", counts.tracks, chunkSize, (index) => ({
+    args: [
+      "track",
+      syntheticTrackId(index),
+      `synthetic-fingerprint-${padded(index)}`,
+      syntheticTimestamp(index),
+    ],
+    sql: `insert or ignore into perf_search_page_versions
+            (kind, subject_id, fingerprint, changed_at) values (?, ?, ?, ?)`,
+  }));
 
   yield* generatedChunks("perf_track_embeddings", counts.tracks, chunkSize, (index) =>
     selected(index, counts.tracks, counts.trackEmbeddings)

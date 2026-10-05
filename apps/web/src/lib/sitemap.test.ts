@@ -121,13 +121,24 @@ describe("the sitemap index", () => {
     );
   });
 
-  it("leaves a galaxies child undated — the lens page has no honest lastmod", () => {
-    const xml = indexXml(bags({ galaxies: [{ slug: "deep-roller" }] }));
-    const galaxiesLine = xml.slice(xml.indexOf("galaxies-1.xml"));
+  it("dates track, galaxy and docs children from their own freshest entry", () => {
+    const source = bags({
+      docs: [{ lastmod: "2026-06-12T00:00:00.000Z", path: "/docs/cli" }],
+      galaxies: [{ lastmod: "2026-06-11T00:00:00.000Z", slug: "deep-roller" }],
+      tracks: [{ lastmod: "2026-06-10T00:00:00.000Z", trackId: "track-1" }],
+    });
+    const xml = indexXml(source);
 
-    expect(galaxiesLine).toContain("galaxies-1.xml");
+    for (const [kind, lastmod] of [
+      ["tracks", "2026-06-10T00:00:00.000Z"],
+      ["galaxies", "2026-06-11T00:00:00.000Z"],
+      ["docs", "2026-06-12T00:00:00.000Z"],
+    ] as const) {
+      const entry = xml.slice(xml.indexOf(`${kind}-1.xml`)).split("</sitemap>")[0];
 
-    expect(galaxiesLine.slice(0, galaxiesLine.indexOf("</sitemap>"))).not.toContain("<lastmod>");
+      expect(entry).toContain(`<lastmod>${lastmod}</lastmod>`);
+      expect(buildSitemapShardXml(kind, 1, source)).toContain(`<lastmod>${lastmod}</lastmod>`);
+    }
   });
 
   it("always lists the hubs child, even on an empty archive", () => {
@@ -292,18 +303,24 @@ describe("a child sitemap", () => {
     expect(xml).toContain(`<loc>${siteUrl}/status</loc>`);
   });
 
-  it("puts one <loc> per developer-doc page in `docs`, and no <lastmod>", () => {
+  it("puts each developer-doc page and its content date in the docs child", () => {
     const xml =
       buildSitemapShardXml(
         "docs",
         1,
-        bags({ docs: [{ path: "/docs/cli" }, { path: "/docs/mcp" }] }),
+        bags({
+          docs: [
+            { lastmod: "2026-06-01T00:00:00.000Z", path: "/docs/cli" },
+            { lastmod: "2026-06-02T00:00:00.000Z", path: "/docs/mcp" },
+          ],
+        }),
       ) ?? "";
 
     expect(xml).toContain(`<loc>${siteUrl}/docs/cli</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/docs/mcp</loc>`);
 
-    expect(xml).not.toContain("<lastmod>");
+    expect(xml).toContain("<lastmod>2026-06-01T00:00:00.000Z</lastmod>");
+    expect(xml).toContain("<lastmod>2026-06-02T00:00:00.000Z</lastmod>");
   });
 
   it("keeps the /docs hub in `pages` and out of `docs` — one <loc>, one child", () => {

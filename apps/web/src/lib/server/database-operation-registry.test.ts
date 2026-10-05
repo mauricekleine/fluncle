@@ -48,6 +48,7 @@ const EXPECTED_WRITE_OPERATION_IDS = [
   "catalogue.anchor",
   "catalogue.crawl",
   "catalogue.demand",
+  "catalogue.indexnow",
   "catalogue.isrc-recovery",
   "catalogue.label-outliers",
   "catalogue.rank",

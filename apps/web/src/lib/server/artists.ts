@@ -38,6 +38,7 @@ import {
   type EntitySitemapLight,
   type EntitySitemapRow,
   entitySitemapLight,
+  entitySitemapLastmod,
   sitemapSlugSpan,
   hubCountsBySlug,
   hubCountsBySlugs,
@@ -322,8 +323,9 @@ export function artistSitemapWindowStatement(minTracks: number, limit: number, a
 
   return {
     args: [afterSlug ?? "", minTracks, limit],
-    sql: `select a.slug as slug
+    sql: `select a.slug as slug, version.changed_at
           from artists a
+          left join search_page_versions version on version.kind = 'artist' and version.subject_id = a.slug
           where ${seek} and a.renderable_track_count >= ?
             and ${listedArtistWhere("a")}
           order by a.slug asc
@@ -355,7 +357,7 @@ export async function listArtistSitemapRows(
   const db = await getDb();
 
   if (window) {
-    const slugs = typedRows<{ slug: string }>(
+    const slugs = typedRows<{ changed_at: string | null; slug: string }>(
       (await db.execute(artistSitemapWindowStatement(minTracks, window.limit, window.afterSlug)))
         .rows,
     );
@@ -364,9 +366,9 @@ export async function listArtistSitemapRows(
       ? entitySitemapLight((await db.execute(artistSitemapLightStatement(minTracks, span))).rows)
       : new Map<string, EntitySitemapLight>();
 
-    return slugs.map(({ slug }) => ({
+    return slugs.map(({ changed_at, slug }) => ({
       coverImageUrl: light.get(slug)?.coverUrl,
-      lastmod: light.get(slug)?.lastmod,
+      lastmod: entitySitemapLastmod(changed_at, light.get(slug)?.lastmod),
       slug,
     }));
   }
@@ -374,7 +376,7 @@ export async function listArtistSitemapRows(
   const result = await db.execute({
     args: [minTracks],
     sql: `select a.slug as slug,
-                 max(findings.added_at) as lastmod,
+                 nullif(max(coalesce(version.changed_at, ''), coalesce(max(findings.added_at), '')), '') as lastmod,
                  (select t2.album_image_url
                     from (findings join tracks on tracks.track_id = findings.track_id) t2
                     join track_artists ta2 on ta2.track_id = t2.track_id
@@ -384,6 +386,7 @@ export async function listArtistSitemapRows(
           join track_artists ta on ta.artist_id = a.id
           join tracks on tracks.track_id = ta.track_id
           left join findings on findings.track_id = tracks.track_id
+          left join search_page_versions version on version.kind = 'artist' and version.subject_id = a.slug
           where a.renderable_track_count >= ? and ${listedArtistWhere("a")}
           group by a.id
           order by a.slug asc`,
@@ -403,8 +406,13 @@ export async function listArtistSitemapRows(
 export async function maxArtistSitemapLastmod(minTracks: number): Promise<string | undefined> {
   const db = await getDb();
   const result = await db.execute({
-    args: [minTracks],
-    sql: `select max(findings.added_at) as lastmod
+    args: [minTracks, minTracks],
+    sql: `select nullif(max(coalesce(max(findings.added_at), ''), coalesce((
+                   select version.changed_at from search_page_versions version
+                   cross join artists a on a.slug = version.subject_id
+                   where version.kind = 'artist' and a.renderable_track_count >= ? and ${listedArtistWhere("a")}
+                   order by version.changed_at desc limit 1
+                 ), '')), '') as lastmod
           from findings
           cross join tracks on tracks.track_id = findings.track_id
           cross join track_artists ta on ta.track_id = tracks.track_id
