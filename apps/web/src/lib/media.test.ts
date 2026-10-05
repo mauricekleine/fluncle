@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FOUND_BASE,
+  type CropOrientation,
   albumCoverAtSize,
   bestAlbumCoverUrl,
   bestArtistAvatarUrl,
@@ -19,6 +20,52 @@ import {
   videoRendition,
   videoVersion,
 } from "./media";
+
+describe.each([
+  { crop: videoCrop, name: "videoCrop" },
+  { crop: videoCropPoster, name: "videoCropPoster" },
+  {
+    crop: (logId: string, orientation: CropOrientation, width?: number) =>
+      videoClipCrop(logId, orientation, 10, width),
+    name: "videoClipCrop",
+  },
+])("$name crop dimensions", ({ crop }) => {
+  it.each([
+    { height: 202, orientation: "landscape" as const, width: 360 },
+    { height: 270, orientation: "landscape" as const, width: 480 },
+    { height: 406, orientation: "landscape" as const, width: 720 },
+    { height: 608, orientation: "landscape" as const, width: 1080 },
+    { height: 854, orientation: "portrait" as const, width: 480 },
+    { height: 1280, orientation: "portrait" as const, width: 720 },
+  ])("requests $width × $height for $orientation", ({ orientation, width, height }) => {
+    expect(crop("ABC123", orientation, width)).toContain(`width=${width},height=${height}`);
+  });
+
+  it.each(["landscape", "portrait"] as const)(
+    "normalises odd widths before deriving the %s height",
+    (orientation) => {
+      const height = orientation === "landscape" ? 270 : 854;
+
+      expect(crop("ABC123", orientation, 479)).toContain(`width=480,height=${height}`);
+    },
+  );
+
+  it("requests even dimensions at every ladder rung and the native defaults", () => {
+    for (const orientation of ["landscape", "portrait"] as const) {
+      for (const width of [360, 480, 720, 1080, undefined]) {
+        const dimensions = crop("ABC123", orientation, width).match(/width=(\d+),height=(\d+)/);
+
+        expect(Number(dimensions?.[1]) % 2).toBe(0);
+        expect(Number(dimensions?.[2]) % 2).toBe(0);
+      }
+
+      const native =
+        orientation === "landscape" ? "width=1920,height=1080" : "width=1080,height=1920";
+
+      expect(crop("ABC123", orientation)).toContain(native);
+    }
+  });
+});
 
 describe("videoRendition", () => {
   it("builds a same-zone mode=video transform pointing at the master footage", () => {

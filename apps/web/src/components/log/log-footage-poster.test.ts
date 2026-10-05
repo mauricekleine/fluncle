@@ -17,7 +17,7 @@ describe("firstPaintFootagePoster", () => {
     expect(url).toBeDefined();
 
     expect(url).toContain("width=480");
-    expect(url).toContain("height=853");
+    expect(url).toContain("height=854");
     expect(url).toContain("mode=frame");
 
     expect(url).toContain(`?v=${Date.parse("2026-07-13T00:00:00.000Z")}`);

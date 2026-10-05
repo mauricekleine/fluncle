@@ -2,8 +2,30 @@ import { describe, expect, it } from "vitest";
 import {
   RENDITION_LADDER,
   SMALLEST_RENDITION_WIDTH,
+  nextRenditionWidthOnError,
   stepDownRenditionWidth,
 } from "./use-responsive-width";
+
+describe("nextRenditionWidthOnError", () => {
+  it("retries each smaller rendition before stopping video requests", () => {
+    let width = nextRenditionWidthOnError(1080);
+
+    expect(width).toBe(720);
+    width = nextRenditionWidthOnError(width);
+    expect(width).toBe(480);
+    width = nextRenditionWidthOnError(width);
+    expect(width).toBe(360);
+    expect(nextRenditionWidthOnError(width)).toBeUndefined();
+  });
+
+  it("stops immediately when the smallest rendition fails", () => {
+    expect(nextRenditionWidthOnError(360)).toBeUndefined();
+  });
+
+  it("keeps video requests stopped when no rendition is loaded", () => {
+    expect(nextRenditionWidthOnError(undefined)).toBeUndefined();
+  });
+});
 
 describe("stepDownRenditionWidth", () => {
   it("is the identity at zero steps (the measured pane's own rung)", () => {

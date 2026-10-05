@@ -16,6 +16,7 @@ import {
 import { type Track } from "@/lib/tracks";
 import {
   SMALLEST_RENDITION_WIDTH,
+  nextRenditionWidthOnError,
   stepDownRenditionWidth,
   useResponsiveWidth,
 } from "@/lib/use-responsive-width";
@@ -50,19 +51,17 @@ export function StoryView({
 
   const [stallDownshifts, setStallDownshifts] = useState(0);
   const renditionWidth = paneWidth ? stepDownRenditionWidth(paneWidth, stallDownshifts) : undefined;
-  const [renditionFailed, setRenditionFailed] = useState(false);
+  const [renditionsExhausted, setRenditionsExhausted] = useState(false);
 
   const videoUrl =
     masterVideoUrl && track.logId
-      ? renditionFailed
-        ? masterVideoUrl
-        : renditionWidth
-          ? squared
-            ? videoCrop(track.logId, "portrait", renditionWidth, false, version)
-            : videoRendition(track.logId, { version, width: renditionWidth })
-          : undefined
+      ? !renditionsExhausted && renditionWidth
+        ? squared
+          ? videoCrop(track.logId, "portrait", renditionWidth, false, version)
+          : videoRendition(track.logId, { version, width: renditionWidth })
+        : undefined
       : masterVideoUrl;
-  const onMaster = videoUrl === masterVideoUrl;
+  const onMaster = !track.logId;
 
   const rearmed = useRef(false);
 
@@ -135,6 +134,12 @@ export function StoryView({
       return;
     }
 
+    if (!videoUrl) {
+      video.load();
+
+      return;
+    }
+
     if (playing) {
       video.play().catch(() => {});
     } else {
@@ -158,9 +163,12 @@ export function StoryView({
           muted={!active || muted}
 
           onError={() => {
-            if (!renditionFailed && videoUrl !== masterVideoUrl) {
-              setRenditionFailed(true);
+            if (onMaster || !videoUrl) {
+              return;
             }
+
+            setRenditionsExhausted(nextRenditionWidthOnError(renditionWidth) === undefined);
+            setStallDownshifts((steps) => steps + 1);
           }}
           playsInline
           poster={posterUrl}

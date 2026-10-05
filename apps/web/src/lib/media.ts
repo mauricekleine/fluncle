@@ -335,6 +335,14 @@ const CROP_GEOMETRY: Record<CropOrientation, { nativeWidth: number; ratio: numbe
   portrait: { nativeWidth: 1080, ratio: 16 / 9 },
 };
 
+function cropDimensions(orientation: CropOrientation, requestedWidth?: number) {
+  const { nativeWidth, ratio } = CROP_GEOMETRY[orientation];
+  const width = 2 * Math.round((requestedWidth ?? nativeWidth) / 2);
+  const height = 2 * Math.round((width * ratio) / 2);
+
+  return { height, width };
+}
+
 export function videoCrop(
   logId: string,
   orientation: CropOrientation,
@@ -343,9 +351,7 @@ export function videoCrop(
   version?: number,
 ): string {
   const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`, version);
-  const { nativeWidth, ratio } = CROP_GEOMETRY[orientation];
-  const cropWidth = width ?? nativeWidth;
-  const cropHeight = Math.round(cropWidth * ratio);
+  const { width: cropWidth, height: cropHeight } = cropDimensions(orientation, width);
 
   const audio = silent ? ",audio=false" : "";
 
@@ -360,9 +366,7 @@ export function videoCropPoster(
   version?: number,
 ): string {
   const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`, version);
-  const { nativeWidth, ratio } = CROP_GEOMETRY[orientation];
-  const cropWidth = width ?? nativeWidth;
-  const cropHeight = Math.round(cropWidth * ratio);
+  const { width: cropWidth, height: cropHeight } = cropDimensions(orientation, width);
   const time = Math.max(0, Math.floor(atSeconds));
 
   return `${MEDIA_TRANSFORM_BASE}/fit=cover,width=${cropWidth},height=${cropHeight},mode=frame,time=${time}s,format=jpg/${source}`;
@@ -377,9 +381,7 @@ export function videoClipCrop(
   version?: number,
 ): string {
   const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`, version);
-  const { nativeWidth, ratio } = CROP_GEOMETRY[orientation];
-  const cropWidth = width ?? nativeWidth;
-  const cropHeight = Math.round(cropWidth * ratio);
+  const { width: cropWidth, height: cropHeight } = cropDimensions(orientation, width);
   const start = Math.max(0, Math.floor(startSeconds));
 
   const duration = Math.min(60, Math.max(1, Math.floor(durationSeconds)));
