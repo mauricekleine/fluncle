@@ -144,6 +144,28 @@ describe("server.ts dispatch spine", () => {
     expect(await response.text()).toBe("router-sentinel");
   });
 
+  it("answers a crawler's /track/null and /log/null with 410 Gone without rendering", async () => {
+    for (const path of ["/track/null", "/log/null", "/track/null/"]) {
+      const response = await dispatch(`https://status.fluncle.com${path}`, {
+        accept: "image/avif,image/webp,*/*;q=0.8",
+      });
+
+      expect(response.status, path).toBe(410);
+      expect(response.headers.get("cache-control"), path).toBe("public, max-age=86400");
+      expect(response.headers.get("x-content-type-options"), path).toBe("nosniff");
+    }
+
+    expect(hoisted.routerFetch).not.toHaveBeenCalled();
+  });
+
+  it("still renders entity pages whose real slug is null", async () => {
+    for (const path of ["/album/null", "/artist/null", "/label/null", "/track/nullify"]) {
+      const response = await dispatch(`https://www.fluncle.com${path}`, { accept: "text/html" });
+
+      expect(response.status, path).toBe(200);
+    }
+  });
+
   it("answers 406 (not the router's 500) when a public page is asked for in a shape it cannot take", async () => {
     for (const path of ["/log/abc123", "/track/mb_abc", "/artist/netsky", "/tracks", "/"]) {
       const response = await dispatch(`https://www.fluncle.com${path}`, {
