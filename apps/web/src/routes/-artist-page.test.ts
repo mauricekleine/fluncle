@@ -345,7 +345,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     getPublicArtistBySlug.mockResolvedValue(ARTIST);
     const withoutBio = await resolveArtistPageData("drift", "name", 1);
     expect(metaDescription(withoutBio)).toBe(
-      "Drum & bass tracks by Drift that Fluncle recommends, 1 so far, with the labels and releases behind them.",
+      "Drum & bass by Drift: 1 track, recommended by Fluncle, with the releases and labels behind them.",
     );
   });
 
@@ -360,7 +360,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
 
     const paged = await resolveArtistPageData("drift", "name", 2);
 
-    expect(headTitle(paged)).toBe("Drift, page 2 · Fluncle");
+    expect(headTitle(paged)).toBe("Drift: drum & bass tracks and releases, page 2 · Fluncle");
     expect(metaDescription(paged)).toBe(
       "Page 2 of the drum & bass records by Drift that Fluncle holds.",
     );
@@ -368,7 +368,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     listArtistCatalogue.mockResolvedValue(NO_CATALOGUE);
     const first = await resolveArtistPageData("drift", "name", 1);
 
-    expect(headTitle(first)).toBe("Drift · Fluncle");
+    expect(headTitle(first)).toBe("Drift: drum & bass tracks and releases · Fluncle");
     expect(metaDescription(first)?.startsWith("Drift is a British")).toBe(true);
   });
 });

@@ -14,6 +14,7 @@ import { albumBreadcrumbsJsonLd, musicAlbumJsonLd } from "@/lib/log-schema";
 import { FINDING_COVER_SIZES } from "@/components/graph-sections";
 import { albumCoverAtSize, coverPreloadLink } from "@/lib/media";
 import { bioMetaDescription } from "@/lib/meta-description";
+import { albumArtistCredit, albumMetaDescription, albumPageTitle } from "@/lib/page-meta";
 import { type AlbumPageData } from "./-album-page-data";
 
 const fetchAlbum = createServerFn({ method: "GET" })
@@ -46,25 +47,18 @@ function albumHead(loaderData: AlbumPageData | undefined) {
   } = loaderData;
   const pageUrl = `${siteUrl}/album/${slug}`;
 
-  const title = `${name} · Fluncle`;
-
-  const releaseYear = releaseDate?.slice(0, 4);
-  const factClause = [
-    releaseYear === undefined ? undefined : `a ${releaseYear} release`,
-    label === undefined
-      ? undefined
-      : `${releaseYear === undefined ? "pressed " : ""}on ${label.name}`,
-  ]
-    .filter((part) => part !== undefined)
-    .join(" ");
-  const description =
-    bio !== undefined
-      ? bioMetaDescription(bio)
-      : findings.length > 0
-        ? `Drum & bass tracks on ${name} that Fluncle recommends, ${findings.length} so far, with the artists behind them.`
-        : factClause
-          ? `The tracks on ${name}, ${factClause}, with the artists behind them.`
-          : `The tracks on ${name}, with the artists behind them.`;
+  const tracks = [...findings, ...catalogue];
+  const artist = albumArtistCredit(tracks);
+  const title = albumPageTitle({ artist, name, releaseDate });
+  const description = albumMetaDescription({
+    artist,
+    bio,
+    findingCount: findings.length,
+    label: label?.name,
+    name,
+    releaseDate,
+    trackTitles: tracks.map((track) => track.title),
+  });
   const imageUrl = albumCoverAtSize(coverImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
 
   const leadPreload = coverPreloadLink(

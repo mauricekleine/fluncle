@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bioMetaDescription } from "./meta-description";
+import { bioMetaDescription, leadingSentences } from "./meta-description";
 
 describe("bioMetaDescription (the entity bio → ≤160 meta description trim)", () => {
   it("returns a bio already within the cap verbatim, with no ellipsis", () => {
@@ -56,5 +56,33 @@ describe("bioMetaDescription (the entity bio → ≤160 meta description trim)",
     const bio = "word ".repeat(120).trim();
 
     expect(bioMetaDescription(bio).length).toBeLessThanOrEqual(160);
+  });
+});
+
+describe("leadingSentences (whole bio sentences that fit a room)", () => {
+  const bio = "Seba is a Swedish producer. He runs Secret Operations. He started in 1993.";
+
+  it("takes as many whole sentences as fit", () => {
+    expect(leadingSentences(bio, 60)).toBe(
+      "Seba is a Swedish producer. He runs Secret Operations.",
+    );
+    expect(leadingSentences(bio, 200)).toBe(bio);
+  });
+
+  it("returns nothing when the first sentence does not fit", () => {
+    expect(leadingSentences(bio, 10)).toBeUndefined();
+  });
+
+  it("does not split inside an abbreviation followed by lowercase", () => {
+    expect(leadingSentences("Born in St. louis area. Plays jungle.", 200)).toBe(
+      "Born in St. louis area. Plays jungle.",
+    );
+    expect(leadingSentences("Born in St. louis area. Plays jungle.", 25)).toBe(
+      "Born in St. louis area.",
+    );
+  });
+
+  it("refuses a bio that ends mid-sentence", () => {
+    expect(leadingSentences("A producer from Leeds", 200)).toBeUndefined();
   });
 });

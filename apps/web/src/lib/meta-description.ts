@@ -1,4 +1,4 @@
-const META_DESCRIPTION_MAX = 160;
+export const META_DESCRIPTION_MAX = 160;
 
 const SENTENCE_END_MIN_FRACTION = 0.6;
 
@@ -26,4 +26,24 @@ export function bioMetaDescription(bio: string): string {
   const head = (lastSpace > 0 ? room.slice(0, lastSpace) : room).replace(/[\s.,;:!?—–-]+$/u, "");
 
   return `${head}…`;
+}
+
+export function leadingSentences(text: string, room: number): string | undefined {
+  const sentences = text
+    .replace(/\s+/gu, " ")
+    .trim()
+    .split(/(?<=[.!?])\s+(?=\p{Lu}|\p{N})/u);
+  let lead = "";
+
+  for (const sentence of sentences) {
+    const next = lead === "" ? sentence : `${lead} ${sentence}`;
+
+    if (next.length > room || !/[.!?]$/u.test(sentence)) {
+      break;
+    }
+
+    lead = next;
+  }
+
+  return lead === "" ? undefined : lead;
 }

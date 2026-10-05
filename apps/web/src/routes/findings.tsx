@@ -22,6 +22,7 @@ import { printConsoleGreeting } from "@/lib/console-greeting";
 import { fluncleEntityRef, siteUrl } from "@/lib/fluncle-links";
 import { fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
+import { twitterCardMeta } from "@/lib/page-meta";
 import { type FeedItem } from "@/lib/mixtapes";
 import { FINDINGS_PAGE_SIZE } from "@/lib/findings-feed";
 import { fetchTracks, type TracksResponse } from "@/lib/tracks";
@@ -73,6 +74,11 @@ export const Route = createFileRoute("/findings")({
       { content: findingsDescription, property: "og:description" },
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: findingsPageUrl, property: "og:url" },
+      ...twitterCardMeta({
+        description: findingsDescription,
+        imageUrl: `${siteUrl}/fluncle-cover.png`,
+        title: findingsTitle,
+      }),
     ],
 
     scripts: [

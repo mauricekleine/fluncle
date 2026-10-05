@@ -15,6 +15,7 @@ import { archiveTrackJsonLd, trackBreadcrumbsJsonLd } from "@/lib/log-schema";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumCoverAtSize } from "@/lib/media";
 import { siteUrl } from "@/lib/fluncle-links";
+import { trackMetaDescription, trackPageTitle } from "@/lib/page-meta";
 import { sameAsUrls, trackPageUrl } from "@/lib/track-page";
 import { type TrackPageData } from "./-track-page-data";
 
@@ -26,56 +27,38 @@ const fetchTrack = createServerFn({ method: "GET" })
     return resolveTrackPageData(trackId);
   });
 
-const META_DESCRIPTION_BUDGET = 155;
-
 function trackHead(loaderData: TrackPageData | undefined) {
   if (loaderData?.status !== "found") {
     return {};
   }
 
   const { neighbours, track } = loaderData;
-  const line = artistTitleLine({
-    artists: track.artists.map((artist) => artist.name),
-    title: track.title,
-  });
+  const artists = track.artists.map((artist) => artist.name);
+  const line = artistTitleLine({ artists, title: track.title });
   const pageUrl = trackPageUrl(track.trackId);
 
-  const title = `${line} · Fluncle`;
-
-  const year = track.releaseDate?.slice(0, 4);
-  const releaseClause = [
-    year === undefined ? undefined : `a ${year} drum & bass release`,
-    track.label === undefined ? undefined : `on ${track.label.name}`,
-  ]
-    .filter((part) => part !== undefined)
-    .join(" ");
-  const tempoClause =
-    track.bpm && track.key
-      ? `${Math.round(track.bpm)} BPM in ${track.key}`
-      : track.bpm
-        ? `${Math.round(track.bpm)} BPM`
-        : track.key
-          ? `in ${track.key}`
-          : undefined;
-  const facts = [
-    releaseClause ? `${line}, ${releaseClause}.` : `${line}, a drum & bass track.`,
-    tempoClause === undefined ? undefined : `${tempoClause}.`,
-  ]
-    .filter((part) => part !== undefined)
-    .join(" ");
+  const title = trackPageTitle({ artists, releaseDate: track.releaseDate, title: track.title });
 
   const hasListen = track.previewable || track.listen.length > 0;
   const hasNeighbours = neighbours.length > 0;
   const tail =
     hasListen && hasNeighbours
-      ? " Where to hear it, and the tracks closest to it in sound."
+      ? "Where to hear it, and the tracks closest to it in sound."
       : hasListen
-        ? " Where to hear it."
+        ? "Where to hear it."
         : hasNeighbours
-          ? " The tracks closest to it in sound."
-          : "";
-  const withTail = `${facts}${tail}`;
-  const description = withTail.length <= META_DESCRIPTION_BUDGET ? withTail : facts;
+          ? "The tracks closest to it in sound."
+          : undefined;
+  const description = trackMetaDescription({
+    album: track.album?.name,
+    artists,
+    bpm: track.bpm,
+    key: track.key,
+    label: track.label?.name,
+    releaseDate: track.releaseDate,
+    tail,
+    title: track.title,
+  });
   const imageUrl = albumCoverAtSize(track.albumImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
 
   const leadImageUrl = albumCoverAtSize(track.albumImageUrl, "medium");

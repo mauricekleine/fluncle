@@ -17,12 +17,12 @@ import { PublicChrome } from "@/components/nav/public-chrome";
 import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
 import { isStaleBuildError, recoverFromStaleBuild } from "@/lib/stale-build-recovery";
 import { siteUrl } from "../lib/fluncle-links";
-import { fluncleMetaDescription } from "../lib/identity";
+import { fluncleMetaDescription, fluncleSiteTitle } from "../lib/identity";
 import oxaniumLatinFont from "../fonts/oxanium-latin.woff2?url";
 import spaceGroteskLatinFont from "../fonts/space-grotesk-latin.woff2?url";
 import appCss from "../styles.css?url";
 
-const title = "Fluncle: drum & bass bangers from another dimension";
+const title = fluncleSiteTitle;
 
 const description = fluncleMetaDescription;
 const coverUrl = `${siteUrl}/fluncle-cover.png`;
