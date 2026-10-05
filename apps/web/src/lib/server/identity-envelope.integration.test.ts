@@ -1,5 +1,5 @@
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
 
@@ -22,6 +22,8 @@ import { spotifyHop } from "../../routes/out.spotify.$trackId";
 import { anchorRefusalReason, kindClause, scopeClause } from "./track-work";
 import { createIntegrationDb } from "./integration-db";
 import { LONG_FORM_MS } from "../catalogue-eligibility";
+import { takeWaitUntilPromises } from "../../test/cloudflare-workers-stub";
+import { type FetchImpl } from "./env";
 
 let db: Client;
 
@@ -30,6 +32,10 @@ const text = (value: unknown): string => (typeof value === "string" ? value : ""
 beforeEach(async () => {
   db = await createIntegrationDb();
   holder.db = db;
+});
+
+afterEach(async () => {
+  await Promise.all(takeWaitUntilPromises());
 });
 
 type TrackFixture = {
@@ -1000,10 +1006,97 @@ describe("the key formats", () => {
 });
 
 describe("the Spotify hop", () => {
+  it.each(["fluncle.com", "www.fluncle.com"])(
+    "records one category-only outbound for a %s redirect without waiting for analytics",
+    async (hostname) => {
+      await insertTrack("h-1", { spotifyUri: "spotify:track:abc123" });
+      let finish: ((response: Response) => void) | undefined;
+      const fetchImpl = vi.fn<FetchImpl>(
+        Object.assign(
+          () =>
+            new Promise<Response>((resolve) => {
+              finish = resolve;
+            }),
+          { preconnect: () => {} },
+        ),
+      );
+      const request = new Request(`https://${hostname}/out/spotify/h-1`, {
+        headers: {
+          Cookie: "session=test",
+          Referer: "https://example.com/source",
+          "User-Agent": "Mozilla/5.0",
+        },
+      });
+
+      const response = await spotifyHop("h-1", request, fetchImpl);
+      expect(response.status).toBe(302);
+      expect(response.headers.get("Location")).toBe("https://open.spotify.com/track/abc123");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const [url, options] = fetchImpl.mock.calls[0] ?? [];
+      expect(url).toBe("https://queue.simpleanalyticscdn.com/events");
+      expect(options).toEqual({
+        body: expect.any(String),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+        signal: expect.any(AbortSignal),
+      });
+      const body = options?.body;
+      if (typeof body !== "string") {
+        throw new Error("The analytics beacon must send a JSON string");
+      }
+      expect(JSON.parse(body)).toEqual({
+        event: "discovery_outbound",
+        hostname: "fluncle.com",
+        metadata: { service: "spotify" },
+        type: "event",
+        ua: "Mozilla/5.0",
+      });
+      finish?.(new Response(null, { status: 202 }));
+      await Promise.all(takeWaitUntilPromises());
+    },
+  );
+
+  it.each([
+    { hostname: "localhost", ua: "Mozilla/5.0" },
+    { hostname: "preview.workers.dev", ua: "Mozilla/5.0" },
+    { hostname: "fluncle.com.example.com", ua: "Mozilla/5.0" },
+    { hostname: "preview.example.com", ua: "Mozilla/5.0" },
+    { hostname: "fluncle.com", ua: "" },
+  ])("does not beacon for $hostname with user agent '$ua'", async ({ hostname, ua }) => {
+    await insertTrack("h-1", { spotifyUri: "spotify:track:abc123" });
+    const fetchImpl = vi.fn<FetchImpl>();
+    const request = new Request(`https://${hostname}/out/spotify/h-1`, {
+      headers: ua ? { "User-Agent": ua } : {},
+    });
+    expect((await spotifyHop("h-1", request, fetchImpl)).status).toBe(302);
+    await Promise.all(takeWaitUntilPromises());
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { failure: "rejection", send: () => Promise.reject(new Error("offline")) },
+    { failure: "HTTP error", send: () => Promise.resolve(new Response(null, { status: 500 })) },
+    {
+      failure: "synchronous throw",
+      send: () => {
+        throw new Error("offline");
+      },
+    },
+  ])("preserves the redirect when the beacon has a $failure", async ({ send }) => {
+    await insertTrack("h-1", { spotifyUri: "spotify:track:abc123" });
+    const fetchImpl = vi.fn<FetchImpl>(Object.assign(send, { preconnect: () => {} }));
+    const request = new Request("https://fluncle.com/out/spotify/h-1", {
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
+    expect((await spotifyHop("h-1", request, fetchImpl)).status).toBe(302);
+    await expect(Promise.all(takeWaitUntilPromises())).resolves.toEqual([undefined]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("302s to the stored raw link", async () => {
     await insertTrack("h-1", { spotifyUri: "spotify:track:abc123" });
 
-    const response = await spotifyHop("h-1");
+    const response = await spotifyHop("h-1", new Request("http://localhost/out/spotify/h-1"));
 
     expect(response.status).toBe(302);
     expect(response.headers.get("Location")).toBe("https://open.spotify.com/track/abc123");
@@ -1012,7 +1105,18 @@ describe("the Spotify hop", () => {
   it("404s on an unknown id and on a row with no anchor", async () => {
     await insertTrack("h-bare");
 
-    expect((await spotifyHop("h-bare")).status).toBe(404);
-    expect((await spotifyHop("h-nope")).status).toBe(404);
+    const fetchImpl = vi.fn<FetchImpl>();
+    for (const id of ["h-bare", "h-nope"]) {
+      const response = await spotifyHop(
+        id,
+        new Request(`https://fluncle.com/out/spotify/${id}`, {
+          headers: { "User-Agent": "Mozilla/5.0" },
+        }),
+        fetchImpl,
+      );
+      expect(response.status).toBe(404);
+    }
+    await Promise.all(takeWaitUntilPromises());
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

@@ -181,7 +181,7 @@ Search is one door onto the archive. The rest of public discovery (browse, entit
 
 | Event                | Journey step                                                                                                   |
 | -------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `discovery_search`   | A visitor committed an archive query (the `/search` form, or a settled palette type-ahead)                     |
+| `discovery_search`   | A visitor committed an archive query (the `/search` form, or a palette commit)                                 |
 | `discovery_example`  | A visitor followed a worked example into `/search`                                                             |
 | `discovery_open`     | A visitor opened an entity destination (finding, track, artist, label, album, galaxy, mixtape)                 |
 | `discovery_similar`  | A visitor continued through a sonic neighbour (Close in sound, similar artists, `/artists?like=`)              |
@@ -189,6 +189,10 @@ Search is one door onto the archive. The rest of public discovery (browse, entit
 | `discovery_outbound` | A visitor left for an outbound listening service (Spotify, Apple Music, YouTube, Mixcloud, SoundCloud, Deezer) |
 
 Each name is one step. Classification is by **resolved destination**, never by the English on the control: `hitHref` / the href decide whether a row is `discovery_open` (a `/log/<id>` finding or `/track/<trackId>` archive recording) or `discovery_outbound` (the fallback Spotify URL). A neighbour rail opts into `discovery_similar` with `data-discovery="similar"` so the same `/artist/<slug>` chip is a continuation on that rail and an ordinary open everywhere else.
+
+The palette still fetches results after a 180ms debounce. It counts `discovery_search` once per distinct trimmed query in each open session, at the first commit: opening a track or entity result, opening the full search page, closing the palette (including Escape, overlay click, or the keyboard toggle), or leaving the query unchanged for 2000ms. A result commit is counted before its `discovery_open` or `discovery_outbound`. Queries below `MIN_QUERY_LENGTH` stay silent; worked-example clicks emit only `discovery_example`, and their unchanged queries never emit `discovery_search`. Editing an example makes the new query eligible. Reopening starts a new session.
+
+Successful `/out/spotify/<trackId>` redirects also count `discovery_outbound` server-side with the same category-only metadata, `{ service: "spotify" }`. Only requests to `fluncle.com` or its subdomains with a User-Agent send the beacon; the request's User-Agent lets Simple Analytics apply its bot filter. The beacon runs in `waitUntil` with a three-second timeout and never waits on or fails the redirect. Misses and non-production hosts stay silent. No track ID, target URL, request path, IP, cookie, or referrer is sent.
 
 ### What a payload may carry
 
@@ -201,7 +205,7 @@ Nothing that names a person, a session, a profile, a ranking, or the words typed
 
 `emitDiscoveryEvent` strips any other key. The helper never awaits, never throws, and never calls `preventDefault`. If the Simple Analytics tag is blocked, absent, or throws, the control still does its job. `discovery_preview` fires only when a public control opts in (`publicPreview: true`) and playback actually starts; admin auditions and failed or aborted starts stay silent. `apps/web/src/lib/discovery-coverage.test.ts` fails a new control of an instrumented class that ships without its event.
 
-No new vendor, script, or CSP host: events go through the `sa_event` the page already loads, which beacons `queue.simpleanalyticscdn.com` (already on `img-src` and `connect-src`).
+No new vendor, script, or CSP host: client events go through the `sa_event` the page already loads, which beacons `queue.simpleanalyticscdn.com` (already on `img-src` and `connect-src`); the Spotify hop posts to the same event queue server-side. The script ignores `/admin` and `/admin/*` pageviews, including client navigation into admin. Public pages such as `/pipeline` remain counted.
 
 ## Operating it
 

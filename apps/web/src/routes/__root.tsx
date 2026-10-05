@@ -177,6 +177,7 @@ export const Route = createRootRoute({
     scripts: [
       {
         async: true,
+        "data-ignore-pages": "/admin,/admin/*",
         src: "https://scripts.simpleanalyticscdn.com/latest.js",
       },
     ],
