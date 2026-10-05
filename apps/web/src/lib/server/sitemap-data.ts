@@ -41,7 +41,8 @@ import { getDb, typedRows } from "./db";
 import {
   countPublicIndexableGalaxies,
   GALAXY_INDEX_MIN_FINDINGS,
-  listPublicGalaxies,
+  listGalaxySitemapRows,
+  maxGalaxySitemapLastmod,
 } from "./galaxies-map";
 import {
   countIndexableLabels,
@@ -54,6 +55,7 @@ import { purgePathsNow, SITEMAP_CACHE_POLICY } from "./edge-cache";
 import {
   countIndexableTrackPages,
   listTrackSitemapRows,
+  maxTrackSitemapLastmod,
   trackSitemapWindowStatement,
   TRACK_PAGE_INDEXABLE_WHERE,
 } from "./track-page";
@@ -221,18 +223,20 @@ async function readLogPages(): Promise<SitemapLogPage[]> {
   const db = await getDb();
   const [trackResult, mixtapeResult] = await Promise.all([
     db.execute({
-      sql: `select log_id, title, artists_json, note, bpm, album_image_url, video_url,
+      sql: `select findings.log_id, title, artists_json, note, bpm, album_image_url, video_url,
                    findings.added_at,
                    max(coalesce(findings.video_squared_at, ''),
-                       coalesce(findings.updated_at, ''),
+                       coalesce(version.changed_at, findings.updated_at, ''),
                        findings.added_at) as lastmod
             from findings cross join tracks on tracks.track_id = findings.track_id
+            left join search_page_versions version on version.kind = 'log' and version.subject_id = findings.log_id
             where findings.log_id is not null`,
     }),
     db.execute({
-      sql: `select log_id, title, note, set_video_at,
-                   max(coalesce(set_video_at, ''), coalesce(updated_at, ''), added_at) as lastmod
+      sql: `select mixtapes.log_id, title, note, set_video_at,
+                   max(coalesce(set_video_at, ''), coalesce(version.changed_at, updated_at, ''), added_at) as lastmod
             from mixtapes
+            left join search_page_versions version on version.kind = 'log' and version.subject_id = mixtapes.log_id
             where status = 'published' and log_id is not null and added_at is not null
             order by lastmod desc`,
     }),
@@ -313,13 +317,11 @@ async function readLogbook(window: SitemapWindow): Promise<SitemapLogbookEntry[]
 }
 
 async function readGalaxies(): Promise<SitemapGalaxy[]> {
-  return (await listPublicGalaxies())
-    .filter((galaxy) => galaxy.memberCount >= GALAXY_INDEX_MIN_FINDINGS)
-    .map((galaxy) => ({ slug: galaxy.slug }));
+  return listGalaxySitemapRows(GALAXY_INDEX_MIN_FINDINGS);
 }
 
 function readDocs(): SitemapDoc[] {
-  return DOCS_PAGES.map((path) => ({ path }));
+  return [...DOCS_PAGES];
 }
 
 function freshest(dates: (string | undefined)[]): string | undefined {
@@ -334,16 +336,24 @@ async function readLogKindStats(): Promise<SitemapKindStats> {
   const [findingResult, mixtapeResult] = await Promise.all([
     db.execute({
       sql: `select count(*) as n,
-                   max(max(coalesce(findings.video_squared_at, ''),
-                           coalesce(findings.updated_at, ''),
-                           findings.added_at)) as lastmod
+                   nullif(max(coalesce(max(max(coalesce(findings.video_squared_at, ''),
+                           coalesce(seen.changed_at, findings.updated_at, ''), findings.added_at)), ''),
+                     coalesce((select version.changed_at from search_page_versions version
+                       where version.kind = 'log' and (
+                         exists (select 1 from findings f join tracks t on t.track_id = f.track_id
+                                 where f.log_id = version.subject_id)
+                         or exists (select 1 from mixtapes m where m.log_id = version.subject_id
+                                    and m.status = 'published' and m.added_at is not null)
+                       ) order by version.changed_at desc limit 1), '')), '') as lastmod
             from findings cross join tracks on tracks.track_id = findings.track_id
+            left join search_page_versions seen on seen.kind = 'log' and seen.subject_id = findings.log_id
             where findings.log_id is not null`,
     }),
     db.execute({
       sql: `select count(*) as n,
-                   max(max(coalesce(set_video_at, ''), coalesce(updated_at, ''), added_at)) as lastmod
+                   max(max(coalesce(set_video_at, ''), coalesce(seen.changed_at, updated_at, ''), added_at)) as lastmod
             from mixtapes
+            left join search_page_versions seen on seen.kind = 'log' and seen.subject_id = mixtapes.log_id
             where status = 'published' and log_id is not null and added_at is not null`,
     }),
   ]);
@@ -373,6 +383,8 @@ type SitemapAggregates = {
   artists: SitemapKindStats;
   archiveTrackCount: number;
   galaxyCount: number;
+  galaxyLastmod: string | undefined;
+  trackLastmod: string | undefined;
   labels: SitemapKindStats;
   logbook: SitemapKindStats;
   logs: SitemapKindStats;
@@ -408,12 +420,22 @@ async function readSitemapPageInputs(): Promise<SitemapPageInputs> {
 }
 
 async function readSitemapAggregates(): Promise<SitemapAggregates> {
-  const [pageInputs, artistCount, labelCount, albumCount, archiveTrackCount] = await Promise.all([
+  const [
+    pageInputs,
+    artistCount,
+    labelCount,
+    albumCount,
+    archiveTrackCount,
+    trackLastmod,
+    galaxyLastmod,
+  ] = await Promise.all([
     readSitemapPageInputs(),
     countIndexableArtists(),
     countIndexableLabels(),
     countIndexableAlbums(),
     countIndexableTrackPages(),
+    maxTrackSitemapLastmod(),
+    maxGalaxySitemapLastmod(GALAXY_INDEX_MIN_FINDINGS),
   ]);
 
   return {
@@ -421,10 +443,12 @@ async function readSitemapAggregates(): Promise<SitemapAggregates> {
     archiveTrackCount,
     artists: { count: artistCount, lastmod: pageInputs.artistLastmod },
     galaxyCount: pageInputs.galaxyCount,
+    galaxyLastmod,
     labels: { count: labelCount, lastmod: pageInputs.labelLastmod },
     logbook: pageInputs.logbook,
     logs: pageInputs.logs,
     mixOpen: pageInputs.mixOpen,
+    trackLastmod,
   };
 }
 
@@ -461,9 +485,9 @@ export async function collectSitemapIndexStats(): Promise<SitemapIndexStats> {
   return {
     albums: aggregates.albums,
     artists: aggregates.artists,
-    docs: { count: readDocs().length },
+    docs: { count: readDocs().length, lastmod: freshest(readDocs().map((page) => page.lastmod)) },
     findings: aggregates.logs,
-    galaxies: { count: aggregates.galaxyCount },
+    galaxies: { count: aggregates.galaxyCount, lastmod: aggregates.galaxyLastmod },
     labels: aggregates.labels,
     logbook: aggregates.logbook,
     pages: sitemapPagesStats(
@@ -474,7 +498,7 @@ export async function collectSitemapIndexStats(): Promise<SitemapIndexStats> {
         labelLastmod: aggregates.labels.lastmod,
       }),
     ),
-    tracks: { count: aggregates.archiveTrackCount },
+    tracks: { count: aggregates.archiveTrackCount, lastmod: aggregates.trackLastmod },
   };
 }
 

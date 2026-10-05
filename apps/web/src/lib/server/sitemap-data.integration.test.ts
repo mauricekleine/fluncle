@@ -1,5 +1,7 @@
 import { type Client, type InStatement } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DOCS_PAGES } from "../docs-pages";
+import { updateGalaxyFields, updateGalaxyMap } from "./galaxies-map";
 import {
   buildSitemapIndexXml,
   buildSitemapShardXml,
@@ -313,6 +315,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
   db.close();
 });
 
@@ -340,8 +343,12 @@ describe("the sitemap index reads aggregates that match the rows", () => {
     expect(stats.albums.lastmod).toBe("2026-06-10T14:57:38.786Z");
     expect(stats.logbook).toEqual({ count: 2, lastmod: "2026-07-05T02:11:00.000Z" });
     expect(stats.galaxies.count).toBe(1);
-    expect(stats.docs.lastmod).toBeUndefined();
-    expect(stats.galaxies.lastmod).toBeUndefined();
+    expect(stats.docs.lastmod).toBe(
+      DOCS_PAGES.map((page) => page.lastmod)
+        .sort()
+        .at(-1),
+    );
+    expect(stats.galaxies.lastmod).toBe("2026-07-01T00:00:00.000Z");
   });
 
   it("derives the static child's timestamps and gates from the same aggregates", async () => {
@@ -361,7 +368,9 @@ describe("the sitemap index reads aggregates that match the rows", () => {
     ]);
 
     expect(stats.galaxies.count).toBe(1);
-    expect(bag.galaxies).toEqual([{ slug: "the-liquid-deep" }]);
+    expect(bag.galaxies).toEqual([
+      { lastmod: "2026-07-01T00:00:00.000Z", slug: "the-liquid-deep" },
+    ]);
 
     const statement = execute.mock.calls
       .map(([input]) => input as InStatement)
@@ -389,6 +398,159 @@ describe("the sitemap index reads aggregates that match the rows", () => {
 
     expect(details, details).toMatch(/SEARCH member USING COVERING INDEX findings_galaxy_id_idx/i);
     expect(details, details).not.toContain("USE TEMP B-TREE");
+  });
+});
+
+describe("observed page versions date the published sitemap set", () => {
+  it("preserves observed log and mixtape dates across publish bookkeeping", async () => {
+    await db.execute(`insert into search_page_versions (kind,subject_id,fingerprint,changed_at)
+      select 'log',log_id,'observed','2026-09-01T00:00:00.000Z' from findings where log_id is not null
+      union all select 'log',log_id,'observed','2026-09-01T00:00:00.000Z' from mixtapes where log_id is not null`);
+    await db.execute(
+      "update findings set updated_at = '2026-09-02T00:00:00.000Z',spotify_error = 'Retry'",
+    );
+    await db.execute(
+      "update mixtapes set updated_at = '2026-09-02T00:00:00.000Z',announced_at = '2026-09-02'",
+    );
+    const [bag, stats] = await Promise.all([
+      collectSitemapBag("findings"),
+      collectSitemapIndexStats(),
+    ]);
+    expect(bag.logs.length).toBeGreaterThan(0);
+    expect(bag.logs.every((row) => row.lastmod === "2026-09-01T00:00:00.000Z")).toBe(true);
+    expect(stats.findings.lastmod).toBe("2026-09-01T00:00:00.000Z");
+  });
+
+  it("combines observed and finding dates while leaving unobserved catalogue pages undated", async () => {
+    const initial = await readAllBags();
+    const artistSlug = initial.artists[0]?.slug;
+    const albumSlug = initial.albums[0]?.slug;
+    const labelSlug = initial.labels[0]?.slug;
+
+    if (!artistSlug || !albumSlug || !labelSlug) {
+      throw new Error("the sitemap fixture has no graph entities");
+    }
+
+    await db.batch(
+      [
+        ...[
+          ["artist", artistSlug],
+          ["album", albumSlug],
+          ["label", labelSlug],
+          ["track", "track-3"],
+          ["log", "004.7.2I"],
+        ].map(([kind, subject]) => ({
+          args: [kind ?? "", subject ?? "", "2026-09-01T00:00:00.000Z"],
+          sql: `insert into search_page_versions (kind, subject_id, fingerprint, changed_at)
+              values (?, ?, 'fingerprint', ?)`,
+        })),
+        {
+          args: [],
+          sql: `insert into search_page_versions (kind, subject_id, fingerprint, changed_at)
+              values ('track', 'missing-track', 'fingerprint', '2026-10-01T00:00:00.000Z'),
+                     ('artist', 'adele', 'fingerprint', '2026-10-01T00:00:00.000Z')`,
+        },
+      ],
+      "write",
+    );
+    const [stats, bags] = await Promise.all([collectSitemapIndexStats(), readAllBags()]);
+
+    expect(bags.tracks.find((row) => row.trackId === "track-3")?.lastmod).toBe(
+      "2026-09-01T00:00:00.000Z",
+    );
+    expect(bags.tracks.find((row) => row.trackId === "track-4")?.lastmod).toBeUndefined();
+    expect(bags.logs.find((row) => row.logId === "004.7.2I")?.lastmod).toBe(
+      "2026-09-01T00:00:00.000Z",
+    );
+    expect(stats).toEqual(sitemapIndexStatsFromBags(bags));
+
+    for (const kind of ["albums", "artists", "labels", "tracks", "findings"] as const) {
+      expect(stats[kind].lastmod, kind).toBe("2026-09-01T00:00:00.000Z");
+    }
+
+    await db.execute(`update search_page_versions set changed_at = '2026-05-01T00:00:00.000Z'`);
+    const older = await readAllBags();
+
+    expect(older.albums[0]?.lastmod).toBe("2026-06-10T14:57:38.786Z");
+    expect(older.artists.find((row) => row.slug === artistSlug)?.lastmod).toBe(
+      "2026-06-10T14:57:38.786Z",
+    );
+    expect(older.labels[0]?.lastmod).toBe("2026-06-10T14:57:38.786Z");
+  });
+
+  it("seeks the newest indexable observed version through the kind date index", async () => {
+    const execute = vi.spyOn(db, "execute");
+
+    await collectSitemapIndexStats();
+    const statements = execute.mock.calls
+      .map(([input]) => input as InStatement)
+      .filter(
+        (input): input is Exclude<InStatement, string> =>
+          typeof input !== "string" &&
+          input.sql.includes("order by version.changed_at desc limit 1"),
+      );
+
+    expect(statements).toHaveLength(5);
+
+    for (const statement of statements) {
+      const result = await db.execute({
+        args: statement.args,
+        sql: `explain query plan ${statement.sql}`,
+      });
+      const details = typedRows<{ detail: string }>(result.rows)
+        .map((row) => row.detail)
+        .join("\n");
+
+      expect(details, details).toMatch(
+        /SEARCH version USING INDEX search_page_versions_changed_idx/i,
+      );
+      expect(details, details).not.toMatch(/SCAN version|USE TEMP B-TREE/i);
+    }
+  });
+});
+
+describe("galaxy sitemap dates follow material map and finding changes", () => {
+  it("preserves dates on identical centroids and split requests and advances them on visible changes", async () => {
+    await updateGalaxyMap([{ centroid: [1, 0], id: "gal-live" }]);
+    await updateGalaxyFields("gal-live", { requestSplit: true });
+    await updateGalaxyFields("gal-live", { name: "The Liquid Deep", slug: "the-liquid-deep" });
+    await updateGalaxyMap([{ centroid: [1, 0], clearSplitRequest: true, id: "gal-live" }]);
+
+    expect((await collectSitemapBag("galaxies")).galaxies[0]?.lastmod).toBe(
+      "2026-07-01T00:00:00.000Z",
+    );
+
+    const now = "2026-09-01T00:00:00.000Z";
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(now));
+    await updateGalaxyFields("gal-live", { name: "Liquid Deep" });
+    expect((await collectSitemapBag("galaxies")).galaxies[0]?.lastmod).toBe(now);
+    vi.useRealTimers();
+
+    await db.execute(
+      `update findings set updated_at = '2026-09-02T00:00:00.000Z' where galaxy_id = 'gal-live'`,
+    );
+    const [bag, stats] = await Promise.all([
+      collectSitemapBag("galaxies"),
+      collectSitemapIndexStats(),
+    ]);
+
+    expect(bag.galaxies[0]?.lastmod).toBe("2026-09-02T00:00:00.000Z");
+    expect(stats.galaxies.lastmod).toBe("2026-09-02T00:00:00.000Z");
+
+    await db.execute(
+      `update findings set log_id = '099.0.' || char(65 + cast(substr(track_id, -1) as integer)) where galaxy_id = 'gal-live'`,
+    );
+    await db.execute(`insert into search_page_versions (kind,subject_id,fingerprint,changed_at)
+      select 'log',log_id,'visible-change','2026-09-03T00:00:00.000Z' from findings
+      where galaxy_id = 'gal-live' and log_id is not null`);
+    await db.execute(`update findings set updated_at = '2026-09-04T00:00:00.000Z',
+      spotify_error = 'Retry' where galaxy_id = 'gal-live'`);
+    expect((await collectSitemapBag("galaxies")).galaxies[0]?.lastmod).toBe(
+      "2026-09-03T00:00:00.000Z",
+    );
+    expect((await collectSitemapIndexStats()).galaxies.lastmod).toBe("2026-09-03T00:00:00.000Z");
   });
 });
 

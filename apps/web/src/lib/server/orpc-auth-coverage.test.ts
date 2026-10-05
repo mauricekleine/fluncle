@@ -361,6 +361,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   set_turso_usage_threshold: "operator",
   set_vector_serving: "operator",
   start_lastfm_auth: "operator",
+  submit_indexnow: "admin",
   sweep_push_receipts: "admin",
   triage_submission: "admin",
   unsave_private_finding: "private-session",

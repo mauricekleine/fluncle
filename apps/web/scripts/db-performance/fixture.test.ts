@@ -94,6 +94,7 @@ describe("synthetic database performance fixture", () => {
       perf_findings: SMALL_COUNTS.findings,
       perf_galaxies: 0,
       perf_labels: SMALL_COUNTS.labels,
+      perf_search_page_versions: SMALL_COUNTS.tracks,
       perf_track_artists: SMALL_COUNTS.trackArtists,
       perf_track_embeddings: SMALL_COUNTS.trackEmbeddings,
       perf_tracks: SMALL_COUNTS.tracks,
@@ -534,7 +535,7 @@ describe("synthetic database performance fixture", () => {
           boundedFixtureCensusRequestCount(getScaleManifest(profile).counts),
         ]),
       ),
-    ).toEqual({ "1x": 93, "2x": 127, "4x": 206 });
+    ).toEqual({ "1x": 97, "2x": 133, "4x": 217 });
   });
 
   it("maps exact 1x request 17 to the deterministic embedding rowid window", async () => {

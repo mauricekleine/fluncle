@@ -454,6 +454,16 @@ export type EntitySitemapLight = {
   lastmod?: string;
 };
 
+export function entitySitemapLastmod(
+  observed: string | null | undefined,
+  existing: string | undefined,
+): string | undefined {
+  return [observed, existing]
+    .filter((value): value is string => Boolean(value))
+    .sort()
+    .at(-1);
+}
+
 export function entitySitemapLight(
   rows: Parameters<typeof typedRows>[0],
 ): Map<string, EntitySitemapLight> {
@@ -499,8 +509,9 @@ export function labelSitemapWindowStatement(minTracks: number, limit: number, af
 
   return {
     args: [afterSlug ?? "", minTracks, limit],
-    sql: `select labels.slug as slug
+    sql: `select labels.slug as slug, version.changed_at
           from labels
+          left join search_page_versions version on version.kind = 'label' and version.subject_id = labels.slug
           where ${seek} and labels.renderable_track_count >= ?
           order by labels.slug asc
           limit ?`,
@@ -530,7 +541,7 @@ export async function listLabelSitemapRows(
   const db = await getDb();
 
   if (window) {
-    const slugs = typedRows<{ slug: string }>(
+    const slugs = typedRows<{ changed_at: string | null; slug: string }>(
       (await db.execute(labelSitemapWindowStatement(minTracks, window.limit, window.afterSlug)))
         .rows,
     );
@@ -539,9 +550,9 @@ export async function listLabelSitemapRows(
       ? entitySitemapLight((await db.execute(labelSitemapLightStatement(minTracks, span))).rows)
       : new Map<string, EntitySitemapLight>();
 
-    return slugs.map(({ slug }) => ({
+    return slugs.map(({ changed_at, slug }) => ({
       coverImageUrl: light.get(slug)?.coverUrl,
-      lastmod: light.get(slug)?.lastmod,
+      lastmod: entitySitemapLastmod(changed_at, light.get(slug)?.lastmod),
       slug,
     }));
   }
@@ -549,7 +560,7 @@ export async function listLabelSitemapRows(
   const result = await db.execute({
     args: [minTracks],
     sql: `select labels.slug as slug,
-                 max(findings.added_at) as lastmod,
+                 nullif(max(coalesce(version.changed_at, ''), coalesce(max(findings.added_at), '')), '') as lastmod,
                  (select t2.album_image_url
                     from findings f2 join tracks t2 on t2.track_id = f2.track_id
                     where t2.label_id = labels.id and f2.log_id is not null
@@ -557,6 +568,7 @@ export async function listLabelSitemapRows(
           from labels
           join tracks on tracks.label_id = labels.id
           left join findings on findings.track_id = tracks.track_id
+          left join search_page_versions version on version.kind = 'label' and version.subject_id = labels.slug
           where labels.renderable_track_count >= ?
           group by labels.id
           order by labels.slug asc`,
@@ -576,8 +588,13 @@ export async function listLabelSitemapRows(
 export async function maxLabelSitemapLastmod(minTracks: number): Promise<string | undefined> {
   const db = await getDb();
   const result = await db.execute({
-    args: [minTracks],
-    sql: `select max(findings.added_at) as lastmod
+    args: [minTracks, minTracks],
+    sql: `select nullif(max(coalesce(max(findings.added_at), ''), coalesce((
+                   select version.changed_at from search_page_versions version
+                   cross join labels on labels.slug = version.subject_id
+                   where version.kind = 'label' and labels.renderable_track_count >= ?
+                   order by version.changed_at desc limit 1
+                 ), '')), '') as lastmod
           from findings
           cross join tracks on tracks.track_id = findings.track_id
           cross join labels on labels.id = tracks.label_id

@@ -1,3 +1,4 @@
+import { operatorOnlySurfaces } from "@fluncle/registry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type ServiceStatusRow } from "./status";
 
@@ -253,8 +254,10 @@ describe("operator-only crons on the public status board", () => {
 
     const query = execute.mock.calls[0]?.[0] as { args: unknown[]; sql: string };
 
-    expect(query.sql).toContain("where service not in (?)");
-    expect(query.args).toEqual(["cron.turso-usage", 15]);
+    const hidden = operatorOnlySurfaces().map((surface) => surface.name);
+
+    expect(query.sql).toContain(`where service not in (${hidden.map(() => "?").join(", ")})`);
+    expect(query.args).toEqual([...hidden, 15]);
   });
 
   it("never surface in the public uptime samples", async () => {

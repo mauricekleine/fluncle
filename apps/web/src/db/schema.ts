@@ -400,6 +400,32 @@ export const trackDuplicateKeys = sqliteTable(
   ],
 );
 
+export const searchPageVersions = sqliteTable(
+  "search_page_versions",
+  {
+    changedAt: text("changed_at").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    kind: text("kind", { enum: ["track", "artist", "album", "label", "log"] }).notNull(),
+    subjectId: text("subject_id").notNull(),
+    submittedAt: text("submitted_at"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.kind, table.subjectId] }),
+    check(
+      "search_page_versions_kind_check",
+      sql`${table.kind} in ('track', 'artist', 'album', 'label', 'log')`,
+    ),
+    index("search_page_versions_changed_idx").on(table.kind, table.changedAt),
+    index("search_page_versions_due_idx")
+      .on(
+        sql`case ${table.kind} when 'log' then 0 when 'artist' then 1 when 'label' then 2 when 'album' then 3 else 4 end`,
+        sql`${table.changedAt} desc`,
+        table.subjectId,
+      )
+      .where(sql`${table.submittedAt} is null or ${table.submittedAt} < ${table.changedAt}`),
+  ],
+);
+
 export const dueWork = sqliteTable(
   "due_work",
   {

@@ -103,6 +103,8 @@ The floor is 3 because it is shared by catalogue-only and finding-bearing pages.
 
 ### The sitemap carries every page; the hub is one unified index
 
+Graph-page sitemap entries use the later of their existing finding date and the observed material version in `search_page_versions`. The bounded daily IndexNow walk records an entity's own displayed facts, biography, resolved artwork and maintained renderable/certified counts and latest release date. Its observed date moves when those facts or summaries change; a child track's title edit moves that track's own date. Bookkeeping does not move the date. Child windows join the version by primary key, and each index timestamp combines the existing findings aggregate with an indexed seek for the newest still-indexable observed version.
+
 `/labels`, `/albums`, and `/artists` are unified catalogue-scale indexes. Each lists every public entity Fluncle holds in one alphabetical, `?page=N`-paginated surface.
 
 A certified entity is distinguished **visually, never verbally** (DESIGN.md's Unlit Rule, extended): its NAME text takes the **certification light** (Eclipse Gold); an uncertified name keeps the plain ink. There is **no badge, no tier heading, no "N findings" caption** — the tile counts RENDERABLE tracks uniformly (_"N tracks"_, the superset noun) for every row. The gold is text, not a glow; hover carries a neutral Dust lift for every tile (no gold ever lands on an uncertified row) and only the focus ring stays canonical Eclipse. Certified entities are sparse per alphabetical page, so the One Sun budget holds.

@@ -130,6 +130,7 @@ describe("database performance contracts", () => {
         .replaceAll("tracks.track_id", "perf_tracks.id")
         .replace(/\btracks\b/g, "perf_tracks")
         .replace(/\balbums\b/g, "perf_albums")
+        .replace(/\bsearch_page_versions\b/g, "perf_search_page_versions")
         .replace("select perf_tracks.id,", "select perf_tracks.id as track_id,"),
     );
     expect(TRACK_SITEMAP_PERFORMANCE_WINDOW.sql).toMatch(/perf_tracks\.id > \?/i);
@@ -158,6 +159,9 @@ describe("database performance contracts", () => {
             /SEARCH perf_tracks USING INDEX perf_tracks_catalogue_active_track_id_idx/i,
           ),
           expect.stringMatching(/SEARCH perf_albums USING INDEX sqlite_autoindex_perf_albums_1/i),
+          expect.stringMatching(
+            /SEARCH version USING INDEX sqlite_autoindex_perf_search_page_versions_1 \(kind=\? AND subject_id=\?\)/i,
+          ),
         ]),
       );
 

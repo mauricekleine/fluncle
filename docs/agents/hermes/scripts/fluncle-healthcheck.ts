@@ -475,6 +475,7 @@ export const AUTOMATION_CRONS: CronDef[] = [
     match: "reconcile-hub-counts",
     service: "cron.reconcile-hub-counts",
   },
+  { cadenceMs: 24 * 60 * 60_000, match: "indexnow", service: "cron.indexnow" },
   { cadenceMs: 24 * 60 * 60_000, match: "logbook", service: "cron.logbook" },
 
   { cadenceMs: 24 * 60 * 60_000, match: "reach", service: "cron.reach" },

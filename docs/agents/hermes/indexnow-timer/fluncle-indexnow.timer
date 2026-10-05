@@ -1,0 +1,11 @@
+[Unit]
+Description=Fluncle daily catalogue IndexNow timer
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 Europe/Amsterdam
+OnCalendar=*-*-* 07:15:00 Europe/Amsterdam
+RandomizedDelaySec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target

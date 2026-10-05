@@ -19,6 +19,7 @@ export const RERUN_SAFE_JOBS: ReadonlySet<string> = new Set([
   "fluncle-cluster",
   "fluncle-demand",
   "fluncle-funnel-snapshot",
+  "fluncle-indexnow",
   "fluncle-follow-digest",
   "fluncle-label-outliers",
   "fluncle-label-triage",
@@ -51,6 +52,7 @@ export const DAILY_RETRY_SCHEDULES: Readonly<Record<string, DailyRetrySchedule>>
   "fluncle-demand": amsterdam("04:40", "05:50"),
   "fluncle-follow-digest": amsterdam("17:00", "18:15", "Fri"),
   "fluncle-funnel-snapshot": { finalSlot: "23:57", primarySlot: "23:45", timeZone: "UTC" },
+  "fluncle-indexnow": amsterdam("06:00", "07:15"),
   "fluncle-label-outliers": amsterdam("05:30", "06:30"),
   "fluncle-label-triage": amsterdam("06:40", "07:50"),
   "fluncle-logbook": amsterdam("00:40", "01:50"),
@@ -234,7 +236,7 @@ function markerOutcome(
       : "started";
   }
 
-  if (job === "fluncle-follow-digest" && summary.ok === false) {
+  if ((job === "fluncle-follow-digest" || job === "fluncle-indexnow") && summary.ok === false) {
     return "partial";
   }
 

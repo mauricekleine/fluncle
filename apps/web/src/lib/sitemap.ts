@@ -72,15 +72,18 @@ export type SitemapEntity = {
 };
 
 export type SitemapTrack = {
+  lastmod?: string;
   imageLoc?: string;
   trackId: string;
 };
 
 export type SitemapGalaxy = {
+  lastmod?: string;
   slug: string;
 };
 
 export type SitemapDoc = {
+  lastmod?: string;
   path: string;
 };
 
@@ -194,7 +197,7 @@ function trackEntry(page: SitemapTrack): string {
   const loc = `${siteUrl}/track/${encodeURIComponent(page.trackId)}`;
   const image = page.imageLoc ? imageTag(page.imageLoc) : "";
 
-  return `  <url>\n    <loc>${loc}</loc>${image}\n  </url>`;
+  return `  <url>\n    <loc>${loc}</loc>${lastmodTag(page.lastmod)}${image}\n  </url>`;
 }
 
 function logbookEntry(page: SitemapLogbookEntry): string {
@@ -206,7 +209,7 @@ function logbookEntry(page: SitemapLogbookEntry): string {
 function galaxyEntry(page: SitemapGalaxy): string {
   const loc = `${siteUrl}/galaxies/${encodeURIComponent(page.slug)}`;
 
-  return `  <url>\n    <loc>${loc}</loc>\n  </url>`;
+  return `  <url>\n    <loc>${loc}</loc>${lastmodTag(page.lastmod)}\n  </url>`;
 }
 
 function docsEntry(page: SitemapDoc): string {
@@ -215,7 +218,7 @@ function docsEntry(page: SitemapDoc): string {
     .map((segment) => encodeURIComponent(segment))
     .join("/");
 
-  return `  <url>\n    <loc>${siteUrl}${path}</loc>\n  </url>`;
+  return `  <url>\n    <loc>${siteUrl}${path}</loc>${lastmodTag(page.lastmod)}\n  </url>`;
 }
 
 function freshest(dates: (string | undefined)[]): string | undefined {
@@ -323,9 +326,13 @@ function kindLastmod(kind: SitemapKind, bags: SitemapBags): string | undefined {
       return freshest(bags.albums.map((page) => page.lastmod));
 
     case "galaxies":
+      return freshest(bags.galaxies.map((page) => page.lastmod));
+
     case "docs":
+      return freshest(bags.docs.map((page) => page.lastmod));
+
     case "tracks":
-      return undefined;
+      return freshest(bags.tracks.map((page) => page.lastmod));
 
     case "logbook":
       return freshest(bags.logbook.map((page) => page.lastmod));

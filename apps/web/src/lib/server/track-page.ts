@@ -504,7 +504,11 @@ async function hydrateNeighbours(matches: SonarMatch[]): Promise<SonicNeighbour[
   );
 }
 
-export type TrackSitemapRow = { imageLoc: string | undefined; trackId: string };
+export type TrackSitemapRow = {
+  imageLoc: string | undefined;
+  lastmod: string | undefined;
+  trackId: string;
+};
 
 export async function countIndexableTrackPages(): Promise<number> {
   const db = await getDb();
@@ -531,11 +535,12 @@ export function trackSitemapWindowStatement(limit: number, afterTrackId?: string
 
   return {
     args: [afterTrackId ?? "", limit],
-    sql: `select tracks.track_id, tracks.album_image_url,
+    sql: `select tracks.track_id, tracks.album_image_url, version.changed_at as lastmod,
                  (select image_key from albums where albums.id = tracks.album_id) as album_image_key,
                  (select image_state from albums where albums.id = tracks.album_id) as album_image_state,
                  (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at
           from tracks
+          left join search_page_versions version on version.kind = 'track' and version.subject_id = tracks.track_id
           where ${seek} and ${TRACK_PAGE_INDEXABLE_WHERE}
           order by tracks.track_id
           limit ?`,
@@ -554,6 +559,7 @@ export async function listTrackSitemapRows(
     album_image_state: string | null;
     album_image_updated_at: string | null;
     album_image_url: string | null;
+    lastmod: string | null;
     track_id: string;
   }>(result.rows).map((row) => ({
     imageLoc: bestAlbumCoverUrl({
@@ -562,6 +568,19 @@ export async function listTrackSitemapRows(
       imageUpdatedAt: row.album_image_updated_at,
       spotifyUrl: row.album_image_url,
     }),
+    lastmod: row.lastmod ?? undefined,
     trackId: row.track_id,
   }));
+}
+
+export async function maxTrackSitemapLastmod(): Promise<string | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    sql: `select version.changed_at as lastmod from search_page_versions version
+          cross join tracks on tracks.track_id = version.subject_id
+          where version.kind = 'track' and ${TRACK_PAGE_INDEXABLE_WHERE}
+          order by version.changed_at desc limit 1`,
+  });
+
+  return typedRow<{ lastmod: string }>(result.rows)?.lastmod;
 }
