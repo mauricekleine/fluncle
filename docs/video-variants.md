@@ -97,7 +97,17 @@ The full presigned upload field set (`footage`, `footage-social`, `footage-notex
 Media Transformation renditions retain their own cache keys after a master is overwritten. Re-key them through the `?v=<vintage>` token; zone purge handles only the bare R2 objects. `apps/web/src/lib/media.ts` handles both mechanisms:
 
 - **The `?v` vintage token — the only reliable rendition eviction.** Every transform source carries `?v=<vintage>`: per finding, the epoch of `videoSquaredAt` (`videoVersion()`; clips use `updatedAt`), which every squared re-upload bumps — a normal re-ship mints new transform URLs and MT derives fresh, with nothing to purge. Masters that predate the two-master layout fall back to the catalogue-wide `TRANSFORM_VERSION` constant; bumping that constant re-keys every legacy rendition at once. R2 ignores the query string, so only the cache key changes, never the bytes fetched.
-- **`videoPurgeUrls` + the zone purge-by-URL API — the bare-object eviction.** The bare R2 object URLs (both masters, `poster.jpg`, `cover.jpg`; 4h max-age) carry no `?v`, so `videoPurgeUrls` builds the exhaustive URL set for a re-shipped finding and the zone purge evicts them at the edge. A hostname-scoped purge of the media zone is the blunt manual fallback when the exact URL set is in doubt — it clears the zone edge, though never MT's internal rendition cache, which only the vintage token re-keys.
+- **`videoPurgeUrls` + the zone purge-by-URL API — the bare-object eviction.** The bare R2 object URLs (both masters, `poster.jpg`, `cover.jpg`) carry no `?v`, so `videoPurgeUrls` builds the exhaustive URL set for a re-shipped finding and the zone purge evicts them at the edge. A hostname-scoped purge of the media zone is the blunt manual fallback when the exact URL set is in doubt — it clears the zone edge, though never MT's internal rendition cache, which only the vintage token re-keys.
+
+## Edge caching on found.fluncle.com
+
+Edge and browser caching on `found.fluncle.com` comes from Cloudflare Cache Rules configured in the Cloudflare dashboard for that zone. They are not in this repo; read or change them there.
+
+- **Masters: edge 30 days, browser 1 day.** `footage.mp4`, `footage.social.mp4`, `poster.jpg` and `cover.jpg`. The long edge TTL is safe only because finalize, `purge_video` and a clip re-cut purge these exact URLs through `videoPurgeUrls`. A path written outside those flows stays stale at the edge for up to 30 days unless purged by hand.
+- **Other media, matched by file extension: edge 1 day, browser 1 hour.** This covers album and artist masters under `albums/` and similar owned images.
+- **Excluded from caching:** `/cdn-cgi/` (Media Transformations and Images keep their own cache, keyed by `?v`), `plate.png` and `plate.background.png`, and `set.mp4`, which exceeds the 512 MB per-object cache limit on the Free plan.
+- **404s are cached for the same TTLs.** The Free plan cannot set a per-status TTL, so a request for a master before its upload lands can pin a 404 at the edge for up to 30 days. Purge the URL after a late upload; the finalize purge already does this for finding masters.
+- **`found.fluncle.com/robots.txt` is an R2 object** in the `fluncle-videos` bucket, not served by the web app. Edit it by uploading the object.
 
 ## Layout compatibility
 
