@@ -3,6 +3,12 @@ import { SENTRY_RELEASE } from "../sentry-config";
 import { get, MIXTAPE, readJson, TRACK, warmOrpcRouter } from "./orpc-test-kit";
 
 const resolveLogPageTarget = vi.fn();
+const healthExecute = vi.fn();
+
+vi.mock("./db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./db")>()),
+  getDb: async () => ({ execute: healthExecute }),
+}));
 
 vi.mock("./log-resolver", () => ({
   resolveLogPageTarget: (...args: unknown[]) => resolveLogPageTarget(...args),
@@ -56,6 +62,7 @@ vi.mock("./galaxies-map", async (importOriginal) => {
 warmOrpcRouter();
 
 beforeEach(() => {
+  healthExecute.mockReset().mockResolvedValue({ rows: [{ "1": 1 }] });
   resolveLogPageTarget.mockReset();
   listTracks.mockReset();
   listTracksHubPage.mockReset();
@@ -150,14 +157,76 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
 describe("oRPC public read — GET /health (get_health)", () => {
   const expectedSha = SENTRY_RELEASE ?? null;
 
-  it("serves { ok: true, sha } with Cache-Control: no-store", async () => {
+  it("documents the same flat health envelopes at HTTP 200 and 503", async () => {
+    const { generateOpenApiDocument } = await import("./orpc");
+    const document = await generateOpenApiDocument();
+    const responses = document.paths?.["/health"]?.get?.responses;
+    expect(responses?.["200"]).toBeDefined();
+    const unavailable = responses?.["503"];
+    expect(unavailable).toMatchObject({
+      content: {
+        "application/json": {
+          schema: {
+            properties: {
+              database: { properties: { status: { const: "down" } } },
+              ok: { const: false },
+            },
+            required: ["database", "ok", "sha"],
+          },
+        },
+      },
+    });
+  });
+
+  it("serves primary database health and sha with Cache-Control: no-store", async () => {
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/health"));
 
     expect(response?.status).toBe(200);
     expect(response?.headers.get("Cache-Control")).toBe("no-store");
-    expect(await readJson(response)).toEqual({ ok: true, sha: expectedSha });
+    expect(await readJson(response)).toEqual({
+      database: { latencyMs: expect.any(Number), queueWaitMs: null, status: "ok" },
+      ok: true,
+      sha: expectedSha,
+    });
   });
+
+  it.each(["error", "timeout"])(
+    "returns a public-safe no-store 503 with sha on database %s",
+    async (failure) => {
+      const { handleOrpc } = await import("./orpc");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.useFakeTimers();
+      try {
+        if (failure === "error") {
+          healthExecute.mockRejectedValue(new Error("private database detail"));
+        } else {
+          healthExecute.mockImplementation(() => new Promise(() => {}));
+        }
+        const pending = handleOrpc(get("https://www.fluncle.com/api/v1/health"));
+        await vi.advanceTimersByTimeAsync(2500);
+        const response = await pending;
+        expect(response?.status).toBe(503);
+        expect(response?.headers.get("Cache-Control")).toBe("no-store");
+        expect(await readJson(response)).toEqual({
+          database: {
+            latencyMs: failure === "timeout" ? 2500 : 0,
+            queueWaitMs: null,
+            status: "down",
+          },
+          ok: false,
+          sha: expectedSha,
+        });
+        expect(warn).toHaveBeenCalledOnce();
+        expect(errorLog).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+        warn.mockRestore();
+        errorLog.mockRestore();
+      }
+    },
+  );
 });
 
 describe("oRPC public read — GET /findings (list_findings)", () => {

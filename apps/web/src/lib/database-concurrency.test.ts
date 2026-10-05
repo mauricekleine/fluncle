@@ -480,6 +480,33 @@ function describeCall(call: CallSite): string {
 }
 
 describe("Worker database admission", () => {
+  it("abandons aborted admission without acquiring a lease when capacity returns", async () => {
+    const gate = new WorkerDatabaseConcurrencyGate(1);
+    const held = await gate.acquire("write");
+    const controller = new AbortController();
+    const pending = gate
+      .acquire("read", undefined, controller.signal)
+      .catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(100);
+    controller.abort(new Error("probe deadline"));
+    expect(await pending).toEqual(controller.signal.reason);
+    expect(vi.getTimerCount()).toBe(0);
+    held.release();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(gate.snapshot().aggregateInFlight).toBe(0);
+    const next = await gate.acquire("read");
+    next.release();
+  });
+
+  it("rejects already-aborted admission even when a lease is available", async () => {
+    const gate = new WorkerDatabaseConcurrencyGate(1);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(gate.acquire("read", undefined, controller.signal)).rejects.toEqual(
+      controller.signal.reason,
+    );
+    expect(gate.snapshot().aggregateInFlight).toBe(0);
+  });
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

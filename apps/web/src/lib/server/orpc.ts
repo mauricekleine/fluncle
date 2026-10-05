@@ -1,4 +1,4 @@
-import { AnchorCandidateSchema, contract } from "@fluncle/contracts/orpc";
+import { AnchorCandidateSchema, contract, HealthDatabaseDownSchema } from "@fluncle/contracts/orpc";
 import { OpenAPIGenerator } from "@orpc/openapi";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { implement, ORPCError } from "@orpc/server";
@@ -161,6 +161,12 @@ function orpcCodeToApiCode(code: string): string {
 }
 
 function encodeErrorBody(error: ORPCError<string, unknown>) {
+  if (error.code === "SERVICE_UNAVAILABLE") {
+    const health = HealthDatabaseDownSchema.safeParse(error.data);
+    if (health.success) {
+      return health.data;
+    }
+  }
   if (isApiFaultData(error.data)) {
     return {
       code: error.data.apiCode,

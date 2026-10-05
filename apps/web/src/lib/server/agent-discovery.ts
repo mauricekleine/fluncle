@@ -537,6 +537,6 @@ The server card (SEP-2127) is at \`${siteUrl}/.well-known/mcp/server-card.json\`
 - \`GET /api/v1/tracks/fresh\`: what just came out, as JSON (limit max 100).
 - \`GET /llms.txt\`: the plain-language map of the Galaxy.
 - \`GET /api/v1/openapi.json\`: this API as an OpenAPI 3.1 document.
-- \`GET /api/v1/health\`: liveness, \`{"ok": true}\`.
+- \`GET /api/v1/health\`: Worker and primary database health, never cached. Fields: \`ok\` (boolean), \`sha\` (deployed commit or null), \`database.status\`, \`database.latencyMs\`, and \`database.queueWaitMs\` (null when unknown). HTTP 200 with status \`ok\` or \`degraded\` when the database probe succeeds; HTTP 503 with status \`down\` when it fails or exceeds its 2500ms budget.
 - \`ssh rave.fluncle.com\`: the rave terminal, the deep end of the Galaxy. Bring a TTY.
 `;

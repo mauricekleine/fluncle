@@ -40,9 +40,21 @@ type HeldDatabaseLease = {
   acquiredAtMs: number;
 };
 
-function waitForAdmissionTurn(delayMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, delayMs);
+function waitForAdmissionTurn(delayMs: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) {
+      abort();
+    }
   });
 }
 
@@ -76,11 +88,13 @@ export class WorkerDatabaseConcurrencyGate {
   async acquire(
     accessClass: WorkerDatabaseAccessClass,
     reentrantLease?: () => WorkerDatabaseConcurrencyLease | undefined,
+    signal?: AbortSignal,
   ): Promise<WorkerDatabaseConcurrencyLease> {
     const enqueuedAtMs = Date.now();
     let pollMs = 1;
 
     for (;;) {
+      signal?.throwIfAborted();
       const nowMs = Date.now();
       const queueWaitMs = Math.max(0, nowMs - enqueuedAtMs);
       if (queueWaitMs >= WORKER_DB_QUEUE_WAIT_MAX_MS) {
@@ -93,7 +107,10 @@ export class WorkerDatabaseConcurrencyGate {
         return lease;
       }
 
-      await waitForAdmissionTurn(Math.min(pollMs, WORKER_DB_QUEUE_WAIT_MAX_MS - queueWaitMs));
+      await waitForAdmissionTurn(
+        Math.min(pollMs, WORKER_DB_QUEUE_WAIT_MAX_MS - queueWaitMs),
+        signal,
+      );
       pollMs = Math.min(pollMs * 2, WORKER_DB_ADMISSION_POLL_MAX_MS);
     }
   }

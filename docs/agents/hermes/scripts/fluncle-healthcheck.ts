@@ -128,7 +128,9 @@ function runQuiet(
 
 export const WEB_RESAMPLE_OVER_MS = 500;
 
-type WebSample = { latencyMs: number; status: number } | { error: unknown; latencyMs: number };
+type WebSample =
+  | { databaseDegraded: boolean; databaseFailed: boolean; latencyMs: number; status: number }
+  | { error: unknown; latencyMs: number };
 
 export async function probeWebWith(
   workerUrl: string | undefined,
@@ -145,16 +147,45 @@ export async function probeWebWith(
     const started = now();
     try {
       const response = await transport(`${workerUrl}/api/v1/health`, { method: "GET" });
-      return { latencyMs: now() - started, status: response.status };
+      const body: unknown =
+        response.status === 200 || response.status === 503
+          ? await response.json().catch(() => null)
+          : null;
+      const hasSha =
+        typeof body === "object" && body !== null && "sha" in body && typeof body.sha === "string";
+      const database =
+        typeof body === "object" && body !== null && "database" in body ? body.database : null;
+      const databaseDegraded =
+        response.status === 200 &&
+        typeof database === "object" &&
+        database !== null &&
+        "status" in database &&
+        database.status === "degraded";
+      return {
+        databaseDegraded,
+        databaseFailed: response.status === 503 && hasSha,
+        latencyMs: now() - started,
+        status: response.status,
+      };
     } catch (error) {
       return { error, latencyMs: now() - started };
     }
   };
 
   let reading = await sample();
-  if ("status" in reading && reading.status === 200 && reading.latencyMs > WEB_RESAMPLE_OVER_MS) {
+  if (
+    "status" in reading &&
+    reading.status === 200 &&
+    !reading.databaseDegraded &&
+    reading.latencyMs > WEB_RESAMPLE_OVER_MS
+  ) {
     const second = await sample();
-    if ("status" in second && second.status === 200 && second.latencyMs < reading.latencyMs) {
+    if (
+      "status" in second &&
+      (second.databaseFailed ||
+        second.databaseDegraded ||
+        (second.status === 200 && second.latencyMs < reading.latencyMs))
+    ) {
       reading = second;
     }
   }
@@ -166,6 +197,16 @@ export async function probeWebWith(
         ? "timeout"
         : "unreachable";
     return { latencyMs, message: msg(`${reason} after ${latencyMs}ms`), service, status: "down" };
+  }
+  if (reading.databaseFailed || reading.databaseDegraded) {
+    return {
+      latencyMs,
+      message: msg(
+        `database probe ${reading.databaseFailed ? "failed" : "degraded"} (HTTP ${reading.status} in ${latencyMs}ms)`,
+      ),
+      service,
+      status: "degraded",
+    };
   }
   if (reading.status === 200) {
     return { latencyMs, message: msg(`200 in ${latencyMs}ms`), service, status: "ok" };

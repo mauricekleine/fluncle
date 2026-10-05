@@ -104,7 +104,7 @@ function completedBackup(ageMs: number = 60_000): { ageMs: number; body: string 
 const KILLED_MARKER = "# Cron Job: fluncle-backup\n\n";
 
 describe("probeWebWith — the latency that gates the write lane", () => {
-  function scripted(samples: { latencyMs: number; status: number }[]) {
+  function scripted(samples: { body?: unknown; latencyMs: number; status: number }[]) {
     let clock = 0;
     let call = 0;
     const calls: string[] = [];
@@ -114,7 +114,9 @@ describe("probeWebWith — the latency that gates the write lane", () => {
       const sample = samples[call] ?? { latencyMs: 1, status: 200 };
       call += 1;
       pending.push(sample.latencyMs);
-      return new Response(null, { status: sample.status });
+      return sample.body === undefined
+        ? new Response(null, { status: sample.status })
+        : Response.json(sample.body, { status: sample.status });
     };
 
     let reads = 0;
@@ -179,6 +181,52 @@ describe("probeWebWith — the latency that gates the write lane", () => {
     expect(calls).toHaveLength(1);
     expect(check).toMatchObject({ latencyMs: 900, status: "down" });
   });
+
+  test("reports a database failure found while resampling a slow successful response", async () => {
+    const { calls, now, transport } = scripted([
+      { latencyMs: 900, status: 200 },
+      {
+        body: { database: { status: "down" }, ok: false, sha: "a".repeat(40) },
+        latencyMs: 40,
+        status: 503,
+      },
+    ]);
+    expect(await probeWebWith("https://worker.invalid", transport, now)).toMatchObject({
+      latencyMs: 40,
+      status: "degraded",
+    });
+    expect(calls).toHaveLength(2);
+  });
+
+  test.each([
+    {
+      body: { database: { status: "down" }, ok: false, sha: "a".repeat(40) },
+      expected: "degraded",
+      status: 503,
+    },
+    {
+      body: { database: { status: "degraded" }, ok: true, sha: "a".repeat(40) },
+      expected: "degraded",
+      status: 200,
+    },
+    { body: { ok: false, sha: null }, expected: "down", status: 503 },
+    { body: { database: { status: "degraded" }, sha: null }, expected: "down", status: 503 },
+    { body: { ok: false }, expected: "down", status: 503 },
+    { body: "gateway unavailable", expected: "down", status: 503 },
+  ])(
+    "classifies health HTTP $status as $expected with body $body",
+    async ({ body, expected, status }) => {
+      const { calls, now, transport } = scripted([{ body, latencyMs: 2500, status }]);
+      const check = await probeWebWith("https://worker.invalid", transport, now);
+      expect(calls).toHaveLength(1);
+      expect(check).toMatchObject({ latencyMs: 2500, status: expected });
+      if (expected === "degraded") {
+        expect(check.message).toBe(
+          `database probe ${status === 503 ? "failed" : "degraded"} (HTTP ${status} in 2500ms)`,
+        );
+      }
+    },
+  );
 });
 
 describe("findJsonSummary", () => {

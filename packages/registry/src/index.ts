@@ -691,7 +691,9 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     apiFormat: "application/json",
-    exposedContent: ["the liveness probe — the canonical web health check"],
+    exposedContent: [
+      "the canonical web health check: deployed sha plus a bounded primary database probe, 200 when the database is ok or degraded, 503 when it is down",
+    ],
     kind: "api",
     name: "api.health",
     operatorNotes:
