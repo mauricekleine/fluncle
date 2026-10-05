@@ -1,28 +1,26 @@
-/* The /docs hub RETINT sheet, loaded only on the docs routes (linked from the
-   docs layout route). The Fumadocs framework CSS itself — its preflight,
-   utilities, layout/header/#nd-page structure — lives in the single global
-   styles.css now (folded in the Spinup way, with the `--color-fd-*` token
-   bridge), so it is compiled once and present site-wide without a docs-only
-   <link> that could leak after an SPA nav away from /docs.
+/* The /docs hub RETINT sheet, linked from the docs layout route after
+   styles-full.css, which carries the Fumadocs framework CSS itself — its
+   preflight, utilities, layout/header/#nd-page structure and the `--color-fd-*`
+   token bridge (docs/client-bundle.md, Rule 2).
 
    What stays HERE are the Retint Rules: the Nostalgic-Cosmos overrides that
    dress Fumadocs' structure to canon (DESIGN.md). Every selector below is
    docs-scoped — `#nd-…`, `[data-card]`, `.docs-page-actions` — or an already-
    canon global (`.font-display` = Oxanium). They are un-layered on purpose and
-   win over the global framework rules inside the docs subtree by `#nd-…`
+   win over the framework rules inside the docs subtree by `#nd-…`
    specificity. Because they only ever match elements that exist inside /docs
    (or restate a brand global), this sheet's <link> persisting in the SPA after
    you leave /docs touches nothing on the public app. The `.dark` container
    (#nd-docs-layout, set via containerProps in docs.tsx) keys Fumadocs' dark
-   Shiki + sidebar rules; the `--color-fd-*` palette is bridged globally in
-   styles.css, so there is nothing to re-declare here. */
+   Shiki + sidebar rules; the `--color-fd-*` palette is bridged in
+   styles-full.css, so there is nothing to re-declare here. */
 
 /* The terminal voice (DESIGN: The One Voice Rule) — code is the machine's own
    word, set in Monaspace Krypton like the CLI/SSH surfaces. Only the mono face
    needs re-pointing: the Fumadocs sheets declare no `font-family` at all, so the
    docs subtree inherits the app's `--font-sans` (Space Grotesk, carrying the One
    Box metric overrides) through the `html { font-family: var(--default-font-family) }`
-   rule Tailwind's preflight emits off the `@theme` block in styles.css. The
+   rule Tailwind's preflight emits off the `@theme` block in theme.css. The
    reading body is already on the canon face — The Canon Travels Rule holds here
    with nothing to declare. */
 #nd-docs-layout {

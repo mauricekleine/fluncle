@@ -24,6 +24,7 @@ import {
   type RecSeedItem,
 } from "@/lib/server/recommendations";
 import { buildRecsGate } from "@/lib/server/recs-gate";
+import recommendationsCss from "../recommendations.css?url";
 
 async function readDraftRecommendations(
   user: PublicUser,
@@ -131,7 +132,10 @@ export const Route = createFileRoute("/recommendations")({
 
   staleTime: 0,
   head: () => ({
-    links: [{ href: `${siteUrl}/recommendations`, rel: "canonical" }],
+    links: [
+      { href: `${siteUrl}/recommendations`, rel: "canonical" },
+      { href: recommendationsCss, rel: "stylesheet" },
+    ],
     meta: [
       { title: "Recommendations" },
       {

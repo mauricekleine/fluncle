@@ -35,6 +35,7 @@ import {
 } from "@/lib/use-radio-sync-controller";
 import { DESKTOP_QUERY, useMediaQuery } from "@/lib/use-media-query";
 import { useVideoStallRecovery } from "@/lib/use-video-recovery";
+import radioCss from "../radio.css?url";
 
 const title = "Fluncle, observing";
 const description =
@@ -65,7 +66,10 @@ const CONTROLLER_TICK_MS = 200;
 export const Route = createFileRoute("/radio")({
   component: RadioPage,
   head: () => ({
-    links: [{ href: `${siteUrl}/radio`, rel: "canonical" }],
+    links: [
+      { href: `${siteUrl}/radio`, rel: "canonical" },
+      { href: radioCss, rel: "stylesheet" },
+    ],
     meta: [
       { title },
       { content: description, name: "description" },

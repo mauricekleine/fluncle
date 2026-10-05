@@ -5,6 +5,7 @@ import { DocsLayout } from "fumadocs-ui/layouts/docs";
 import { RootProvider } from "fumadocs-ui/provider/tanstack";
 import { docsBaseOptions } from "@/lib/docs-layout.shared";
 import docsCss from "../docs.css?url";
+import stylesFullCss from "../styles-full.css?url";
 
 // oxlint-disable-next-line sort-keys -- TanStack canonical property order (loader before head); see AGENTS.md
 export const Route = createFileRoute("/docs")({
@@ -12,6 +13,10 @@ export const Route = createFileRoute("/docs")({
   loader: async () => loadDocsTree(),
   head: () => ({
     links: [
+      {
+        href: stylesFullCss,
+        rel: "stylesheet",
+      },
       {
         href: docsCss,
         rel: "stylesheet",

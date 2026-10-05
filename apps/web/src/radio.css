@@ -1,0 +1,305 @@
+/* The radio surface (radio.fluncle.com, the /radio route), linked from that route's
+   head (docs/client-bundle.md, Rule 2). Every selector is `.radio-*`, so the sheet
+   touches nothing else if it stays in the document after a client navigation. */
+
+/* radio.fluncle.com — the cycling observation station (RFC Unit B). Full-screen,
+   dark, cover-led: the finding's clean footage runs full-bleed (landscape on
+   desktop, portrait on mobile via the MT crop the JS picks), the spoken
+   observation over it, metadata legible at the bottom over a scrim. */
+.radio-stage {
+  background: var(--sleeve-black);
+  inset: 0;
+  overflow: hidden;
+  position: fixed;
+}
+
+.radio-footage {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+/* The breather (Feature B): a full-bleed black veil above the footage, below the
+   meta scrim. Its opacity is written each controller tick from the shared-clock
+   offset (breatherDimAt) — fade-out into the seam, a beat of black, fade-in on the
+   next clip. No CSS transition: the controller IS the animation (deterministic, so
+   every client darkens together). Reduced motion holds it at 0 (an instant cut). */
+.radio-breather {
+  background: var(--sleeve-black);
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+/* The settings cog: a single quiet icon, top-right, above the safe-area inset.
+   Cover-led and dark — a faint disc that lifts on hover/focus, never a bright
+   control. It opens the surface-settings popover (mute, subtitles, info box,
+   fullscreen). Hidden in fullscreen so the frame is just the footage. */
+.radio-settings-cog {
+  align-items: center;
+  /* The Legible Sky Rule applies over LIVE footage with no scrim under the disc:
+     keep the base dark enough that the cream glyph holds AA over even a bright /
+     gold-lit frame, then lift toward opaque on hover/focus (the Ignition spirit). */
+  backdrop-filter: blur(3px);
+  background: color-mix(in oklch, var(--deep-field) 78%, transparent);
+  border: 1px solid color-mix(in oklch, var(--starlight-cream) 14%, transparent);
+  border-radius: 999px;
+  color: var(--starlight-cream);
+  cursor: pointer;
+  display: flex;
+  height: 2.75rem;
+  justify-content: center;
+  position: absolute;
+  right: calc(1rem + env(safe-area-inset-right));
+  top: calc(1rem + env(safe-area-inset-top));
+  transition:
+    background 150ms ease,
+    border-color 150ms ease;
+  width: 2.75rem;
+  z-index: 1;
+}
+
+.radio-settings-cog svg {
+  height: 1.35rem;
+  width: 1.35rem;
+}
+
+.radio-settings-cog:hover,
+.radio-settings-cog:focus-visible {
+  background: color-mix(in oklch, var(--deep-field) 92%, transparent);
+  border-color: color-mix(in oklch, var(--starlight-cream) 28%, transparent);
+}
+
+.radio-settings-cog:focus-visible {
+  outline: 2px solid var(--eclipse-gold);
+  outline-offset: 2px;
+}
+
+/* The settings popover: the shared design-system popover (Sleeve Black, Dust Line
+   ring), narrowed to the control column. One quiet row per preference. */
+.radio-settings-panel {
+  gap: 0.25rem;
+  width: 15rem;
+}
+
+.radio-setting-row {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.4rem 0;
+}
+
+.radio-setting-label {
+  align-items: center;
+  color: var(--starlight-cream);
+  cursor: pointer;
+  display: flex;
+  gap: 0.6rem;
+  font-size: 0.9rem;
+}
+
+.radio-setting-label svg {
+  color: var(--stardust);
+  flex: none;
+  height: 1.15rem;
+  width: 1.15rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radio-settings-cog {
+    transition: none;
+  }
+}
+
+/* The Legible Sky Rule: a bottom scrim keeps the metadata AA-legible over any
+   frame of footage. */
+.radio-scrim {
+  background: linear-gradient(
+    to top,
+    color-mix(in oklch, var(--deep-field) 92%, transparent),
+    transparent 45%
+  );
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+.radio-meta {
+  bottom: 0;
+  display: grid;
+  gap: 0.4rem;
+  justify-items: start;
+  /* LEFT-ANCHORED, not center-constrained. The old `left:0; right:0;
+     margin-inline:auto; max-width:64rem` centered the block on a wide screen, so a
+     left padding only nudged inside that centered box (it never reached the frame
+     edge). Anchor it to the left edge instead — `left` is a small fluid inset that
+     hugs the frame (min 0.9rem on a phone, easing to 1.5rem on wider screens), with
+     the block capped to a comfortable reading column so a long title still wraps.
+     The bottom safe-area inset and the right gutter on the padding are kept. */
+  left: clamp(0.9rem, 2vw, 1.5rem);
+  max-width: min(38rem, calc(100% - 2 * clamp(0.9rem, 2vw, 1.5rem)));
+  padding: 1.25rem 1.25rem calc(1.5rem + env(safe-area-inset-bottom)) 0;
+  position: absolute;
+}
+
+.radio-log-id {
+  color: var(--eclipse-gold);
+  font-family: var(--font-display);
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.radio-title {
+  color: var(--starlight-cream);
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.radio-artist {
+  color: var(--stardust);
+  font-size: 1.05rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.radio-facts {
+  color: var(--stardust);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Fluncle narrating, center-stage. The observation reads ONE slice at a time, big
+   and centered over the footage — not a bottom-anchored subtitle strip. The layer
+   fills the stage and centers its single line both ways; pointer-events stay off so
+   the footage/controls underneath are untouched. */
+.radio-narration {
+  align-items: center;
+  display: grid;
+  inset: 0;
+  justify-items: center;
+  /* Keep the line clear of the now-playing block at the bottom and the settings cog
+     at the top, and never flush to a phone's edges. */
+  padding: clamp(3.5rem, 12vh, 7rem) clamp(1.25rem, 6vw, 3rem);
+  pointer-events: none;
+  position: absolute;
+}
+
+/* One slice: a confident narration size (not a subtitle), centered, capped to a
+   comfortable reading measure. The Inversion Rule over live footage — no box, no
+   scrim: the glyphs blend `difference` against the footage, so they invert whatever
+   sits behind them and stay legible on any frame (a bright sun, a black seam, busy
+   colour). White is the cleanest inversion base. */
+.radio-narration-line {
+  /* The soft swap between slices: a fresh node mounts per slice (keyed on the slice
+     index), fading + lifting in. Reduced motion collapses it below. */
+  animation: radio-narration-in 320ms ease-out both;
+  color: #fff;
+  font-size: clamp(1.5rem, 4.5vw, 2.5rem);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.28;
+  margin: 0;
+  max-width: 22ch;
+  mix-blend-mode: difference;
+  overflow-wrap: anywhere;
+  text-align: center;
+  text-wrap: balance;
+}
+
+@keyframes radio-narration-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.4rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Resting words ride the inverted line (white under `difference`). The live word is
+   the Ignition (the Gold heat marks the spoken word). A Gold *cast* can't survive the
+   invert — it would flip to teal — so the live word breaks OUT of the blend to its
+   true Eclipse-Gold, the one warm point the eye tracks across the inverted line. */
+.radio-narration-word {
+  /* Colour-only transition so the highlight reads as a glow, not motion; grounded
+     under reduced motion below. */
+  transition:
+    color 120ms ease-out,
+    text-shadow 120ms ease-out;
+}
+
+.radio-narration-word.is-active {
+  /* The spoken word IS the lit point — a true Eclipse-Gold glyph that leaves the
+     line's `difference` blend so the heat reads as real Gold, not an inverted hue (a
+     blended Gold would flip to teal). A dark halo plus a Gold bloom underneath keep
+     it legible and lit where the footage runs bright — the warm point the eye tracks
+     across the inverted line. */
+  color: var(--eclipse-gold);
+  mix-blend-mode: normal;
+  text-shadow:
+    0 0.05rem 0.5rem color-mix(in oklch, var(--deep-field) 82%, transparent),
+    0 0 0.85rem color-mix(in oklch, var(--eclipse-gold) 55%, transparent),
+    0 0 1.7rem color-mix(in oklch, var(--eclipse-gold) 35%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Instant swap, no fade/lift; instant heat, no glow transition. */
+  .radio-narration-line {
+    animation: none;
+  }
+
+  .radio-narration-word {
+    transition: none;
+  }
+}
+
+.radio-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+/* The begin-gate + status messages: centered, quiet, dark. */
+.radio-gate {
+  align-items: center;
+  background: var(--deep-field);
+  display: grid;
+  gap: 1rem;
+  inset: 0;
+  justify-items: center;
+  /* Fluid padding so the gate doesn't crowd a phone screen. */
+  padding: clamp(1.25rem, 5vw, 2rem);
+  place-content: center;
+  position: fixed;
+  text-align: center;
+}
+
+.radio-gate-title {
+  color: var(--starlight-cream);
+  /* Scale down on narrow screens so the title stays on one or two clean lines. */
+  font-size: clamp(1.35rem, 6vw, 1.75rem);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  /* Balance the two-line title so neither line is left a lone short word. */
+  text-wrap: balance;
+}
+
+.radio-gate-subtitle {
+  color: var(--stardust);
+  font-size: 1rem;
+  line-height: 1.4;
+  /* Cap reading width, but never wider than the viewport's padded box. */
+  max-width: min(34rem, 100%);
+  /* Balance the wrap so the subtitle never strands a "to." widow on its own line. */
+  text-wrap: balance;
+}
