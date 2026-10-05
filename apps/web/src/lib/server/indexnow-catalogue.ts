@@ -12,7 +12,7 @@ import { sitemapWindowStatement } from "./sitemap-data";
 import { TRACK_PAGE_INDEXABLE_WHERE } from "./track-page";
 
 export const INDEXNOW_WINDOW_SIZE = 1000;
-export const INDEXNOW_CLAIM_LIMIT = 10000;
+export const INDEXNOW_CLAIM_LIMIT = 2000;
 const KINDS = ["log", "artist", "label", "album", "track"] as const;
 export type IndexNowKind = (typeof KINDS)[number];
 export type IndexNowCursor = { after?: string; kind: IndexNowKind };
@@ -298,18 +298,80 @@ async function dueCount(): Promise<number> {
   return Number(result.rows[0]?.n ?? 0);
 }
 
+function backfillStatement(
+  kind: IndexNowKind,
+  boundary: string | null,
+  limit: number,
+): InStatement {
+  const where = `kind = ? and (${DUE_WHERE}) and (? is null or changed_at <= ?)`;
+  const args = [kind, boundary, boundary];
+  const columns = "kind, subject_id, fingerprint, changed_at";
+  if (kind === "log") {
+    return {
+      args: [...args, limit],
+      sql: `select ${columns} from search_page_versions
+        where ${where} and ${LIVE_WHERE}
+        order by changed_at desc, subject_id limit ?`,
+    };
+  }
+  if (kind === "track") {
+    return {
+      args: [...args, limit],
+      sql: `select ${columns} from search_page_versions
+        join tracks on tracks.track_id = subject_id
+        where ${where} and ${TRACK_PAGE_INDEXABLE_WHERE}
+        order by exists (select 1 from findings where findings.track_id = tracks.track_id) desc,
+          tracks.release_date desc nulls last, subject_id limit ?`,
+    };
+  }
+  const table = `${kind}s`;
+  const minimum =
+    kind === "artist"
+      ? ARTIST_INDEX_MIN_FINDINGS
+      : kind === "label"
+        ? LABEL_INDEX_MIN_TRACKS
+        : ALBUM_INDEX_MIN_TRACKS;
+  const listed = kind === "artist" ? `and ${listedArtistWhere(table)}` : "";
+  return {
+    args: [...args, minimum, limit],
+    sql: `select ${columns} from search_page_versions
+      join ${table} on ${table}.slug = subject_id
+      where ${where} and ${table}.renderable_track_count >= ? ${listed}
+      order by ${table}.certified_finding_count desc, ${table}.renderable_track_count desc,
+        ${table}.latest_release_date desc nulls last, subject_id limit ?`,
+  };
+}
+
 export async function claimIndexNowCatalogue(limit = INDEXNOW_CLAIM_LIMIT) {
   const db = await getDb();
-  const rows = typedRows<Version>(
-    (
-      await db.execute({
-        args: [limit],
-        sql: `select kind, subject_id, fingerprint, changed_at from search_page_versions indexed by search_page_versions_due_idx
-      where (${DUE_WHERE}) and ${LIVE_WHERE}
-      order by ${PRIORITY}, changed_at desc, subject_id limit ?`,
-      })
-    ).rows,
+  const effectiveLimit = Math.min(limit, INDEXNOW_CLAIM_LIMIT);
+  const boundaryResult = await db.execute(
+    "select min(submitted_at) as boundary from search_page_versions",
   );
+  const boundary = typedRows<{ boundary: string | null }>(boundaryResult.rows)[0]?.boundary ?? null;
+  const rows =
+    boundary === null
+      ? []
+      : typedRows<Version>(
+          (
+            await db.execute({
+              args: [boundary, effectiveLimit],
+              sql: `select kind, subject_id, fingerprint, changed_at from search_page_versions indexed by search_page_versions_due_idx
+          where (${DUE_WHERE}) and ${LIVE_WHERE} and changed_at > ?
+          order by ${PRIORITY}, changed_at desc, subject_id limit ?`,
+            })
+          ).rows,
+        );
+  for (const kind of KINDS) {
+    if (rows.length >= effectiveLimit) {
+      break;
+    }
+    rows.push(
+      ...typedRows<Version>(
+        (await db.execute(backfillStatement(kind, boundary, effectiveLimit - rows.length))).rows,
+      ),
+    );
+  }
   const { host, key, keyLocation } = buildIndexNowPayload([]);
   return {
     due: await dueCount(),

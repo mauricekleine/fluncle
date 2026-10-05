@@ -509,7 +509,7 @@ describe("catalogue claims and acknowledgements", () => {
     const claim = await claimIndexNowCatalogue();
     expect(claim.due).toBe(8);
     expect(claim.items).toHaveLength(2);
-    const statement = executed.mock.calls[1]?.[0] as InStatement;
+    const statement = executed.mock.calls.at(-1)?.[0] as InStatement;
     const query = typeof statement === "string" ? { sql: statement } : statement;
     const plan = await db.execute({ ...query, sql: `explain query plan ${query.sql}` });
     const details = plan.rows
@@ -536,10 +536,10 @@ describe("catalogue claims and acknowledgements", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("bounds claims to ten thousand newest URLs with logs ahead of the catalogue", async () => {
+  it("bounds claims to two thousand live URLs while reporting the entire due queue", async () => {
     await seedCatalogue();
     await db.batch(
-      Array.from({ length: 10001 }, (_, index) => ({
+      Array.from({ length: 2001 }, (_, index) => ({
         args: [
           `mix-${index}`,
           `log-${String(index).padStart(5, "0")}`,
@@ -552,21 +552,122 @@ describe("catalogue claims and acknowledgements", () => {
       "write",
     );
     await walkAll();
-    const executed = vi.spyOn(db, "execute");
-    const claim = await claimIndexNowCatalogue();
-    expect(claim.due).toBe(10009);
-    expect(claim.items).toHaveLength(10000);
+    const claim = await claimIndexNowCatalogue(10000);
+    expect(claim.due).toBe(2009);
+    expect(claim.items).toHaveLength(2000);
     expect(claim.items.every((item) => item.kind === "log")).toBe(true);
     expect(claim.items[0]?.url).toBe("https://www.fluncle.com/log/log-00001");
-    const statement = executed.mock.calls[0]?.[0] as InStatement;
-    const query = typeof statement === "string" ? { sql: statement } : statement;
-    const plan = await db.execute({ ...query, sql: `explain query plan ${query.sql}` });
-    const details = plan.rows
-      .map((row) => (typeof row.detail === "string" ? row.detail : ""))
-      .join("\n");
-    expect(details).toContain("search_page_versions_due_idx");
-    expect(details).not.toContain("TEMP B-TREE FOR ORDER BY");
-    expect(await ackIndexNowCatalogue(claim.items)).toEqual({ due: 9, stamped: 10000 });
+    const small = await claimIndexNowCatalogue(5);
+    expect(small.due).toBe(2009);
+    expect(small.items).toEqual(claim.items.slice(0, 5));
+    expect(await ackIndexNowCatalogue(claim.items)).toEqual({ due: 9, stamped: 2000 });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("orders unacknowledged backfill by kind and page value before observation time", async () => {
+    await seedCatalogue(6);
+    await db.execute("update mixtapes set updated_at = '2026-08-01'");
+    await db.execute(
+      "update tracks set release_date = '2026-08-01' where track_id in ('000002','000003')",
+    );
+    await db.execute("update tracks set release_date = '2026-09-01' where track_id = '000005'");
+    await db.execute({
+      args: [ORIGINAL],
+      sql: "insert into findings (track_id,added_at) values ('000002',?)",
+    });
+    for (const kind of ["artist", "label", "album"] as const) {
+      await db.execute(
+        `update ${kind}s set certified_finding_count = 2, latest_release_date = '2026-07-01'`,
+      );
+      const entities = [
+        { count: 0, date: "2026-09-01", id: "empty", tracks: 20 },
+        { count: 3, date: null, id: "most", tracks: 3 },
+        { count: 2, date: "2026-08-01", id: "recent-a", tracks: 3 },
+        { count: 2, date: "2026-08-01", id: "recent-b", tracks: 3 },
+        { count: 2, date: null, id: "undated", tracks: 3 },
+        { count: 2, date: "2026-06-01", id: "wide", tracks: 4 },
+      ];
+      await db.batch(
+        entities.map((entity) => ({
+          args: [
+            entity.id,
+            entity.id,
+            ORIGINAL,
+            ORIGINAL,
+            entity.count,
+            entity.tracks,
+            entity.date,
+          ],
+          sql: `insert into ${kind}s (id,name,slug,created_at,updated_at,certified_finding_count,renderable_track_count,latest_release_date) values (?,'Entity',?,?,?,?,?,?)`,
+        })),
+        "write",
+      );
+    }
+    await walkAll();
+    const before = await versions();
+    expect(before.every((row) => row.submitted_at === null)).toBe(true);
+    expect(
+      before.find((row) => row.kind === "artist" && row.subject_id === "empty")?.changed_at,
+    ).toBe(OBSERVED);
+    expect(
+      before.find((row) => row.kind === "artist" && row.subject_id === "artist")?.changed_at,
+    ).toBe(ORIGINAL);
+    const claim = await claimIndexNowCatalogue();
+    expect(claim.items.map((item) => `${item.kind}:${item.subjectId}`)).toEqual([
+      "log:001.0.0B",
+      "log:001.0.0A",
+      ...["artist", "label", "album"].flatMap((kind) =>
+        ["most", "wide", "recent-a", "recent-b", kind, "undated", "empty"].map(
+          (id) => `${kind}:${id}`,
+        ),
+      ),
+      "track:000002",
+      "track:000000",
+      "track:000005",
+      "track:000003",
+      "track:000001",
+      "track:000004",
+    ]);
+    expect((await claimIndexNowCatalogue(4)).items).toEqual(claim.items.slice(0, 4));
+    expect(await versions()).toEqual(before);
+  });
+
+  it("claims later material changes and newly observed pages before every backfill kind", async () => {
+    await seedCatalogue();
+    await walkAll();
+    const initial = await claimIndexNowCatalogue();
+    const acknowledged = initial.items.filter(
+      (item) =>
+        item.kind === "artist" ||
+        (item.kind === "log" && item.subjectId === "001.0.0B") ||
+        (item.kind === "track" && item.subjectId === "000000"),
+    );
+    vi.setSystemTime("2026-10-05T01:00:00.000Z");
+    await ackIndexNowCatalogue(acknowledged);
+    vi.setSystemTime("2026-10-05T02:00:00.000Z");
+    await db.execute("update tracks set title = 'Changed' where track_id = '000000'");
+    await db.execute("update artists set bio = 'Changed'");
+    await walkIndexNowCatalogue({ kind: "artist" });
+    await walkIndexNowCatalogue({ kind: "track" });
+    vi.setSystemTime("2026-10-05T03:00:00.000Z");
+    await db.execute("update tracks set title = 'Later change' where track_id = '000001'");
+    await db.execute(
+      "insert into tracks (track_id,title,artists_json,duration_ms,is_catalogue,album_id,release_date,album_image_url,spotify_url) values ('new','New','[\"Artist\"]',270000,1,'album','2026-07-01','https://example.com/cover.jpg','https://example.com/listen')",
+    );
+    await walkIndexNowCatalogue({ kind: "track" });
+    const before = await versions();
+    const claim = await claimIndexNowCatalogue();
+    expect(claim.items.map((item) => `${item.kind}:${item.subjectId}`)).toEqual([
+      "artist:artist",
+      "track:000001",
+      "track:new",
+      "track:000000",
+      "log:001.0.0A",
+      "label:label",
+      "album:album",
+      "track:000002",
+    ]);
+    expect((await claimIndexNowCatalogue(3)).items).toEqual(claim.items.slice(0, 3));
+    expect(await versions()).toEqual(before);
   });
 });

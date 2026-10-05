@@ -129,12 +129,12 @@ function statuses(
 
 describe("the daily IndexNow sweep", () => {
   test("posts paced batches on the box and acknowledges only their exact accepted versions", async () => {
-    const f = fixture(2500);
+    const f = fixture(2000);
     const summary = await runIndexNowTick(f.deps);
-    expect(f.phases.map((body) => body.phase)).toEqual(["walk", "claim", "ack", "ack", "ack"]);
-    expect(f.phases[1]).toEqual({ limit: 10_000, phase: "claim" });
+    expect(f.phases.map((body) => body.phase)).toEqual(["walk", "claim", "ack", "ack"]);
+    expect(f.phases[1]).toEqual({ limit: 2_000, phase: "claim" });
     expect(f.calls.map((call) => (call.body as { urlList: string[] }).urlList.length)).toEqual([
-      1000, 1000, 500,
+      1000, 1000,
     ]);
     expect(f.calls[0]?.body).toEqual({ ...indexNow, urlList: items(1000).map((item) => item.url) });
     expect(f.calls.every((call) => call.endpoint === "https://api.indexnow.org/indexnow")).toBe(
@@ -144,29 +144,29 @@ describe("the daily IndexNow sweep", () => {
       phase: "ack",
       versions: items(1000).map(({ url: _url, ...version }) => version),
     });
-    expect(f.sleeps).toEqual([5000, 5000]);
+    expect(f.sleeps).toEqual([5000]);
     expect(summary).toMatchObject({
       checked: 250,
       errors: 0,
-      produced: 2500,
+      produced: 2000,
       queueDepth: 0,
       status: 202,
-      submitted: 2500,
-      vendorCalls: 3,
+      submitted: 2000,
+      vendorCalls: 2,
     });
     expect(f.lines).toEqual([
-      "AUDIT checked=250 inserted=3 changed=2 removed=4 submitted=2500 due=0 status=202 errors=0 batches=3/3 vendorCalls=3",
+      "AUDIT checked=250 inserted=3 changed=2 removed=4 submitted=2000 due=0 status=202 errors=0 batches=2/2 vendorCalls=2",
     ]);
   });
 
-  test("the claim limit bounds a tick to ten thousand accepted URLs and a compact ledger summary", async () => {
+  test("the claim limit bounds a tick to two thousand accepted URLs and a compact ledger summary", async () => {
     const f = fixture(12_000);
     const summary = await runIndexNowTick(f.deps);
     expect(summary).toMatchObject({
-      produced: 10_000,
-      queueDepth: 2000,
-      submitted: 10_000,
-      vendorCalls: 10,
+      produced: 2_000,
+      queueDepth: 10_000,
+      submitted: 2_000,
+      vendorCalls: 2,
     });
     expect(JSON.stringify(summary).length).toBeLessThan(4000);
   });
