@@ -5,6 +5,8 @@ import { SIDEBAR_COOKIE_NAME, SidebarInset, SidebarProvider } from "@fluncle/ui/
 import { AdminSidebar, navKeyForPath } from "@/components/admin/admin-sidebar";
 import { ConnectedToast } from "@/components/admin/connected-toast";
 import { cn } from "@/lib/utils";
+import adminCss from "../../admin.css?url";
+import stylesFullCss from "../../styles-full.css?url";
 
 const readSidebarState = createServerFn({ method: "GET" }).handler(
   async () => getCookie(SIDEBAR_COOKIE_NAME) !== "false",
@@ -12,6 +14,12 @@ const readSidebarState = createServerFn({ method: "GET" }).handler(
 
 export const Route = createFileRoute("/admin")({
   component: AdminLayout,
+  head: () => ({
+    links: [
+      { href: stylesFullCss, rel: "stylesheet" },
+      { href: adminCss, rel: "stylesheet" },
+    ],
+  }),
   loader: async () => ({ sidebarOpen: await readSidebarState() }),
 });
 

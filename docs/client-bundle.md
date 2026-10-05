@@ -49,13 +49,25 @@ HTML cached at the edge references build-scoped `/assets/<hash>.js` URLs, so eac
 
 The eager router preloads routes on intent and reuses client-navigation loader data for 60 seconds, matching the public hubs' edge freshness window. Personalized or volatile routes set their own shorter `staleTime` so the shared default cannot reuse a previous session's data.
 
-## Rule 2 — one render-blocking stylesheet, and it is `styles.css`
+## Rule 2 — one render-blocking stylesheet, and it carries the public app only
 
-Not enforced by a gate (it needs a judgement call the gate cannot make), but the rule is simple: **a CSS file enters the app through `__root.tsx`'s `styles.css?url` link, or it is scoped to the route that needs it.**
+Not enforced by a gate (it needs a judgement call the gate cannot make), but the rule is simple: **a CSS file enters the app through `__root.tsx`'s `styles.css?url` link, or it is scoped to the route that needs it.** Every public page pays for `styles.css` before it paints, so it holds the public app's rules and nothing else.
 
-Import route-specific stylesheets with `?url` and link them from the route's `head`. A bare CSS import in a route enters the global entry stylesheet.
+Import route-specific stylesheets with `?url` and link them from the route's `head`. A bare CSS import in a route enters the global entry stylesheet. TanStack renders a head stylesheet as a React stylesheet resource, and it stays in the document after the visitor navigates away. A route sheet must therefore leave every other page unchanged while it stays loaded.
 
-`styles.css` currently includes Fumadocs' `neutral.css` and `preset.css`. Moving them into `docs.css` also requires moving the `--color-fd-*` bridge after those imports so the docs retain the dark palette. Verify the result on a rendered `/docs` page. Measure eager-entry weight from `chunk.modules[id].renderedLength` when evaluating further cuts.
+| Sheet                              | Linked from                  | Holds                                                                                         |
+| ---------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
+| `styles.css`                       | `__root.tsx`                 | Tailwind over the public sources, the fonts, every public hand-written rule                   |
+| `styles-full.css`                  | `/docs`, `/admin`            | Tailwind over every source, Fumadocs (`neutral.css`, `preset.css`), the `--color-fd-*` bridge |
+| `docs.css`                         | `/docs`                      | The Fumadocs retints, all `#nd-…` scoped                                                      |
+| `admin.css`                        | `/admin`                     | Studio, the clip library, the admin sidebar, the coarse-pointer touch floor                   |
+| `radio.css`, `recommendations.css` | `/radio`, `/recommendations` | That surface's `.radio-*` / `.rec-*` rules                                                    |
+
+**Utilities follow one rule: a route sheet that emits Tailwind utilities emits all of them.** Two sheets put utilities in the same `@layer utilities`, so a later sheet that held only some of them would win ties against the ones it lacks and break Tailwind's ordering (`p-2` overriding `px-4`). `styles.css` skips the operator workspace, the docs routes, the docs content and the admin-only `@fluncle/ui` components with `@source not`; `styles-full.css` scans everything, so it is a strict superset in the same order and decides utility order wherever it is linked. [`styles-sources.test.ts`](../apps/web/src/styles-sources.test.ts) fails when public code imports a skipped source, which would render it without its utilities. Both sheets share the font stacks through `theme.css`, so a `font-*` utility resolves the same from either.
+
+Hand-written route rules stay scoped to class names only that surface renders. Moving a rule out of `styles.css` changes its order against the public rules, so verify the move by diffing computed styles of a rendered page with the old and new sheets, not by reading the CSS.
+
+Monaspace Krypton is not preloaded. Above the fold it renders only the two-glyph `⌘K` hint in the front door's search field; everywhere else it sits in the colophon. A 43 KB preload would compete with the LCP image, the two preloaded faces and the stylesheet for a decorative hint that swaps in under `font-display: swap`.
 
 ## Where the weight actually is
 

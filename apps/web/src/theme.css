@@ -1,0 +1,13 @@
+/* The font stacks every Tailwind build of the app shares: styles.css and
+   styles-full.css import this one block, so a `font-*` utility resolves to the same
+   value whichever sheet emits it. */
+@theme {
+  /* The body voice. Without this, Tailwind falls back to its default system stack — which
+     is a DIFFERENT typeface (and different metrics) on every operating system. */
+  --font-sans: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  /* The terminal voice: every "for the nerds" / CLI surface speaks in this
+     stack. Monaspace Krypton (GitHub Next's mechanical mono) leads, system
+     mono as the fallback while it loads. Single source — one place to retune. */
+  --font-mono: "Monaspace Krypton", ui-monospace, "SF Mono", Menlo, monospace;
+}

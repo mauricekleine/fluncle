@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/* The complete Tailwind build plus Fumadocs, for the surfaces the public sheet leaves
+   out: the /docs layout and the /admin layout link it from their route heads, after
+   styles.css (docs/client-bundle.md, Rule 2). It stacks Tailwind, Fumadocs and the
+   shared design system in that order and scans every source with no `not`
+   exclusions, so its utilities are a strict
+   superset of styles.css's. Linked later, it therefore decides the order of every
+   utility on the page, which keeps a page that mixes public and docs/admin classes
+   rendering exactly as it would from one sheet. Staying in the document after a
+   client navigation away is harmless for the same reason.
+
+   We import the two prebuilt Fumadocs sheets DIRECTLY (`neutral.css` + `preset.css`),
+   never `fumadocs-ui/style.css`: that entry re-runs `@import "tailwindcss"`, a second
+   Tailwind preflight that would restyle the app's `button`/`*`/headings. Imported plain
+   (no `layer(...)`), the framework's own `@layer base`/utilities merge into Tailwind's
+   matching layers at equal priority, so the docs subtree gets its full structure
+   (header, #nd-page layout/padding, headings, code). The docs-scoped retints +
+   `.dark`-keyed panes live in docs.css and win by `#nd-…` specificity inside the docs
+   subtree (DESIGN.md, the Retint Rule). */
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+/* Imported after the Fumadocs sheets so its Shadcn base + base reset keep winning
+   where the two overlap — the values resolve to the same canon hexes via the fd
+   bridge below. */
+@import "@fluncle/ui/globals.css";
+@import "./theme.css";
+@source "../../../packages/ui/src";
+
+/* The token bridge: re-point every `--color-fd-*` onto Fluncle's canon palette
+   (DESIGN.md, the Nostalgic Cosmos). This `:root` block follows neutral.css in
+   source order, so it overrides Fumadocs' default LIGHT `:root` palette — which
+   would otherwise paint the body light through Fumadocs' layered preflight. The
+   `.dark` container (docs.css / #nd-docs-layout) refines a few of these; the values
+   mirror tokens.css. */
+:root {
+  --color-fd-background: #090a0b; /* Deep Field */
+  --color-fd-foreground: #f4ead7; /* Starlight Cream */
+  --color-fd-muted: #171611; /* Tape Black */
+  --color-fd-muted-foreground: #b7ab95; /* Stardust */
+  --color-fd-popover: #10100d; /* Sleeve Black */
+  --color-fd-popover-foreground: #f4ead7;
+  --color-fd-card: #10100d; /* Sleeve Black */
+  --color-fd-card-foreground: #f4ead7;
+  --color-fd-border: #d0b99029; /* Dust Line */
+  --color-fd-primary: #f5b800; /* Eclipse Gold — the one sun */
+  --color-fd-primary-foreground: #151006; /* Ink on Gold */
+  --color-fd-secondary: #171611; /* Tape Black */
+  --color-fd-secondary-foreground: #f4ead7;
+  --color-fd-accent: #f5b8001a; /* Gold Veil — the hover wash */
+  --color-fd-accent-foreground: #ffd057; /* Eclipse Glow */
+  --color-fd-ring: #f5b800; /* Eclipse Gold focus ring */
+  --color-fd-error: #ff6b57; /* Re-entry Red */
+  --color-fd-warning: #ffd057;
+  --color-fd-success: #f5b800;
+  --color-fd-info: #ffd057;
+  --color-fd-overlay: #090a0bcc;
+}
