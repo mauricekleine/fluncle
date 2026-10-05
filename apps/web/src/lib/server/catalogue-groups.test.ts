@@ -624,6 +624,21 @@ describe("listLabelCatalogue (the label page's artists, then records)", () => {
     );
   });
 
+  it("counts a collaboration once even though it sits under both artists", async () => {
+    await seedCatalogueTrack({
+      album: "Together",
+      artists: ["Calibre", "DRS"],
+      labelId: "lbl_1",
+      releaseDate: "2010-01-01",
+      trackId: "t_collab",
+    });
+
+    const page = await listLabelCatalogue("lbl_1", "name", 1);
+
+    expect(page.groups.map((group) => group.name)).toEqual(["Calibre", "DRS"]);
+    expect(page.totalTracks).toBe(1);
+  });
+
   it("returns an empty page (no throw) for page 1 of a label with no quieter rows", async () => {
     const page = await listLabelCatalogue("lbl_1", "name", 1);
 

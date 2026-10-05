@@ -487,7 +487,10 @@ export async function listLabelCatalogue(
     pageCount: Math.max(Math.ceil(totalGroups / GRAPH_GROUP_PAGE_SIZE), 1),
     totalGroups,
 
-    totalTracks: Math.max(totalTracks - removed, flattenArtistGroups(groups).length),
+    totalTracks: Math.max(
+      totalTracks - removed,
+      new Set(flattenArtistGroups(groups).map((track) => track.trackId)).size,
+    ),
   };
 }
 

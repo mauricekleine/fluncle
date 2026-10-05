@@ -82,6 +82,16 @@ describe("leadingSentences (whole bio sentences that fit a room)", () => {
     );
   });
 
+  it("does not split after initials or a short title followed by a capital", () => {
+    expect(leadingSentences("M.C. Fats was a British vocalist. He hosted sets.", 40)).toBe(
+      "M.C. Fats was a British vocalist.",
+    );
+    expect(leadingSentences("Raised in St. Albans, he plays jungle. He DJs.", 40)).toBe(
+      "Raised in St. Albans, he plays jungle.",
+    );
+    expect(leadingSentences("M.C. Fats was a British vocalist.", 10)).toBeUndefined();
+  });
+
   it("refuses a bio that ends mid-sentence", () => {
     expect(leadingSentences("A producer from Leeds", 200)).toBeUndefined();
   });

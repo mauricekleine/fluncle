@@ -28,11 +28,29 @@ export function bioMetaDescription(bio: string): string {
   return `${head}…`;
 }
 
-export function leadingSentences(text: string, room: number): string | undefined {
-  const sentences = text
+const ABBREVIATION_END = /(?:^|[\s.(])(?:\p{L}|Dr|Jr|Mr|Mrs|Ms|Mt|No|Sr|St|Vol|feat|ft|vs)\.$/iu;
+
+function splitSentences(text: string): string[] {
+  const pieces = text
     .replace(/\s+/gu, " ")
     .trim()
     .split(/(?<=[.!?])\s+(?=\p{Lu}|\p{N})/u);
+
+  return pieces.reduce<string[]>((sentences, piece) => {
+    const previous = sentences.at(-1);
+
+    if (previous !== undefined && ABBREVIATION_END.test(previous)) {
+      sentences[sentences.length - 1] = `${previous} ${piece}`;
+    } else {
+      sentences.push(piece);
+    }
+
+    return sentences;
+  }, []);
+}
+
+export function leadingSentences(text: string, room: number): string | undefined {
+  const sentences = splitSentences(text);
   let lead = "";
 
   for (const sentence of sentences) {

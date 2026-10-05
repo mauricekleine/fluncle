@@ -106,6 +106,20 @@ describe("artistMetaDescription", () => {
     );
   });
 
+  it("keeps an initialled name whole instead of cutting the bio at its first full stop", () => {
+    const description = artistMetaDescription({
+      bio: "M.C. Fats was a British drum & bass vocalist best known for his work with numerous producers across the scene.",
+      findingCount: 1,
+      name: "M.C. Fats",
+      trackCount: 38,
+    });
+
+    expect(description).toBe(
+      "M.C. Fats was a British drum & bass vocalist best known for his work with numerous producers across the scene. 38 drum & bass tracks, 1 recommended by Fluncle.",
+    );
+    expect(description.length).toBeLessThanOrEqual(META_DESCRIPTION_MAX);
+  });
+
   it("leads with whole bio sentences and adds the page's facts", () => {
     const bio =
       "Grimesy, born Stephen Grimes, is a drum & bass and jungle producer and DJ from Lancaster, UK. " +
