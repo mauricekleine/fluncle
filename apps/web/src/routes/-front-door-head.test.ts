@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { fluncleEntityId, fluncleWebsiteId } from "@/lib/fluncle-links";
-import { albumCoverAtSize } from "@/lib/media";
+import { LEAD_COVER_SIZES } from "@/components/front-door/lead";
+import { albumCoverAtSize, coverSrcSet } from "@/lib/media";
 import { Route } from "./index";
 
 const LEAD_COVER_URL = "https://i.scdn.co/image/ab67616d00001e0212ab34cd56ef7890abcd1234";
 
-type HeadLink = { as?: string; fetchPriority?: string; href?: string; rel: string };
+type HeadLink = {
+  as?: string;
+  fetchPriority?: string;
+  href?: string;
+  imageSizes?: string;
+  imageSrcSet?: string;
+  rel: string;
+};
 
 type HeadResult = {
   links?: HeadLink[];
@@ -101,6 +109,15 @@ describe("/ head — the LCP preload", () => {
     expect(preloads[0]?.fetchPriority).toBe("high");
 
     expect(preloads[0]?.href).toBe(albumCoverAtSize(LEAD_COVER_URL, "large"));
+  });
+
+  it("preloads the same srcset and sizes the lead cover renders", () => {
+    const preload = (headOf({ findings: BAND, lead: LEAD }).links ?? []).find(
+      (link) => link.rel === "preload",
+    );
+
+    expect(preload?.imageSrcSet).toBe(coverSrcSet(LEAD_COVER_URL));
+    expect(preload?.imageSizes).toBe(LEAD_COVER_SIZES);
   });
 
   it("preloads nothing when the lead has no cover", () => {

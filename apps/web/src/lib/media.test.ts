@@ -5,6 +5,7 @@ import {
   albumCoverAtSize,
   bestAlbumCoverUrl,
   bestArtistAvatarUrl,
+  coverPreloadLink,
   coverSrcSet,
   freshStandoutSrcSet,
   hubCoverSrcSet,
@@ -102,6 +103,34 @@ describe("coverSrcSet", () => {
   it("omits candidates when the source dimensions are unknown or absent", () => {
     expect(coverSrcSet("https://example.com/cover.jpg")).toBeUndefined();
     expect(coverSrcSet(undefined)).toBeUndefined();
+  });
+});
+
+describe("coverPreloadLink", () => {
+  it("carries the rendered img's srcset and sizes alongside the fixed rung", () => {
+    const url = "https://i.scdn.co/image/ab67616d0000b273cafef00d";
+
+    expect(coverPreloadLink(url, "medium", "45vw")).toEqual({
+      as: "image",
+      fetchPriority: "high",
+      href: albumCoverAtSize(url, "medium"),
+      imageSizes: "45vw",
+      imageSrcSet: coverSrcSet(url),
+      rel: "preload",
+    });
+  });
+
+  it("falls back to an href-only preload when the source has no ladder", () => {
+    expect(coverPreloadLink("https://example.com/cover.jpg", "medium", "45vw")).toEqual({
+      as: "image",
+      fetchPriority: "high",
+      href: albumCoverAtSize("https://example.com/cover.jpg", "medium"),
+      rel: "preload",
+    });
+  });
+
+  it("is undefined without a cover", () => {
+    expect(coverPreloadLink(undefined, "medium", "45vw")).toBeUndefined();
   });
 });
 

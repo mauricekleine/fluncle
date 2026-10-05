@@ -10,8 +10,8 @@ import { discoveryQueueTrack, findingToDiscoveryTrack } from "@/lib/discovery-tr
 import { artistTitleLine } from "@/lib/log-prose";
 import { albumCoverAtSize, coverSrcSet } from "@/lib/media";
 
-const LEAD_COVER_SIZE = "large" as const;
-const LEAD_COVER_SIZES =
+export const LEAD_COVER_SIZE = "large" as const;
+export const LEAD_COVER_SIZES =
   "(min-width: 40rem) 15rem, calc(100vw - 2rem - 2px - clamp(2.2rem, 6vw, 4.5rem))";
 
 export function FrontDoorLead({ lead }: { lead: TrackListItem }): ReactNode {

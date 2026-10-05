@@ -236,6 +236,37 @@ export function coverSrcSet(url: string | undefined): string | undefined {
     .join(", ");
 }
 
+export type CoverPreloadLink = {
+  as: "image";
+  fetchPriority: "high";
+  href: string;
+  imageSizes?: string;
+  imageSrcSet?: string;
+  rel: "preload";
+};
+
+export function coverPreloadLink(
+  url: string | undefined,
+  size: CoverSize,
+  sizes: string,
+): CoverPreloadLink | undefined {
+  const href = albumCoverAtSize(url, size);
+
+  if (!href) {
+    return undefined;
+  }
+
+  const imageSrcSet = coverSrcSet(url);
+
+  return {
+    as: "image",
+    fetchPriority: "high",
+    href,
+    ...(imageSrcSet ? { imageSizes: sizes, imageSrcSet } : {}),
+    rel: "preload",
+  };
+}
+
 export function hubCoverSrcSet(url: string | undefined): string | undefined {
   if (!url) {
     return undefined;

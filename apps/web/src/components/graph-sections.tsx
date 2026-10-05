@@ -17,7 +17,7 @@ import { type GraphPageTrack } from "@/lib/log-schema";
 import { type ArtistChip } from "@/lib/server/artists";
 import { type CatalogueTrackItem, type TrackListItem } from "@/lib/server/tracks";
 
-const FINDING_COVER_SIZES = "(min-width: 40rem) 9rem, 45vw";
+export const FINDING_COVER_SIZES = "(min-width: 40rem) 9rem, 45vw";
 const SIMILAR_COVER_SIZES = "(min-width: 40rem) 6.5rem, 30vw";
 
 export function graphPageTracks(
