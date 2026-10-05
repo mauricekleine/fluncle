@@ -210,7 +210,11 @@ function markerOutcome(
   summary: Record<string, unknown> | null,
   job: string,
   day: string,
-): "complete" | "partial" | "skipped" | "started" {
+): "complete" | "ignored" | "partial" | "skipped" | "started" {
+  if (summary?.dryRun === true || summary?.gateState === "dry-run") {
+    return "ignored";
+  }
+
   if (
     summary?.gateState === "admission-skipped" ||
     summary?.payloadStarted === false ||
@@ -303,6 +307,10 @@ export function dailyRetryState(options: {
     }
 
     const outcome = markerOutcome(summaryFromMarker(marker), options.job, day);
+
+    if (outcome === "ignored") {
+      continue;
+    }
 
     if (outcome === "skipped") {
       skipped = true;

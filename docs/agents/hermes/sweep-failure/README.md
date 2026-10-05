@@ -35,6 +35,12 @@ The **render condemnation** case is the cooldown's headline customer: a `render 
 sudo bash docs/agents/hermes/install-host-timers.sh
 ```
 
+After adding a daily-retry unit or changing its final slot, refresh the host notifier template so its final-slot map is current:
+
+```bash
+sudo bash docs/agents/hermes/install-host-timers.sh --refresh-unit fluncle-sweep-failure@.service
+```
+
 There is no timer to enable — the template only ever runs when a sweep fires its `OnFailure=`. To smoke it by hand once deployed:
 
 ```bash

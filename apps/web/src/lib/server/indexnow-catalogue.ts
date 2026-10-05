@@ -6,13 +6,13 @@ import { ARTIST_INDEX_MIN_FINDINGS } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
 import { entityPurgeUrl } from "./edge-cache";
-import { IndexNowFailed, submitIndexNowUrls } from "./indexnow";
+import { buildIndexNowPayload } from "./indexnow";
 import { LABEL_INDEX_MIN_TRACKS } from "./labels";
 import { sitemapWindowStatement } from "./sitemap-data";
 import { TRACK_PAGE_INDEXABLE_WHERE } from "./track-page";
 
 export const INDEXNOW_WINDOW_SIZE = 1000;
-export const INDEXNOW_BATCH_SIZE = 10000;
+export const INDEXNOW_CLAIM_LIMIT = 10000;
 const KINDS = ["log", "artist", "label", "album", "track"] as const;
 export type IndexNowKind = (typeof KINDS)[number];
 export type IndexNowCursor = { after?: string; kind: IndexNowKind };
@@ -298,68 +298,51 @@ async function dueCount(): Promise<number> {
   return Number(result.rows[0]?.n ?? 0);
 }
 
-export async function submitIndexNowCatalogue(dryRun = false): Promise<{
-  due: number;
-  dryRun?: boolean;
-  sample?: string[];
-  status: number | null;
-  submitted: number;
-}> {
+export async function claimIndexNowCatalogue(limit = INDEXNOW_CLAIM_LIMIT) {
   const db = await getDb();
   const rows = typedRows<Version>(
     (
       await db.execute({
-        args: [INDEXNOW_BATCH_SIZE],
+        args: [limit],
         sql: `select kind, subject_id, fingerprint, changed_at from search_page_versions indexed by search_page_versions_due_idx
       where (${DUE_WHERE}) and ${LIVE_WHERE}
       order by ${PRIORITY}, changed_at desc, subject_id limit ?`,
       })
     ).rows,
   );
-  const urls = rows.map(pageUrl);
-  if (dryRun) {
-    return {
-      dryRun: true,
-      due: await dueCount(),
-      sample: urls.slice(0, 5),
-      status: null,
-      submitted: urls.length,
-    };
-  }
-  if (urls.length === 0) {
-    return { due: await dueCount(), status: null, submitted: 0 };
-  }
-  let status: number;
-  try {
-    status = await submitIndexNowUrls(urls);
-  } catch (cause) {
-    const due = await dueCount().catch(() => undefined);
-    if (cause instanceof IndexNowFailed) {
-      throw new IndexNowFailed({
-        cause: cause.cause,
-        due,
-        excerpt: cause.excerpt,
-        status: cause.status,
-      });
-    }
-    throw new IndexNowFailed({ cause, due });
-  }
+  const { host, key, keyLocation } = buildIndexNowPayload([]);
+  return {
+    due: await dueCount(),
+    indexNow: { host, key, keyLocation },
+    items: rows.map((row) => ({
+      changedAt: row.changed_at,
+      fingerprint: row.fingerprint,
+      kind: row.kind,
+      subjectId: row.subject_id,
+      url: pageUrl(row),
+    })),
+  };
+}
+
+export async function ackIndexNowCatalogue(
+  versions: {
+    changedAt: string;
+    fingerprint: string;
+    kind: IndexNowKind;
+    subjectId: string;
+  }[],
+) {
+  const db = await getDb();
   const submittedAt = new Date().toISOString();
-  try {
-    await db.batch(
-      rows.map((row) => ({
-        args: [submittedAt, row.kind, row.subject_id, row.fingerprint, row.changed_at],
-        sql: "update search_page_versions set submitted_at = ? where kind = ? and subject_id = ? and fingerprint = ? and changed_at = ?",
-      })),
-      "write",
-    );
-    return { due: await dueCount(), status, submitted: urls.length };
-  } catch (cause) {
-    throw new IndexNowFailed({
-      cause,
-      due: await dueCount().catch(() => undefined),
-      status,
-      submitted: urls.length,
-    });
-  }
+  const results = await db.batch(
+    versions.map((version) => ({
+      args: [submittedAt, version.kind, version.subjectId, version.fingerprint, version.changedAt],
+      sql: "update search_page_versions set submitted_at = ? where kind = ? and subject_id = ? and fingerprint = ? and changed_at = ?",
+    })),
+    "write",
+  );
+  return {
+    due: await dueCount(),
+    stamped: results.reduce((sum, result) => sum + result.rowsAffected, 0),
+  };
 }

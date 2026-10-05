@@ -9,10 +9,11 @@ vi.mock("./db", async () => ({
 
 import { typedRows } from "./db";
 import { createIntegrationDb } from "./integration-db";
-import { IndexNowFailed } from "./indexnow";
+import { buildIndexNowPayload } from "./indexnow";
 import {
   INDEXNOW_WINDOW_SIZE,
-  submitIndexNowCatalogue,
+  ackIndexNowCatalogue,
+  claimIndexNowCatalogue,
   walkIndexNowCatalogue,
   type IndexNowCursor,
 } from "./indexnow-catalogue";
@@ -274,7 +275,7 @@ describe("observed catalogue versions", () => {
     expect(
       initial.find((row) => row.kind === "track" && row.subject_id === "000001")?.changed_at,
     ).toBe(OBSERVED);
-    await submitIndexNowCatalogue();
+    await ackIndexNowCatalogue((await claimIndexNowCatalogue()).items);
     const accepted = await versions();
     vi.setSystemTime("2026-10-06T00:00:00.000Z");
     await db.execute(
@@ -315,7 +316,7 @@ describe("observed catalogue versions", () => {
       "insert into mixtape_tracks (mixtape_id,track_id,finding_id,position,start_ms) values ('mix','000000','000000',0,0)",
     );
     await walkAll();
-    await submitIndexNowCatalogue();
+    await ackIndexNowCatalogue((await claimIndexNowCatalogue()).items);
     vi.setSystemTime("2026-10-06T00:00:00.000Z");
     await db.execute(
       "update tracks set album_image_url = 'https://example.com/new-cover.jpg' where track_id = '000000'",
@@ -424,49 +425,73 @@ describe("observed catalogue versions", () => {
   });
 });
 
-describe("catalogue submission", () => {
-  it("retains a rejected HTTP status when remaining queue depth cannot be read", async () => {
-    await seedCatalogue();
-    await walkAll();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        vi.spyOn(db, "execute").mockRejectedValueOnce(new Error("queue unavailable"));
-        return new Response("invalid payload", { status: 422 });
-      }),
-    );
-    await expect(submitIndexNowCatalogue()).rejects.toMatchObject({
-      excerpt: "invalid payload",
-      status: 422,
-    });
-    expect((await versions()).every((row) => row.submitted_at === null)).toBe(true);
-  });
-  it("reports accepted URLs when their database acknowledgement fails", async () => {
+describe("catalogue claims and acknowledgements", () => {
+  it("leaves versions due until a matching acknowledgement and uses the server clock", async () => {
     await seedCatalogue();
     await walkAll();
     const before = await versions();
+    const claim = await claimIndexNowCatalogue(5);
+    expect(claim.due).toBe(8);
+    expect(claim.items).toHaveLength(5);
+    const { host, key, keyLocation } = buildIndexNowPayload([]);
+    expect(claim.indexNow).toEqual({ host, key, keyLocation });
+    expect(claim.items.slice(0, 2).map((item) => item.url)).toEqual([
+      "https://www.fluncle.com/log/001.0.0A",
+      "https://www.fluncle.com/log/001.0.0B",
+    ]);
+    expect(await versions()).toEqual(before);
+    expect(fetch).not.toHaveBeenCalled();
+    vi.setSystemTime("2026-10-05T01:00:00.000Z");
+    expect(await ackIndexNowCatalogue(claim.items)).toEqual({ due: 3, stamped: 5 });
+    expect(
+      (await versions())
+        .filter((row) => row.submitted_at !== null)
+        .every((row) => row.submitted_at === "2026-10-05T01:00:00.000Z"),
+    ).toBe(true);
+  });
+
+  it("keeps unaccepted, concurrently changed, and departed versions due", async () => {
+    await seedCatalogue();
+    await walkAll();
+    const claim = await claimIndexNowCatalogue();
+    await db.execute(
+      "update search_page_versions set fingerprint = 'concurrent' where kind = 'artist'",
+    );
+    await db.execute(
+      "update search_page_versions set changed_at = '2026-10-05T00:00:01.000Z' where kind = 'label'",
+    );
+    await db.execute("delete from search_page_versions where kind = 'album'");
+    expect(await ackIndexNowCatalogue(claim.items.filter((item) => item.kind !== "track"))).toEqual(
+      { due: 5, stamped: 2 },
+    );
+    expect(
+      (await versions()).filter((row) => row.submitted_at === null).map((row) => row.kind),
+    ).toEqual(["artist", "label", "track", "track", "track"]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("retains due versions when the acknowledgement write fails", async () => {
+    await seedCatalogue();
+    await walkAll();
+    const claim = await claimIndexNowCatalogue();
+    const before = await versions();
     vi.spyOn(db, "batch").mockRejectedValueOnce(new Error("stamp unavailable"));
-    await expect(submitIndexNowCatalogue()).rejects.toMatchObject({
-      cause: expect.any(Error),
-      due: 8,
-      status: 202,
-      submitted: 8,
-    });
+    await expect(ackIndexNowCatalogue(claim.items)).rejects.toThrow("stamp unavailable");
     expect(await versions()).toEqual(before);
   });
-  it("dry runs show a small sample and exclude pages that left the sitemap", async () => {
+
+  it("claims exclude pages that left the sitemap without changing their versions", async () => {
     await seedCatalogue();
     await walkAll();
     await db.execute("update artists set renderable_track_count = 0");
     await db.execute("update tracks set dismissed_at = '2026-10-05' where track_id = '000001'");
     const before = await versions();
-    const result = await submitIndexNowCatalogue(true);
-    expect(result).toMatchObject({ dryRun: true, due: 8, status: null, submitted: 6 });
-    expect(result.sample).toHaveLength(5);
-    expect(result.sample?.slice(0, 2)).toEqual([
-      "https://www.fluncle.com/log/001.0.0A",
-      "https://www.fluncle.com/log/001.0.0B",
-    ]);
+    const result = await claimIndexNowCatalogue();
+    expect(result.due).toBe(8);
+    expect(result.items).toHaveLength(6);
+    expect(result.items.some((item) => item.kind === "artist" || item.subjectId === "000001")).toBe(
+      false,
+    );
     expect(fetch).not.toHaveBeenCalled();
     expect(await versions()).toEqual(before);
   });
@@ -481,7 +506,9 @@ describe("catalogue submission", () => {
     await db.execute("update findings set log_id = null");
     await db.execute("update mixtapes set status = 'draft'");
     const executed = vi.spyOn(db, "execute");
-    expect(await submitIndexNowCatalogue(true)).toMatchObject({ due: 8, submitted: 2 });
+    const claim = await claimIndexNowCatalogue();
+    expect(claim.due).toBe(8);
+    expect(claim.items).toHaveLength(2);
     const statement = executed.mock.calls[1]?.[0] as InStatement;
     const query = typeof statement === "string" ? { sql: statement } : statement;
     const plan = await db.execute({ ...query, sql: `explain query plan ${query.sql}` });
@@ -498,44 +525,18 @@ describe("catalogue submission", () => {
       checked: 2,
       removed: 1,
     });
-    expect(await submitIndexNowCatalogue(true)).toMatchObject({ due: 2, submitted: 2 });
+    expect((await claimIndexNowCatalogue()).items).toHaveLength(2);
     const remaining = await versions();
     expect(remaining).toHaveLength(2);
     expect(remaining.every((row) => row.kind === "track")).toBe(true);
     await db.execute("update tracks set dismissed_at = '2026-10-05'");
-    expect(await submitIndexNowCatalogue()).toMatchObject({ due: 2, status: null, submitted: 0 });
+    const empty = await claimIndexNowCatalogue();
+    expect(empty.due).toBe(2);
+    expect(empty.items).toEqual([]);
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("keeps rejected and concurrently changed versions due", async () => {
-    await seedCatalogue();
-    await walkAll();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("too many requests", { status: 429 })),
-    );
-    const before = await versions();
-    await expect(submitIndexNowCatalogue()).rejects.toMatchObject({
-      due: 8,
-      excerpt: "too many requests",
-      status: 429,
-    });
-    expect(await versions()).toEqual(before);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        await db.execute(
-          "update search_page_versions set fingerprint = 'concurrent',changed_at = '2026-10-05T00:00:01.000Z' where kind = 'artist'",
-        );
-        return new Response(null, { status: 200 });
-      }),
-    );
-    expect(await submitIndexNowCatalogue()).toEqual({ due: 1, status: 200, submitted: 8 });
-    const remaining = (await versions()).filter((row) => row.submitted_at === null);
-    expect(remaining).toMatchObject([{ fingerprint: "concurrent", kind: "artist" }]);
-  });
-
-  it("bounds a request to ten thousand newest URLs with logs ahead of the catalogue", async () => {
+  it("bounds claims to ten thousand newest URLs with logs ahead of the catalogue", async () => {
     await seedCatalogue();
     await db.batch(
       Array.from({ length: 10001 }, (_, index) => ({
@@ -552,17 +553,11 @@ describe("catalogue submission", () => {
     );
     await walkAll();
     const executed = vi.spyOn(db, "execute");
-    expect(await submitIndexNowCatalogue()).toEqual({ due: 9, status: 202, submitted: 10000 });
-    const body = vi.mocked(fetch).mock.calls[0]?.[1]?.body;
-    if (typeof body !== "string") {
-      throw new Error("IndexNow request body missing");
-    }
-    const posted = JSON.parse(body) as {
-      urlList: string[];
-    };
-    expect(posted.urlList).toHaveLength(10000);
-    expect(posted.urlList.every((url) => url.includes("/log/"))).toBe(true);
-    expect(posted.urlList[0]).toBe("https://www.fluncle.com/log/log-00001");
+    const claim = await claimIndexNowCatalogue();
+    expect(claim.due).toBe(10009);
+    expect(claim.items).toHaveLength(10000);
+    expect(claim.items.every((item) => item.kind === "log")).toBe(true);
+    expect(claim.items[0]?.url).toBe("https://www.fluncle.com/log/log-00001");
     const statement = executed.mock.calls[0]?.[0] as InStatement;
     const query = typeof statement === "string" ? { sql: statement } : statement;
     const plan = await db.execute({ ...query, sql: `explain query plan ${query.sql}` });
@@ -571,18 +566,7 @@ describe("catalogue submission", () => {
       .join("\n");
     expect(details).toContain("search_page_versions_due_idx");
     expect(details).not.toContain("TEMP B-TREE FOR ORDER BY");
-  });
-
-  it("leaves accepted timestamps untouched on a network failure", async () => {
-    await seedCatalogue();
-    await walkAll();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw new Error("offline");
-      }),
-    );
-    await expect(submitIndexNowCatalogue()).rejects.toBeInstanceOf(IndexNowFailed);
-    expect((await versions()).every((row) => row.submitted_at === null)).toBe(true);
+    expect(await ackIndexNowCatalogue(claim.items)).toEqual({ due: 9, stamped: 10000 });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

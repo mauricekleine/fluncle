@@ -1,5 +1,8 @@
-import { submitIndexNowCatalogue, walkIndexNowCatalogue } from "../indexnow-catalogue";
-import { IndexNowFailed } from "../indexnow";
+import {
+  ackIndexNowCatalogue,
+  claimIndexNowCatalogue,
+  walkIndexNowCatalogue,
+} from "../indexnow-catalogue";
 import { adminAuth } from "../orpc-auth";
 import { apiFault, type Implementer } from "./_shared";
 
@@ -14,22 +17,19 @@ export function adminIndexNowHandlers(os: Implementer) {
             phase: "walk" as const,
           };
         }
-        return {
-          ...(await submitIndexNowCatalogue(input.dryRun ?? false)),
-          ok: true,
-          phase: "submit" as const,
-        };
-      } catch (error) {
-        if (input.phase === "submit" && error instanceof IndexNowFailed) {
+        if (input.phase === "claim") {
           return {
-            due: error.due ?? null,
-            error: String(error.cause),
-            ok: false,
-            phase: "submit" as const,
-            status: error.status ?? null,
-            submitted: error.submitted ?? 0,
+            ...(await claimIndexNowCatalogue(input.limit)),
+            ok: true as const,
+            phase: "claim" as const,
           };
         }
+        return {
+          ...(await ackIndexNowCatalogue(input.versions)),
+          ok: true as const,
+          phase: "ack" as const,
+        };
+      } catch (error) {
         throw apiFault(error);
       }
     }),

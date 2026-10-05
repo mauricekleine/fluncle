@@ -7,18 +7,38 @@ const IndexNowCursorSchema = z.object({
   kind: IndexNowKindSchema,
 });
 
+const IndexNowVersionSchema = z.object({
+  changedAt: z
+    .string()
+    .min(10)
+    .max(64)
+    .regex(/^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})?)?$/)
+    .refine((value) => Number.isFinite(Date.parse(value)), "Invalid change date"),
+  fingerprint: z.string().min(1).max(128),
+  kind: IndexNowKindSchema,
+  subjectId: z.string().min(1).max(512),
+});
+
 export const submitIndexNow = oc
   .route({
     method: "POST",
     operationId: "submitIndexnow",
     path: "/admin/indexnow/submit",
-    summary: "Observe one catalogue window or submit due page versions to IndexNow",
+    summary:
+      "Observe, claim, or acknowledge catalogue page versions for box-side IndexNow submission",
     tags: ["Admin"],
   })
   .input(
     z.discriminatedUnion("phase", [
       z.object({ cursor: IndexNowCursorSchema.optional(), phase: z.literal("walk") }),
-      z.object({ dryRun: z.boolean().optional(), phase: z.literal("submit") }),
+      z.object({
+        limit: z.number().int().min(1).max(10000).default(10000),
+        phase: z.literal("claim"),
+      }),
+      z.object({
+        phase: z.literal("ack"),
+        versions: z.array(IndexNowVersionSchema).min(1).max(10000),
+      }),
     ]),
   )
   .output(
@@ -34,14 +54,17 @@ export const submitIndexNow = oc
         removed: z.number().int().nonnegative(),
       }),
       z.object({
-        dryRun: z.boolean().optional(),
-        due: z.number().int().nonnegative().nullable(),
-        error: z.string().optional(),
-        ok: z.boolean(),
-        phase: z.literal("submit"),
-        sample: z.array(z.string()).max(10).optional(),
-        status: z.number().int().nullable(),
-        submitted: z.number().int().nonnegative(),
+        due: z.number().int().nonnegative(),
+        indexNow: z.object({ host: z.string(), key: z.string(), keyLocation: z.string() }),
+        items: z.array(IndexNowVersionSchema.extend({ url: z.string() })).max(10000),
+        ok: z.literal(true),
+        phase: z.literal("claim"),
+      }),
+      z.object({
+        due: z.number().int().nonnegative(),
+        ok: z.literal(true),
+        phase: z.literal("ack"),
+        stamped: z.number().int().nonnegative(),
       }),
     ]),
   );

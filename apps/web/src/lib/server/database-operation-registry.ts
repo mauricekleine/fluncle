@@ -202,7 +202,7 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   "catalogue.demand": wholeLifetime("One bounded demand-projection write is the payload."),
   "catalogue.indexnow": phased(
     `${SCRIPTS}/indexnow.ts`,
-    "Each bounded page-version window and the final submission run in separate admitted phases; cursor persistence and work between requests hold no lease.",
+    "Each bounded page-version walk, read-only claim, and accepted-batch acknowledgement run in separate admitted phases; paced box-side IndexNow requests and cursor persistence hold no lease.",
     1,
   ),
   "catalogue.isrc-recovery": phased(
@@ -410,7 +410,7 @@ export const DATABASE_MUTATION_POLICIES = {
     rationale:
       "Observation writes only new or changed fingerprints, and accepted submission stamps compare the current fingerprint and change date; replayed notifications leave page content unchanged.",
     reconciliation:
-      "Read the remaining due page versions and repeat the bounded submission; accepted matching versions leave the due worklist.",
+      "Claim remaining due versions, post paced batches from the box, then acknowledge accepted matching versions; unaccepted or concurrently changed versions remain due.",
   },
   "catalogue.isrc-recovery": {
     evidenceSource: "apps/web/src/lib/server/recording-mbids.ts",

@@ -319,6 +319,29 @@ describe("daily and weekly retry", () => {
     expect(attempts(setup.attempts)).toBe(2);
   });
 
+  test("dry-run markers leave today's retry slot pending for a real payload", () => {
+    for (const { job, summary } of [
+      { job: "indexnow", summary: { dryRun: true } },
+      { job: "backup", summary: { gateState: "dry-run" } },
+    ]) {
+      const setup = fixture(job);
+      const completed = join(setup.root, "completed.md");
+      writeMarker(setup.markerDirectory, "dry-run", JSON.stringify(summary));
+      writeFileSync(completed, '# Cron Job\n\n{"errors":0,"ok":true}\n');
+      const options = {
+        directory: setup.output,
+        job: `fluncle-${job}`,
+        now: FIXED_NOW,
+        primarySlot: "11:00",
+        timeZone: "UTC",
+      };
+
+      expect(dailyRetryState(options)).toBe("pending");
+      expect(run(setup, job, "13:00", { resultMarker: completed }).status).toBe(0);
+      expect(attempts(setup.attempts)).toBe(1);
+    }
+  });
+
   test("a zero-window reconcile admission pause retries, while work from one window never repeats", () => {
     const setup = fixture("reconcile-hub-counts");
     const paused = JSON.stringify({

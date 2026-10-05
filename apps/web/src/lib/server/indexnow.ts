@@ -9,14 +9,14 @@ export const INDEXNOW_KEY = "8337c1b41068549f248bf56f1fc465df";
 
 const INDEXNOW_ENDPOINT = "https://api.indexnow.org/indexnow";
 
+const INDEXNOW_RATE_LIMIT_FALLBACK_ENDPOINT = "https://yandex.com/indexnow";
+
 const INDEXNOW_TIMEOUT = Duration.seconds(15);
 
 export class IndexNowFailed extends Data.TaggedError("IndexNowFailed")<{
   cause: unknown;
-  due?: number;
   excerpt?: string;
   status?: number;
-  submitted?: number;
 }> {}
 
 const INDEXNOW_HOST = new URL(siteUrl).host;
@@ -76,15 +76,22 @@ async function responseExcerpt(response: Response): Promise<string> {
 
 const requestIndexNow = Effect.fnUntraced(function* (urls: string[]) {
   let status: number | undefined;
-  return yield* Effect.tryPromise({
+  const accepted = yield* Effect.tryPromise({
     catch: (cause) => (cause instanceof IndexNowFailed ? cause : new IndexNowFailed({ cause })),
     try: async (signal) => {
-      const response = await fetch(INDEXNOW_ENDPOINT, {
+      const init = {
         body: JSON.stringify(buildIndexNowPayload(urls)),
         headers: { "Content-Type": "application/json; charset=utf-8" },
         method: "POST",
         signal,
-      });
+      };
+      let endpoint = INDEXNOW_ENDPOINT;
+      let response = await fetch(endpoint, init);
+      if (response.status === 429) {
+        void response.body?.cancel().catch(() => {});
+        endpoint = INDEXNOW_RATE_LIMIT_FALLBACK_ENDPOINT;
+        response = await fetch(endpoint, init);
+      }
       status = response.status;
       if (response.status !== 200 && response.status !== 202) {
         const excerpt = await responseExcerpt(response).catch(() => "response body unavailable");
@@ -95,7 +102,7 @@ const requestIndexNow = Effect.fnUntraced(function* (urls: string[]) {
         });
       }
       void response.body?.cancel().catch(() => {});
-      return response.status;
+      return { endpoint, status: response.status };
     },
   }).pipe(
     Effect.timeoutOrElse({
@@ -103,6 +110,12 @@ const requestIndexNow = Effect.fnUntraced(function* (urls: string[]) {
       orElse: () => Effect.fail(new IndexNowFailed({ cause: "timeout", status })),
     }),
   );
+  if (accepted.endpoint !== INDEXNOW_ENDPOINT) {
+    yield* Effect.logInfo("indexnow.fallback-accepted").pipe(
+      Effect.annotateLogs({ endpoint: accepted.endpoint, status: accepted.status }),
+    );
+  }
+  return accepted.status;
 });
 
 export function submitIndexNowUrls(urls: string[]): Promise<number> {
