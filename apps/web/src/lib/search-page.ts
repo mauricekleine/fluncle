@@ -1,4 +1,5 @@
 import { MAX_QUERY_LENGTH } from "./search-results";
+import { fluncleCoverImageMeta, fluncleCoverUrl } from "./cover-meta";
 import { fluncleWebsiteId, siteUrl } from "./fluncle-links";
 import { jsonLdScript } from "./json-ld";
 import { textParam } from "./search-params";
@@ -35,19 +36,18 @@ export function searchPageHead(query: string | undefined, like?: { credit?: stri
         ? searchPageMetaTitle(query)
         : `Tracks like ${like.credit} · Fluncle`;
   const description = searchPageDescription;
-  const ogImage = `${siteUrl}/fluncle-cover.png`;
 
   const meta = [
     { title },
     { content: description, name: "description" },
     { content: title, property: "og:title" },
     { content: description, property: "og:description" },
-    { content: ogImage, property: "og:image" },
+    ...fluncleCoverImageMeta,
     { content: canonical, property: "og:url" },
     { content: "summary_large_image", name: "twitter:card" },
     { content: title, name: "twitter:title" },
     { content: description, name: "twitter:description" },
-    { content: ogImage, name: "twitter:image" },
+    { content: fluncleCoverUrl, name: "twitter:image" },
   ];
 
   if (!indexable) {

@@ -121,6 +121,18 @@ export function albumArtistCredit(tracks: Array<{ artists: string[] }>): string 
   return shared.length > 0 && shared.length <= 2 ? shared.join(" & ") : undefined;
 }
 
+export function completeAlbumArtistCredit(album: {
+  catalogue: Array<{ artists: string[] }>;
+  catalogueTotal: number;
+  findings: Array<{ artists: string[] }>;
+}): string | undefined {
+  if (album.catalogue.length < album.catalogueTotal) {
+    return undefined;
+  }
+
+  return albumArtistCredit([...album.findings, ...album.catalogue]);
+}
+
 export function albumPageTitle(album: {
   artist: string | undefined;
   name: string;

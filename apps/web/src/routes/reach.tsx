@@ -26,6 +26,7 @@ import {
   type PlatformStatSeries,
   type PlatformStatsView,
 } from "@/lib/server/platform-stats";
+import { fluncleCoverImageMeta } from "@/lib/cover-meta";
 
 type Bucket = "crew" | "hangar" | "reach";
 
@@ -449,7 +450,7 @@ function reachHead({ loaderData }: { loaderData?: PlatformStatsView }) {
       { content: description, name: "description" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
-      { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+      ...fluncleCoverImageMeta,
       { content: `${siteUrl}/reach`, property: "og:url" },
     ],
     scripts: [jsonLdScript(entity)],

@@ -14,7 +14,18 @@ import { getPublicArtistBySlug } from "@/lib/server/artists";
 import { hasPublicGraphTracks } from "@/lib/server/hub-counts";
 import { getLabelBySlug } from "@/lib/server/labels";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
-import { getFindingsByAlbum, getFindingsByArtist, getFindingsByLabel } from "@/lib/server/tracks";
+import {
+  albumPageTitle,
+  artistPageTitle,
+  completeAlbumArtistCredit,
+  labelPageTitle,
+} from "@/lib/page-meta";
+import {
+  getFindingsByAlbum,
+  getFindingsByArtist,
+  getFindingsByLabel,
+  listCatalogueTracksByAlbum,
+} from "@/lib/server/tracks";
 
 const JSON_HEADERS = {
   "Cache-Control": "public, max-age=3600",
@@ -106,7 +117,7 @@ async function resolveOembed(
     return buildLinkResponse({
       authorName: artist.name,
       thumbnailUrl,
-      title: `${artist.name} · Fluncle`,
+      title: artistPageTitle(artist.name),
     });
   }
 
@@ -126,7 +137,7 @@ async function resolveOembed(
     return buildLinkResponse({
       authorName: label.name,
       thumbnailUrl,
-      title: `${label.name} · Fluncle`,
+      title: labelPageTitle(label.name),
     });
   }
 
@@ -137,7 +148,11 @@ async function resolveOembed(
       return undefined;
     }
 
-    const cover = (await getFindingsByAlbum(album.id))[0];
+    const [findings, catalogue] = await Promise.all([
+      getFindingsByAlbum(album.id),
+      listCatalogueTracksByAlbum(album.id),
+    ]);
+    const cover = findings[0];
     const thumbnailUrl =
       (cover ? albumCoverAtSize(cover.albumImageUrl, "large") : undefined) ??
       `${siteUrl}/fluncle-cover.png`;
@@ -146,7 +161,15 @@ async function resolveOembed(
 
     return buildLinkResponse({
       thumbnailUrl,
-      title: `${album.name} · Fluncle`,
+      title: albumPageTitle({
+        artist: completeAlbumArtistCredit({
+          catalogue: catalogue.tracks,
+          catalogueTotal: catalogue.total,
+          findings,
+        }),
+        name: album.name,
+        releaseDate: album.releaseDate,
+      }),
       ...(authorName ? { authorName } : {}),
     });
   }

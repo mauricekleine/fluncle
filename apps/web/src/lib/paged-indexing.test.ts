@@ -3,6 +3,7 @@ import {
   formatHubTitleSnippet,
   formatNameList,
   formatNameRange,
+  formatPageTitleSnippet,
   formatReleaseSpan,
 } from "./paged-indexing";
 
@@ -30,6 +31,15 @@ describe("formatHubTitleSnippet", () => {
       expect(formatHubTitleSnippet(names, order)).toBe(expected);
     },
   );
+});
+
+describe("formatPageTitleSnippet", () => {
+  it("ranges alphabetical pages and lists the first two names otherwise", () => {
+    expect(formatPageTitleSnippet(["Anchor", "Middle", "Zebra"], true)).toBe("Anchor to Zebra");
+    expect(formatPageTitleSnippet(["Zebra", "Anchor", "Middle"], false)).toBe(
+      "Zebra, Anchor and more",
+    );
+  });
 });
 
 describe("formatNameRange", () => {

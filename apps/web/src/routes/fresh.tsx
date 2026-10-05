@@ -13,6 +13,7 @@ import { jsonLdScript } from "@/lib/json-ld";
 import { logPageUrl } from "@/lib/log-schema";
 import { listFreshReleases } from "@/lib/server/fresh";
 import { releaseTodayUtc } from "@/lib/server/release-day";
+import { fluncleCoverImageMeta } from "@/lib/cover-meta";
 
 const fetchFresh = createServerFn({ method: "GET" }).handler(async (): Promise<FreshPage> => {
   const now = new Date();
@@ -73,7 +74,7 @@ function freshHead(loaderData: FreshPage | undefined) {
       { content: description, name: "description" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
-      { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+      ...fluncleCoverImageMeta,
       { content: pageUrl, property: "og:url" },
       { content: "summary_large_image", name: "twitter:card" },
       { content: title, name: "twitter:title" },

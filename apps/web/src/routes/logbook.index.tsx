@@ -6,6 +6,7 @@ import { jsonLdScript } from "@/lib/json-ld";
 import { formatSector, sectorDateISO } from "@/lib/log-id-shared";
 import { logbookPath } from "@/lib/logbook";
 import { listLogbookIndexEntries, type LogbookIndexEntry } from "@/lib/server/logbook";
+import { fluncleCoverImageMeta } from "@/lib/cover-meta";
 
 const fetchLogbook = createServerFn({ method: "GET" }).handler(() =>
   listLogbookIndexEntries({ limit: 500 }),
@@ -37,7 +38,7 @@ function logbookIndexHead(entries: LogbookIndexEntry[] | undefined) {
       { content: description, name: "description" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
-      { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+      ...fluncleCoverImageMeta,
       { content: `${siteUrl}/logbook`, property: "og:url" },
     ],
 

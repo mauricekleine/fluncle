@@ -7,6 +7,7 @@ import {
   albumPageTitle,
   artistMetaDescription,
   artistPageTitle,
+  completeAlbumArtistCredit,
   labelMetaDescription,
   labelPageTitle,
   trackMetaDescription,
@@ -89,6 +90,16 @@ describe("albumArtistCredit", () => {
   it("credits no one on a compilation or an empty record", () => {
     expect(albumArtistCredit([{ artists: ["Seba"] }, { artists: ["Paradox"] }])).toBeUndefined();
     expect(albumArtistCredit([])).toBeUndefined();
+  });
+});
+
+describe("completeAlbumArtistCredit", () => {
+  it("credits the shared artist only when every track on the record is loaded", () => {
+    const findings = [{ artists: ["Seba"] }];
+    const catalogue = [{ artists: ["Seba"] }];
+
+    expect(completeAlbumArtistCredit({ catalogue, catalogueTotal: 1, findings })).toBe("Seba");
+    expect(completeAlbumArtistCredit({ catalogue, catalogueTotal: 2, findings })).toBeUndefined();
   });
 });
 

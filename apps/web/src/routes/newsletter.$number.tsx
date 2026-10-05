@@ -8,6 +8,7 @@ import { newsletterBreadcrumbsJsonLd } from "@/lib/log-schema";
 import { editionsLabels } from "@/lib/server/edition-email";
 import { getEditionByNumber } from "@/lib/server/editions";
 import { listGalaxyNames } from "@/lib/server/galaxies-map";
+import { fluncleCoverImageMeta } from "@/lib/cover-meta";
 
 type EditionLoaderData = {
   edition: EditionDTO;
@@ -52,7 +53,7 @@ function editionHead(edition: EditionDTO | undefined) {
       { content: description, name: "description" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
-      { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+      ...fluncleCoverImageMeta,
       { content: pageUrl, property: "og:url" },
       { content: "article", property: "og:type" },
     ],

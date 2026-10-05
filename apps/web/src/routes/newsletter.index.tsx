@@ -5,6 +5,7 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { findingsCount, formatDateLong } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { listEditions } from "@/lib/server/editions";
+import { fluncleCoverImageMeta } from "@/lib/cover-meta";
 
 const fetchEditions = createServerFn({ method: "GET" }).handler(() => listEditions());
 
@@ -23,7 +24,7 @@ export const Route = createFileRoute("/newsletter/")({
       { content: description, name: "description" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
-      { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+      ...fluncleCoverImageMeta,
       { content: `${siteUrl}/newsletter`, property: "og:url" },
     ],
 

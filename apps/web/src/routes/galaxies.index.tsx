@@ -8,6 +8,7 @@ import { galaxySoundLine } from "@/lib/galaxy-sound";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumCoverAtSize } from "@/lib/media";
 import { type GalaxyPane, listGalaxyPanes } from "@/lib/server/galaxies-map";
+import { fluncleCoverImageMeta } from "@/lib/cover-meta";
 
 const PANE_COVER_CAP = 5;
 
@@ -40,7 +41,7 @@ function galaxiesHead(loaderData: GalaxyPane[] | undefined) {
       { content: description, name: "description" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
-      { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+      ...fluncleCoverImageMeta,
       { content: `${siteUrl}/galaxies`, property: "og:url" },
     ],
 
