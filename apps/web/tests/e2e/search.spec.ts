@@ -305,6 +305,44 @@ test("⌘K stays the accelerator on every public page and HANDS OFF to the surfa
   expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
 });
 
+test("keys typed straight after ⌘K land in the field while the palette still loads", async ({
+  page,
+}) => {
+  await blockExternalRequests(page);
+
+  const problems = watchForErrors(page);
+
+  await page.route(/search-dialog/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.continue();
+  });
+
+  const response = await page.goto("/log", { waitUntil: "networkidle" });
+  expect(response?.status()).toBe(200);
+  await expect(page.locator("html[data-discovery-listening]")).toBeAttached({ timeout: 30_000 });
+
+  const trigger = page.getByRole("button", { name: "Search the archive" });
+  await expect(trigger).toContainText("Search");
+
+  await trigger.focus();
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.keyboard.type("Aurorx");
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type("a");
+
+  const dialogInput = page.getByPlaceholder("A name, a coordinate, or the sound of it…");
+
+  await expect(dialogInput).toBeVisible({ timeout: 15_000 });
+  await expect(dialogInput).toHaveValue("Aurora");
+  await expect(dialogInput).toBeFocused();
+  await expect(page.getByRole("option", { name: new RegExp(FIRST_FINDING_TITLE) })).toBeVisible();
+
+  await page.keyboard.type(" ");
+  await expect(dialogInput).toHaveValue("Aurora ");
+
+  expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
+});
+
 test("the handoff is offered even when the palette found nothing", async ({ page }) => {
   await blockExternalRequests(page);
 

@@ -6082,9 +6082,16 @@ a.catalogue-letter:focus-visible {
 }
 
 /* The word is a courtesy on a wide screen and noise on a narrow one; the glyph carries the
-   affordance on its own, and the button keeps its accessible name either way. */
+   affordance on its own. The label is clipped, never removed, because it IS the button's
+   accessible name ("Search" plus a screen-reader-only " the archive"): the name always starts
+   with the visible word, so speech users can say what they see. */
 .search-trigger-label {
-  display: none;
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
 }
 
 /* The shortcut hint. A hint, not a control: it never gets its own contrast budget, and it
@@ -6102,7 +6109,11 @@ a.catalogue-letter:focus-visible {
 
 @media (min-width: 40rem) {
   .search-trigger-label {
-    display: inline;
+    clip-path: none;
+    height: auto;
+    overflow: visible;
+    position: static;
+    width: auto;
   }
 }
 

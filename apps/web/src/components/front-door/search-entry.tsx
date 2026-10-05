@@ -22,6 +22,7 @@ export function FrontDoorSearch(): ReactNode {
         className="fd-search-field"
         onClick={() => open()}
         onFocus={prefetchSearchDialog}
+        onPointerDown={prefetchSearchDialog}
         onPointerEnter={prefetchSearchDialog}
         type="button"
       >
