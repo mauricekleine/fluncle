@@ -33,16 +33,6 @@ describe("graph page titles say what the page holds", () => {
     expect(artistPageTitle(long)).toBe(`${long} · Fluncle`);
   });
 
-  it("keeps the page number on a paged title, inside the budget", () => {
-    const title = labelPageTitle("Hospital Records", 3);
-
-    expect(title).toBe("Hospital Records: drum & bass releases, page 3 · Fluncle");
-    expect(title.length).toBeLessThanOrEqual(PAGE_TITLE_MAX);
-    expect(artistPageTitle("Grimesy", 2)).toBe(
-      "Grimesy: drum & bass tracks and releases, page 2 · Fluncle",
-    );
-  });
-
   it("names an album's artist and year, the words people search with", () => {
     expect(albumPageTitle({ artist: "Seba", name: "Big Ting EP", releaseDate: "2026-03-06" })).toBe(
       "Big Ting EP by Seba: 2026 drum & bass release · Fluncle",

@@ -7,9 +7,8 @@ const SITE_SUFFIX = " · Fluncle";
 
 type Credited = { artists: string[]; title: string };
 
-function pickTitle(heads: string[], page: number | undefined): string {
-  const pageSuffix = page !== undefined && page > 1 ? `, page ${page}` : "";
-  const titles = heads.map((head) => `${head}${pageSuffix}${SITE_SUFFIX}`);
+function pickTitle(heads: string[]): string {
+  const titles = heads.map((head) => `${head}${SITE_SUFFIX}`);
 
   return titles.find((title) => title.length <= PAGE_TITLE_MAX) ?? titles.at(-1) ?? SITE_SUFFIX;
 }
@@ -90,18 +89,20 @@ function yearOf(date: string | undefined): string | undefined {
   return year && /^\d{4}$/u.test(year) ? year : undefined;
 }
 
-export function artistPageTitle(name: string, page?: number): string {
-  return pickTitle(
-    [`${name}: drum & bass tracks and releases`, `${name}: drum & bass tracks`, name],
-    page,
-  );
+export function artistPageTitle(name: string): string {
+  return pickTitle([
+    `${name}: drum & bass tracks and releases`,
+    `${name}: drum & bass tracks`,
+    name,
+  ]);
 }
 
-export function labelPageTitle(name: string, page?: number): string {
-  return pickTitle(
-    [`${name}: drum & bass releases and artists`, `${name}: drum & bass releases`, name],
-    page,
-  );
+export function labelPageTitle(name: string): string {
+  return pickTitle([
+    `${name}: drum & bass releases and artists`,
+    `${name}: drum & bass releases`,
+    name,
+  ]);
 }
 
 export function albumArtistCredit(tracks: Array<{ artists: string[] }>): string | undefined {
@@ -138,7 +139,6 @@ export function albumPageTitle(album: {
       `${name}: drum & bass release`,
       name,
     ].filter((head) => head !== undefined),
-    undefined,
   );
 }
 
@@ -152,7 +152,6 @@ export function trackPageTitle(track: Credited & { releaseDate: string | undefin
       `${line}: drum & bass track`,
       line,
     ].filter((head) => head !== undefined),
-    undefined,
   );
 }
 

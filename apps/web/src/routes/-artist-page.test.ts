@@ -360,7 +360,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
 
     const paged = await resolveArtistPageData("drift", "name", 2);
 
-    expect(headTitle(paged)).toBe("Drift: drum & bass tracks and releases, page 2 · Fluncle");
+    expect(headTitle(paged)).toBe("Drift, page 2 · Fluncle");
     expect(metaDescription(paged)).toBe(
       "Page 2 of the drum & bass records by Drift that Fluncle holds.",
     );

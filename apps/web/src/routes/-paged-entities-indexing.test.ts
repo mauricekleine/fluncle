@@ -256,7 +256,7 @@ type EntityOptions = {
 const entities = [
   {
     canonical: "https://www.fluncle.com/artist/drift",
-    description: "Drum & bass tracks by Drift, with the labels and releases behind them.",
+    description: "Drum & bass by Drift: 192 tracks, with the releases and labels behind them.",
     head: (options: EntityOptions = {}) => {
       const data = artistData({
         indexable: options.indexable ?? true,
@@ -267,11 +267,11 @@ const entities = [
       return artistHead({ ...data, catalogue: { ...data.catalogue, page: options.page ?? 1 } });
     },
     name: "artist",
-    title: "Drift · Fluncle",
+    title: "Drift: drum & bass tracks and releases · Fluncle",
   },
   {
     canonical: "https://www.fluncle.com/label/depth",
-    description: "Drum & bass records released on Depth, with the artists behind them.",
+    description: "Drum & bass released on Depth: 192 tracks.",
     head: (options: EntityOptions = {}) => {
       const data = labelData({
         indexable: options.indexable ?? true,
@@ -282,12 +282,12 @@ const entities = [
       return labelHead({ ...data, catalogue: { ...data.catalogue, page: options.page ?? 1 } });
     },
     name: "label",
-    title: "Depth · Fluncle",
+    title: "Depth: drum & bass releases and artists · Fluncle",
   },
 ];
 
 describe.each(hubs)("$name hub head", (hub) => {
-  it("preserves the original page-one title and description", () => {
+  it("keeps the page-one title and description", () => {
     const head = hub.head();
 
     expectTitles(head, hub.title);
@@ -357,7 +357,7 @@ describe.each(hubs)("$name hub head", (hub) => {
 });
 
 describe.each(entities)("$name entity head", (entity) => {
-  it("preserves the original page-one title and description", () => {
+  it("keeps the page-one title and description", () => {
     const head = entity.head();
 
     expectTitles(head, entity.title);
