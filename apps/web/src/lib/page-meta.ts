@@ -204,12 +204,13 @@ export function albumMetaDescription(album: {
   label: string | undefined;
   name: string;
   releaseDate: string | undefined;
+  trackCount?: number;
   trackTitles: string[];
 }): string {
   const { artist, bio, findingCount, label, name } = album;
   const year = yearOf(album.releaseDate);
   const titles = uniqueNames(album.trackTitles);
-  const trackCount = Math.max(album.trackTitles.length, findingCount);
+  const trackCount = Math.max(album.trackCount ?? 0, album.trackTitles.length, findingCount);
 
   const release = `a ${year ? `${year} ` : ""}drum & bass release${label ? ` on ${label}` : ""}`;
   const lead = `${name}${artist ? ` by ${artist}` : ""}, ${release}.`;

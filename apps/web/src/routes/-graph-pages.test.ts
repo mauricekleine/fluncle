@@ -345,6 +345,23 @@ describe("the album page", () => {
     expect(value("twitter:description")).toBe(value("description"));
   });
 
+  it("drops the artist credit and counts the whole record when the tracklist is capped", async () => {
+    getAlbumBySlug.mockResolvedValue({ ...ALBUM, renderableTrackCount: 101 });
+    getFindingsByAlbum.mockResolvedValue([]);
+    listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(101, 100));
+
+    const data = await resolveAlbumPageData("wormhole");
+    const head = AlbumRoute.options.head?.({ loaderData: data } as never) as {
+      meta: Array<{ content?: string; name?: string; title?: string }>;
+    };
+    const title = head.meta.find((entry) => entry.title !== undefined)?.title;
+    const description = head.meta.find((entry) => entry.name === "description")?.content;
+
+    expect(title).not.toContain("Nu:Tone");
+    expect(description).not.toContain("Nu:Tone");
+    expect(description).toContain("101 tracks");
+  });
+
   it("404s a zero-public-track album even when a raw tracklist row exists", async () => {
     getAlbumBySlug.mockResolvedValue({ ...ALBUM, renderableTrackCount: 0 });
     listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(1));

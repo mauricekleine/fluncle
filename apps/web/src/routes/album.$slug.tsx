@@ -35,6 +35,7 @@ function albumHead(loaderData: AlbumPageData | undefined) {
     bio,
     catalogNumber,
     catalogue,
+    catalogueTotal,
     coverImageUrl,
     findings,
     indexable,
@@ -48,7 +49,8 @@ function albumHead(loaderData: AlbumPageData | undefined) {
   const pageUrl = `${siteUrl}/album/${slug}`;
 
   const tracks = [...findings, ...catalogue];
-  const artist = albumArtistCredit(tracks);
+  const tracklistComplete = catalogue.length >= catalogueTotal;
+  const artist = tracklistComplete ? albumArtistCredit(tracks) : undefined;
   const title = albumPageTitle({ artist, name, releaseDate });
   const description = albumMetaDescription({
     artist,
@@ -57,6 +59,7 @@ function albumHead(loaderData: AlbumPageData | undefined) {
     label: label?.name,
     name,
     releaseDate,
+    trackCount: findings.length + catalogueTotal,
     trackTitles: tracks.map((track) => track.title),
   });
   const imageUrl = albumCoverAtSize(coverImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
