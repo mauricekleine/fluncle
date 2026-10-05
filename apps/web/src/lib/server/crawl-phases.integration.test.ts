@@ -12,6 +12,7 @@ import {
 } from "@fluncle/contracts/orpc";
 
 import {
+  commitCrawlNodes,
   commitCrawlPhase,
   CRAWL_PHASE_TOKEN_MAX_BYTES,
   type CrawlPhasePrepareResult,
@@ -40,6 +41,7 @@ type TransactionCounts = {
   commit: number;
   execute: number;
   maxBatchStatements: number;
+  statements: unknown[];
 };
 
 vi.mock("./db", async (importOriginal) => {
@@ -86,6 +88,31 @@ function providerReleaseWithArtistCount(
   };
 }
 
+function providerBatchRelease(
+  id: string | undefined,
+  label: { id?: string; name: string },
+): object {
+  return {
+    ...providerRelease(1),
+    id,
+    "label-info": [{ label }],
+    media: [
+      {
+        tracks: [
+          {
+            recording: {
+              "artist-credit": [{ artist: { id: "artist-0", name: "Artist 0" } }],
+              id: `recording-${id}`,
+              length: 180_000,
+              title: `Track ${id}`,
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function providerBrowse(childCount: number): object {
   return {
     "release-count": childCount,
@@ -97,7 +124,13 @@ function providerBrowse(childCount: number): object {
 }
 
 function instrumentTransactions(client: Client): { client: Client; counts: TransactionCounts } {
-  const counts: TransactionCounts = { batch: 0, commit: 0, execute: 0, maxBatchStatements: 0 };
+  const counts: TransactionCounts = {
+    batch: 0,
+    commit: 0,
+    execute: 0,
+    maxBatchStatements: 0,
+    statements: [],
+  };
   const originalTransaction = client.transaction.bind(client);
   client.transaction = (async (...args: Parameters<Client["transaction"]>) => {
     const transaction = await originalTransaction(...args);
@@ -106,11 +139,13 @@ function instrumentTransactions(client: Client): { client: Client; counts: Trans
     const originalCommit = transaction.commit.bind(transaction);
     transaction.execute = ((...executeArgs: Parameters<typeof transaction.execute>) => {
       counts.execute += 1;
+      counts.statements.push(executeArgs[0]);
       return originalExecute(...executeArgs);
     }) as typeof transaction.execute;
     transaction.batch = ((...batchArgs: Parameters<typeof transaction.batch>) => {
       counts.batch += 1;
       const statements = batchArgs[0];
+      counts.statements.push(...statements);
       counts.maxBatchStatements = Math.max(counts.maxBatchStatements, statements.length);
       return originalBatch(...batchArgs);
     }) as typeof transaction.batch;
@@ -926,6 +961,323 @@ describe("crawl admission phases", () => {
     expect((await db.execute("select count(*) as n from tracks")).rows[0]?.n).toBe(60);
   });
 
+  it("loads one narrow label fold index per commit batch and stores release tracks", async () => {
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, label_slug, created_at, updated_at)
+        values ('musicbrainz:release:release-second', 'release', 'musicbrainz', 'release-second', 0,
+                'phase-label', ?, ?)`,
+    });
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, label_slug, created_at, updated_at)
+        values ('musicbrainz:artist:browse-artist', 'artist', 'musicbrainz', 'browse-artist', 0,
+                'phase-label', ?, ?)`,
+    });
+    await db.batch(
+      [
+        "musicbrainz:release:release-phase",
+        "musicbrainz:release:release-second",
+        "musicbrainz:artist:browse-artist",
+      ].map((id) => markCrawlNodeRepairStatement(id, crypto.randomUUID())),
+      "write",
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL | Request) => {
+        const url = new URL(
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+        );
+        const id = url.pathname.split("/").at(-1);
+        const body = url.searchParams.has("artist")
+          ? {
+              "release-count": 2,
+              releases: [
+                {
+                  id: "browse-exact",
+                  "label-info": [{ label: { id: "label-phase-mbid", name: "Other Spelling" } }],
+                },
+                { id: "browse-fold", "label-info": [{ label: { name: "PHASE LABEL" } }] },
+              ],
+            }
+          : providerBatchRelease(id, { id: "label-phase-mbid", name: "Phase Label" });
+        return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+      }),
+    );
+    const prepared = await prepareCrawlPhase({ limit: 3, maxHop: 2 });
+    expect(prepared.items).toHaveLength(3);
+    const items = await Promise.all(
+      prepared.items.map((item) => fetchCrawlPhase(item.preparedToken)),
+    );
+    const instrumented = instrumentTransactions(db);
+    const batch = await commitCrawlNodes(items);
+    expect(batch.receipts).toHaveLength(3);
+    expect(batch.receipts.every((receipt) => receipt.outcome === "committed")).toBe(true);
+    expect((await db.execute("select count(*) as n from tracks")).rows[0]?.n).toBe(2);
+    const ownLabels = await db.execute(
+      "select release_label_slug from crawl_frontier where external_id in ('browse-exact', 'browse-fold')",
+    );
+    expect(ownLabels.rows).toHaveLength(2);
+    expect(ownLabels.rows.every((row) => row.release_label_slug === "phase-label")).toBe(true);
+    const statements = instrumented.counts.statements.map(executedSql);
+    const labelReads = statements.filter((sql) => /select[\s\S]*from labels\b/.test(sql));
+    const fullReads = labelReads.filter((sql) => !/\bwhere\b/i.test(sql));
+    expect(fullReads).toEqual(["select id, name from labels"]);
+    expect(labelReads.every((sql) => !/triage_reason|disambiguation/.test(sql))).toBe(true);
+    expect(
+      statements.filter((sql) =>
+        /select artist_mbid, label_id, verdict from artist_rules/.test(sql),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("retries a failed label index load on the next item of the same batch", async () => {
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, label_slug, created_at, updated_at)
+        values ('musicbrainz:release:release-second', 'release', 'musicbrainz', 'release-second', 0,
+                'phase-label', ?, ?)`,
+    });
+    await db.batch(
+      ["release-phase", "release-second"].map((id) =>
+        markCrawlNodeRepairStatement(`musicbrainz:release:${id}`, crypto.randomUUID()),
+      ),
+      "write",
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL | Request) => {
+        const url = new URL(
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+        );
+        return Promise.resolve(
+          new Response(
+            JSON.stringify(
+              providerBatchRelease(url.pathname.split("/").at(-1), {
+                id: "label-phase-mbid",
+                name: "Phase Label",
+              }),
+            ),
+            { status: 200 },
+          ),
+        );
+      }),
+    );
+    const prepared = await prepareCrawlPhase({ limit: 2, maxHop: 2 });
+    expect(prepared.items).toHaveLength(2);
+    const items = await Promise.all(
+      prepared.items.map((item) => fetchCrawlPhase(item.preparedToken)),
+    );
+    const originalTransaction = db.transaction.bind(db);
+    let indexAttempts = 0;
+    db.transaction = (async (...args: Parameters<Client["transaction"]>) => {
+      const transaction = await originalTransaction(...args);
+      const originalExecute = transaction.execute.bind(transaction);
+      transaction.execute = ((...executeArgs: Parameters<typeof transaction.execute>) => {
+        if (executedSql(executeArgs[0]) === "select id, name from labels") {
+          indexAttempts += 1;
+          if (indexAttempts === 1) {
+            return Promise.reject(new Error("fixture label index read failure"));
+          }
+        }
+        return originalExecute(...executeArgs);
+      }) as typeof transaction.execute;
+      return transaction;
+    }) as Client["transaction"];
+    const batch = await commitCrawlNodes(items);
+    expect(batch.receipts.map((receipt) => receipt.outcome)).toEqual([
+      "safely-retryable",
+      "committed",
+    ]);
+    expect(indexAttempts).toBe(2);
+    expect((await db.execute("select count(*) as n from tracks")).rows[0]?.n).toBe(1);
+    const [first] = items;
+    if (!first) {
+      throw new Error("test expected a first fetched crawl item");
+    }
+    const retried = await commitCrawlNodes([first]);
+    expect(retried.receipts.map((receipt) => receipt.outcome)).toEqual(["committed"]);
+    expect((await db.execute("select count(*) as n from tracks")).rows[0]?.n).toBe(2);
+  });
+
+  it.each([
+    { labelMbid: "label-phase-mbid", resolution: "MBID" },
+    { labelMbid: undefined, resolution: "fold" },
+  ])(
+    "reads fresh label decisions per item through $resolution resolution",
+    async ({ labelMbid }) => {
+      await db.execute("update labels set seed_state = 'undecided'");
+      await db.execute({
+        args: [timestamp, timestamp],
+        sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, label_slug, created_at, updated_at)
+        values ('musicbrainz:release:release-second', 'release', 'musicbrainz', 'release-second', 0,
+                'phase-label', ?, ?)`,
+      });
+      await db.batch(
+        ["release-phase", "release-second"].map((id) =>
+          markCrawlNodeRepairStatement(`musicbrainz:release:${id}`, crypto.randomUUID()),
+        ),
+        "write",
+      );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: string | URL | Request) => {
+          const url = new URL(
+            typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+          );
+          return Promise.resolve(
+            new Response(
+              JSON.stringify(
+                providerBatchRelease(url.pathname.split("/").at(-1), {
+                  id: labelMbid,
+                  name: "PHASE LABEL",
+                }),
+              ),
+              { status: 200 },
+            ),
+          );
+        }),
+      );
+      const prepared = await prepareCrawlPhase({ limit: 2, maxHop: 2 });
+      expect(prepared.items).toHaveLength(2);
+      const items = await Promise.all(
+        prepared.items.map((item) => fetchCrawlPhase(item.preparedToken)),
+      );
+      let committed = 0;
+      const batch = await commitCrawlNodes(items, {
+        commit: async (item, context) => {
+          const receipt = await commitCrawlPhase(item, context);
+          committed += 1;
+          if (committed === 1) {
+            await db.execute("update labels set seed_state = 'enabled' where id = 'label-phase'");
+          }
+          return receipt;
+        },
+      });
+      expect(batch.receipts[0]).toMatchObject({
+        outcome: "committed",
+        result: { tracksSkippedLabelGate: 1, tracksWritten: 0 },
+      });
+      expect(batch.receipts[1]).toMatchObject({
+        outcome: "committed",
+        result: { tracksSkippedLabelGate: 0, tracksWritten: 1 },
+      });
+      expect((await db.execute("select label, label_id from tracks")).rows).toEqual([
+        { label: "Phase Label", label_id: "label-phase" },
+      ]);
+    },
+  );
+
+  it.each([
+    { firstOutcome: "committed", rollbackFirst: false },
+    { firstOutcome: "safely-retryable", rollbackFirst: true },
+  ])(
+    "rechecks minted label candidates across $firstOutcome items and preserves canonical spelling",
+    async ({ rollbackFirst, firstOutcome }) => {
+      if (rollbackFirst) {
+        await db.execute(`create trigger reject_first_release_receipt before update on operation_receipts
+        when new.result_identity = 'musicbrainz:release:release-new-first'
+        begin select raise(abort, 'fixture receipt write failure'); end`);
+      }
+      await db.execute({
+        args: [timestamp, timestamp],
+        sql: `insert into artist_rules (id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+          values ('rule-allow', 'artist-0', 'Artist 0', 'allow', 'operator', ?, ?)`,
+      });
+      const run = async (batched: boolean) => {
+        await db.execute("delete from tracks");
+        await db.execute("delete from operation_receipts");
+        await db.execute("delete from crawl_due_work");
+        await db.execute("delete from crawl_frontier");
+        await db.execute("delete from labels where slug = 'new-batch-label'");
+        for (const externalId of ["release-new-first", "release-new-second"]) {
+          await db.execute({
+            args: [`musicbrainz:release:${externalId}`, externalId, timestamp, timestamp],
+            sql: `insert into crawl_frontier
+            (id, kind, source, external_id, hop, label_slug, created_at, updated_at)
+            values (?, 'release', 'musicbrainz', ?, 0, 'phase-label', ?, ?)`,
+          });
+        }
+        await db.batch(
+          ["release-new-first", "release-new-second"].map((id) =>
+            markCrawlNodeRepairStatement(`musicbrainz:release:${id}`, crypto.randomUUID()),
+          ),
+          "write",
+        );
+        vi.stubGlobal(
+          "fetch",
+          vi.fn((input: string | URL | Request) => {
+            const url = new URL(
+              typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+            );
+            const id = url.pathname.split("/").at(-1);
+            return Promise.resolve(
+              new Response(
+                JSON.stringify(
+                  providerBatchRelease(id, {
+                    id:
+                      id === "release-new-first" || rollbackFirst
+                        ? "new-batch-label-mbid"
+                        : undefined,
+                    name: id === "release-new-first" ? "New Batch Label" : "NEW BATCH LABEL",
+                  }),
+                ),
+                { status: 200 },
+              ),
+            );
+          }),
+        );
+        const prepared = await prepareCrawlPhase({ limit: 2, maxHop: 2 });
+        expect(prepared.items).toHaveLength(2);
+        const items = await Promise.all(
+          prepared.items.map((item) => fetchCrawlPhase(item.preparedToken)),
+        );
+        const receipts = batched ? (await commitCrawlNodes(items)).receipts : [];
+        if (!batched) {
+          for (const item of items) {
+            receipts.push({ operationKey: item.operationKey, ...(await commitCrawlPhase(item)) });
+          }
+        }
+        expect(receipts[0]).toMatchObject({ outcome: firstOutcome });
+        if (!rollbackFirst) {
+          expect(receipts[0]).toMatchObject({ result: { labelsDiscovered: ["New Batch Label"] } });
+        }
+        expect(receipts[1]).toMatchObject({
+          outcome: "committed",
+          result: {
+            labelsDiscovered: rollbackFirst ? ["NEW BATCH LABEL"] : [],
+          },
+        });
+        const labels = await db.execute(
+          "select id, name, slug, mb_label_id, seed_state from labels where slug = 'new-batch-label'",
+        );
+        expect(labels.rows).toHaveLength(1);
+        expect((await db.execute("select count(*) as n from labels")).rows[0]?.n).toBe(2);
+        const stored = await db.execute("select label, label_id from tracks order by track_id");
+        expect(stored.rows).toHaveLength(rollbackFirst ? 1 : 2);
+        for (const row of stored.rows) {
+          expect(row).toMatchObject({
+            label: rollbackFirst ? "NEW BATCH LABEL" : "New Batch Label",
+            label_id: labels.rows[0]?.id,
+          });
+        }
+        const frontier = await db.execute(
+          "select id, state, note from crawl_frontier where kind = 'release' order by id",
+        );
+        return {
+          frontier: frontier.rows,
+          labels: labels.rows.map(({ id: _id, ...row }) => row),
+          results: receipts.map((receipt) => receipt.result),
+        };
+      };
+      expect(await run(true)).toEqual(await run(false));
+    },
+  );
+
   it("keeps a 100-child browse commit within seven transaction operations", async () => {
     await seedBrowseNode();
     vi.stubGlobal(
@@ -980,7 +1332,7 @@ describe("crawl admission phases", () => {
     expect((await db.execute("select count(*) as n from tracks")).rows[0]?.n).toBe(100);
     expect(
       instrumented.counts.execute + instrumented.counts.batch + instrumented.counts.commit,
-    ).toBe(24);
+    ).toBe(25);
     expect(instrumented.counts.maxBatchStatements).toBe(500);
   });
 

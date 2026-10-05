@@ -22,7 +22,7 @@ The operator already drew the boundary when he ruled on the labels. Every label 
 
 **Storage** is a three-layer verdict at the write chokepoint in `expandRelease`, resolved per track:
 
-1. **The label default.** `seed_state` decides: an `enabled` label's tracks store, a non-enabled label's tracks do not. The release's label resolves MBID-first against the archive's `labels` rows, falling back to the aggressive `labelFold`; a fold that collides across labels resolves to the default **with all artist rules suppressed** (logged `crawl.scope-ambiguous`) rather than guessing which label's exceptions apply.
+1. **The label default.** `seed_state` decides: an `enabled` label's tracks store, a non-enabled label's tracks do not. The release's label resolves MBID-first against the archive's `labels` rows, falling back to the aggressive `labelFold`; a fold that collides across labels resolves to the default **with all artist rules suppressed** (logged `crawl.scope-ambiguous`) rather than guessing which label's exceptions apply. A commit batch lazily loads one narrow `(id, name)` fold index once; decision fields (`seed_state`, `founding_date`, `mb_label_id`, `slug`) are read fresh per item through indexed MBID and id lookups. A label minted mid-batch joins the fold index.
 2. **Per-label artist exceptions** (`artist_rules` rows carrying a `label_id`). A **block** drops an act's own records from an enabled label; an **allow** admits an act's billed records from a disabled one.
 3. **Global artist exceptions** (`artist_rules` rows with a NULL `label_id`), consulted only when no per-label rule matches. Same two verdicts, any label.
 
@@ -68,7 +68,7 @@ A held release writes nothing: no tracks, no album row, no graph edges. Its arti
 
 **The switch** is `crawl_plausibility_hold_enabled` in the `settings` KV: default ON, an unreadable setting reads ON so the check fails toward holding, and only the literal `false` turns it off. It is a flip, not a deploy. Off stops judging new releases; existing holds stay held until ruled.
 
-**Cost.** Per stored release on an enabled label: one hold-row read, then the switch; only a dated release that is not inside its label's founding tolerance reads further — the era (one count, plus the offset seek when the memo is cold or the count moved), then, only when the date leg fires, the already-stored probes and the artist probe. The representative 100-track admitted commit is pinned at 24 transaction operations in `crawl-phases.integration.test.ts`.
+**Cost.** Per stored release on an enabled label: one hold-row read, then the switch; only a dated release that is not inside its label's founding tolerance reads further — the era (one count, plus the offset seek when the memo is cold or the count moved), then, only when the date leg fires, the already-stored probes and the artist probe. The representative 100-track admitted commit is pinned at 25 transaction operations in `crawl-phases.integration.test.ts`.
 
 **The measurement it rests on** (production, read-only, 2026-09-27; 158,767 crawled tracks, 151,889 of them on enabled labels, and the 1,017 off-genre tracks purged by hand that day as the known-bad set):
 
