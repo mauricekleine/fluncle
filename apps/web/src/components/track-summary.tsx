@@ -1,5 +1,5 @@
 import { TrackArtwork } from "@/components/track-artwork";
-import { albumCoverAtSize } from "@/lib/media";
+import { albumCoverAtSize, coverSrcSet } from "@/lib/media";
 
 export function TrackSummary({
   artists,
@@ -12,7 +12,11 @@ export function TrackSummary({
 }) {
   return (
     <>
-      <TrackArtwork src={albumCoverAtSize(artworkUrl, "small")} />
+      <TrackArtwork
+        sizes="3.25rem"
+        src={albumCoverAtSize(artworkUrl, "small")}
+        srcSet={coverSrcSet(artworkUrl)}
+      />
       <span className="min-w-0">
         <span className="block text-sm font-extrabold [overflow-wrap:anywhere]">{title}</span>
         <span className="mt-1 block text-xs text-muted-foreground [overflow-wrap:anywhere]">

@@ -22,7 +22,7 @@ import {
   CatalogueRecords,
   CatalogueSortControl,
 } from "@/components/catalogue-groups";
-import { FindingsGrid, UnlitTracks } from "@/components/graph-sections";
+import { FINDING_COVER_SIZES, FindingsGrid, UnlitTracks } from "@/components/graph-sections";
 import { GraphLink } from "@/components/graph-link";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { FollowButton } from "@/components/follow-button";
@@ -32,7 +32,7 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
 import { bioMetaDescription } from "@/lib/meta-description";
-import { albumCoverAtSize } from "@/lib/media";
+import { type CoverPreloadLink, albumCoverAtSize, coverPreloadLink } from "@/lib/media";
 import { type CatalogueSort, catalogueSortParam, entityPageHref } from "@/lib/catalogue";
 import {
   formatNameList,
@@ -184,7 +184,12 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     (coverFinding ? albumCoverAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
     `${siteUrl}/fluncle-cover.png`;
 
-  const leadImageUrl = leadGridCoverUrl(findings) ?? albumCoverAtSize(imageUrl, "medium");
+  const heroImageUrl = albumCoverAtSize(imageUrl, "medium");
+  const leadPreload: CoverPreloadLink | undefined =
+    leadGridCoverPreload(findings) ??
+    (heroImageUrl
+      ? { as: "image", fetchPriority: "high", href: heroImageUrl, rel: "preload" }
+      : undefined);
 
   const musicGroup = musicGroupJsonLd(
     {
@@ -211,9 +216,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     links: [
       { href: pageUrl, rel: "canonical" },
 
-      ...(leadImageUrl
-        ? [{ as: "image", fetchPriority: "high" as const, href: leadImageUrl, rel: "preload" }]
-        : []),
+      ...(leadPreload ? [leadPreload] : []),
 
       {
         href: `${siteUrl}/artist/${slug}/fresh.xml`,
@@ -251,10 +254,14 @@ function artistHead(loaderData: ArtistPageData | undefined) {
 
 export const ARTIST_CATALOGUE_SORT_DEFAULT: CatalogueSort = "recent";
 
-function leadGridCoverUrl(
+function leadGridCoverPreload(
   findings: Extract<ArtistPageData, { status: "found" }>["findings"],
-): string | undefined {
-  return albumCoverAtSize(findings.find((finding) => finding.logId)?.albumImageUrl, "medium");
+): CoverPreloadLink | undefined {
+  return coverPreloadLink(
+    findings.find((finding) => finding.logId)?.albumImageUrl,
+    "medium",
+    FINDING_COVER_SIZES,
+  );
 }
 
 // oxlint-disable-next-line sort-keys
@@ -331,7 +338,7 @@ function ArtistPage() {
     upcoming,
   } = data;
 
-  const findingsBandLeads = leadGridCoverUrl(findings) !== undefined;
+  const findingsBandLeads = leadGridCoverPreload(findings) !== undefined;
 
   return (
     <main className="log-plate-stage">

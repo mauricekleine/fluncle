@@ -18,7 +18,8 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
 import { labelBreadcrumbsJsonLd, recordLabelJsonLd } from "@/lib/log-schema";
 import { bioMetaDescription } from "@/lib/meta-description";
-import { albumCoverAtSize } from "@/lib/media";
+import { FINDING_COVER_SIZES } from "@/components/graph-sections";
+import { albumCoverAtSize, coverPreloadLink } from "@/lib/media";
 import {
   CATALOGUE_SORT_DEFAULT,
   type CatalogueSort,
@@ -132,17 +133,16 @@ function labelHead(loaderData: LabelPageData | undefined) {
     (coverFinding ? albumCoverAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
     `${siteUrl}/fluncle-cover.png`;
 
-  const leadImageUrl = albumCoverAtSize(
+  const leadPreload = coverPreloadLink(
     findings.find((finding) => finding.logId)?.albumImageUrl,
     "medium",
+    FINDING_COVER_SIZES,
   );
 
   return {
     links: [
       { href: pageUrl, rel: "canonical" },
-      ...(leadImageUrl
-        ? [{ as: "image", fetchPriority: "high" as const, href: leadImageUrl, rel: "preload" }]
-        : []),
+      ...(leadPreload ? [leadPreload] : []),
 
       {
         href: `${siteUrl}/label/${slug}/fresh.xml`,

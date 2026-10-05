@@ -4,7 +4,7 @@ import { useEffect, useMemo } from "react";
 import { DiscoveryPlayableList } from "@/components/discovery-row";
 import { FrontDoorBrowse } from "@/components/front-door/browse";
 import { FrontDoorFindings } from "@/components/front-door/findings";
-import { FrontDoorLead } from "@/components/front-door/lead";
+import { FrontDoorLead, LEAD_COVER_SIZE, LEAD_COVER_SIZES } from "@/components/front-door/lead";
 import { FrontDoorReleases } from "@/components/front-door/releases";
 import { FrontDoorSearch } from "@/components/front-door/search-entry";
 import { FrontDoorSection } from "@/components/front-door/section";
@@ -16,7 +16,7 @@ import { frontDoorCount } from "@/lib/front-door";
 import { fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import { logPageUrl } from "@/lib/log-schema";
-import { albumCoverAtSize } from "@/lib/media";
+import { coverPreloadLink } from "@/lib/media";
 import { registerWebMcpTools } from "@/lib/webmcp";
 
 const fetchFrontDoorData = createServerFn({ method: "GET" }).handler(async () => {
@@ -26,10 +26,6 @@ const fetchFrontDoorData = createServerFn({ method: "GET" }).handler(async () =>
 });
 
 type FrontDoorSearch = { story?: string };
-
-function leadCoverUrl(albumImageUrl: string | undefined): string | undefined {
-  return albumCoverAtSize(albumImageUrl, "large");
-}
 
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/")({
@@ -47,16 +43,9 @@ export const Route = createFileRoute("/")({
     links: [
       { href: `${siteUrl}/`, rel: "canonical" },
 
-      ...(loaderData?.lead?.albumImageUrl
-        ? [
-            {
-              as: "image",
-              fetchPriority: "high" as const,
-              href: leadCoverUrl(loaderData.lead.albumImageUrl),
-              rel: "preload",
-            },
-          ]
-        : []),
+      ...[
+        coverPreloadLink(loaderData?.lead?.albumImageUrl, LEAD_COVER_SIZE, LEAD_COVER_SIZES),
+      ].filter((link) => link !== undefined),
     ],
 
     scripts: [

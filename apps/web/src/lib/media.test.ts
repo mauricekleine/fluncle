@@ -5,6 +5,8 @@ import {
   albumCoverAtSize,
   bestAlbumCoverUrl,
   bestArtistAvatarUrl,
+  coverPreloadLink,
+  coverSrcSet,
   freshStandoutSrcSet,
   hubCoverSrcSet,
   labelLogoUrl,
@@ -16,6 +18,7 @@ import {
   videoCrop,
   videoCropPoster,
   videoPoster,
+  videoPosterImage,
   videoPurgeUrls,
   videoRendition,
   videoVersion,
@@ -64,6 +67,94 @@ describe.each([
 
       expect(crop("ABC123", orientation)).toContain(native);
     }
+  });
+});
+
+describe("coverSrcSet", () => {
+  it("offers the bounded owned-master ladder with the source vintage", () => {
+    const source = `${FOUND_BASE}/albums/cover.jpg?v=42`;
+    const transform = `${FOUND_BASE}/cdn-cgi/image/width=`;
+
+    expect(coverSrcSet(`${transform}640,format=auto/${source}`)).toBe(
+      `${transform}64,format=auto/${source} 64w, ${transform}128,format=auto/${source} 128w, ${transform}300,format=auto/${source} 300w, ${transform}640,format=auto/${source} 640w`,
+    );
+  });
+
+  it("uses Spotify's album widths directly at the source", () => {
+    expect(coverSrcSet("https://i.scdn.co/image/ab67616d0000b273cafef00d")).toBe(
+      "https://i.scdn.co/image/ab67616d00004851cafef00d 64w, https://i.scdn.co/image/ab67616d00001e02cafef00d 300w, https://i.scdn.co/image/ab67616d0000b273cafef00d 640w",
+    );
+  });
+
+  it("uses Spotify's artist widths directly at the source", () => {
+    expect(coverSrcSet("https://i.scdn.co/image/ab6761610000e5ebcafef00d")).toBe(
+      "https://i.scdn.co/image/ab6761610000f178cafef00d 160w, https://i.scdn.co/image/ab67616100005174cafef00d 320w, https://i.scdn.co/image/ab6761610000e5ebcafef00d 640w",
+    );
+  });
+
+  it("uses bounded Cover Art Archive thumbnails and preserves queries", () => {
+    const front = "https://coverartarchive.org/release/99b09d02-9cc9-3fed-8431-f162165a9371/front";
+
+    expect(coverSrcSet(`${front}-1200?v=42`)).toBe(
+      `${front}-250?v=42 250w, ${front}-500?v=42 500w`,
+    );
+  });
+
+  it("omits candidates when the source dimensions are unknown or absent", () => {
+    expect(coverSrcSet("https://example.com/cover.jpg")).toBeUndefined();
+    expect(coverSrcSet(undefined)).toBeUndefined();
+  });
+});
+
+describe("coverPreloadLink", () => {
+  it("carries the rendered img's srcset and sizes alongside the fixed rung", () => {
+    const url = "https://i.scdn.co/image/ab67616d0000b273cafef00d";
+
+    expect(coverPreloadLink(url, "medium", "45vw")).toEqual({
+      as: "image",
+      fetchPriority: "high",
+      href: albumCoverAtSize(url, "medium"),
+      imageSizes: "45vw",
+      imageSrcSet: coverSrcSet(url),
+      rel: "preload",
+    });
+  });
+
+  it("falls back to an href-only preload when the source has no ladder", () => {
+    expect(coverPreloadLink("https://example.com/cover.jpg", "medium", "45vw")).toEqual({
+      as: "image",
+      fetchPriority: "high",
+      href: albumCoverAtSize("https://example.com/cover.jpg", "medium"),
+      rel: "preload",
+    });
+  });
+
+  it("is undefined without a cover", () => {
+    expect(coverPreloadLink(undefined, "medium", "45vw")).toBeUndefined();
+  });
+});
+
+describe("videoPosterImage", () => {
+  it.each([
+    ["portrait", 480, 854],
+    ["portrait", 720, 1280],
+    ["landscape", 1080, 608],
+  ] as const)("uses an even %s crop height at width %i", (orientation, width, height) => {
+    expect(videoPosterImage("ABC123", { orientation, width })).toBe(
+      `${FOUND_BASE}/cdn-cgi/image/fit=cover,width=${width},height=${height},format=auto/${FOUND_BASE}/ABC123/poster.jpg?v=1`,
+    );
+  });
+
+  it("preserves the stored aspect without an orientation", () => {
+    expect(videoPosterImage("ABC123", { width: 480 })).toBe(
+      `${FOUND_BASE}/cdn-cgi/image/width=480,format=auto/${FOUND_BASE}/ABC123/poster.jpg?v=1`,
+    );
+  });
+
+  it("encodes the Log ID and re-keys the rendition with an explicit vintage", () => {
+    expect(videoPosterImage("a/b c", { version: 42, width: 720 })).toBe(
+      `${FOUND_BASE}/cdn-cgi/image/width=720,format=auto/${FOUND_BASE}/a%2Fb%20c/poster.jpg?v=42`,
+    );
   });
 });
 

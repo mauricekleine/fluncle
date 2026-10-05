@@ -6,7 +6,7 @@ import { PlayableList, PlayCover } from "@/components/player/playable-list";
 import { TrackActionsMenu } from "@/components/player/track-actions-menu";
 import { TrackArtwork } from "@/components/track-artwork";
 import { TrackChips } from "@/components/track-row";
-import { albumCoverAtSize } from "@/lib/media";
+import { albumCoverAtSize, coverSrcSet } from "@/lib/media";
 import {
   type DiscoveryCredit,
   type DiscoveryTrack,
@@ -39,12 +39,22 @@ export function RowArt({ track }: { track: DiscoveryTrack }): ReactNode {
       <ArtistAvatar
         className="discovery-row-art discovery-row-avatar"
         name={track.artists[0]?.name ?? track.title}
+        sizes="3.25rem"
         src={albumCoverAtSize(track.avatarUrl, "small")}
+        srcSet={coverSrcSet(track.avatarUrl)}
       />
     );
   }
 
-  return <TrackArtwork alt="" className="discovery-row-art" src={cover} />;
+  return (
+    <TrackArtwork
+      alt=""
+      className="discovery-row-art"
+      sizes="3.25rem"
+      src={cover}
+      srcSet={coverSrcSet(track.coverUrl)}
+    />
+  );
 }
 
 export function DiscoveryRow({

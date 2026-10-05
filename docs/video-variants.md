@@ -21,7 +21,7 @@ Per finding, in `found.fluncle.com/<log-id>/`:
 
 TikTok receives `footage.social.mp4` through an `audio=false` Media Transformation; no separate silent master is stored.
 
-`cover.jpg` (profile-grid cover) and `poster.jpg` are unchanged; the `/log` poster can also be derived from a master via MT `mode=frame`.
+`cover.jpg` is the profile-grid cover. `poster.jpg` is the stored frame from 80% of the footage; `/log` serves it through Cloudflare Images at the pane’s poster width with `format=auto`, using an even-height center crop for squared footage and preserving the stored aspect for legacy footage.
 
 ### Render-flag provenance (`render.json` `variants`)
 
@@ -50,7 +50,7 @@ All from the square `footage.mp4` master unless noted. URL construction lives in
 
 Crop widths and heights are rounded to the nearest even pixel for videos, clips, and poster frames; a 720-wide landscape crop is 720×406, and a 480-wide portrait crop is 480×854. The native widths above are the crop's ceiling, not what every surface asks for. The DOM surfaces measure the pane they actually paint into and request the ladder rung that covers it (`useResponsiveWidth`): Stories sizes its full-screen reel, and `/log` sizes its `min(100%, 19rem)` plate pane — so a phone on `/log` fetches a 720-wide crop, not the native 1080×1920. Only radio's genuinely full-bleed head takes the native width. When a load WEDGES, the stall watchdog steps that rung one rung DOWN the same ladder (`stepDownRenditionWidth`) rather than falling back to the raw master: a stall is a bytes problem, and the master is the heaviest object in the bundle. Cloudflare Media Transformations must be enabled for the zone; this is a zone setting with no Wrangler binding switch. On `/log` and Stories, a transform error steps down to the next smaller rendition; if the 360-wide rendition also fails, the player stops requesting video and shows its poster. Stories uses the master only when the track has no Log ID from which to derive a rendition.
 
-The `/log` poster is the pane's first paint. Its route preload uses `firstPaintFootagePoster`, which must match the component's unmeasured portrait URL exactly; a mismatch fetches two posters. The poster uses a frame crop one rung below the clip and keeps that width when a stalled clip steps down, avoiding another poster fetch. A frame crop needs an explicit width because an unsized Media Transformation frame can resolve to a tiny default image. Preload only when footage exists, since the fallback poster or cover cannot be known from the route.
+The `/log` poster is the pane's first paint. `videoPosterImage` transforms the owned `poster.jpg` through `/cdn-cgi/image`, so the poster uses edge-cached AVIF/WebP rather than a live Media Transformations frame. Its source carries `?v=<videoSquaredAt epoch>` (default `1`) to re-key the image rendition after a re-render. The route preload uses `firstPaintFootagePoster`, matching the component's unmeasured portrait URL byte for byte. The poster stays one rung below the pane's clip width when a stalled clip steps down. A failed transformed image falls back to the existing MT frame poster, then the album cover; an `Image` probe advances that chain for both the video poster and the image-only branch. Preload only when footage exists.
 
 Cost is negligible: MT bills $0.50 per 1,000 monthly **unique** transformation operations with 5,000 free per month, so with `Cache Everything` + a long TTL on the MT URLs, each unique crop is one billed op per month and we likely never leave the free tier.
 

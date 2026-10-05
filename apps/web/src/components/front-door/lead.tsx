@@ -8,9 +8,11 @@ import { TrackChips } from "@/components/track-row";
 import { formatDateLong } from "@/lib/format";
 import { discoveryQueueTrack, findingToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { artistTitleLine } from "@/lib/log-prose";
-import { albumCoverAtSize } from "@/lib/media";
+import { albumCoverAtSize, coverSrcSet } from "@/lib/media";
 
-const LEAD_COVER_SIZE = "large" as const;
+export const LEAD_COVER_SIZE = "large" as const;
+export const LEAD_COVER_SIZES =
+  "(min-width: 40rem) 15rem, calc(100vw - 2rem - 2px - clamp(2.2rem, 6vw, 4.5rem))";
 
 export function FrontDoorLead({ lead }: { lead: TrackListItem }): ReactNode {
   const line = artistTitleLine(lead);
@@ -25,7 +27,9 @@ export function FrontDoorLead({ lead }: { lead: TrackListItem }): ReactNode {
             alt=""
             className="fd-lead-cover"
             priority
+            sizes={LEAD_COVER_SIZES}
             src={albumCoverAtSize(lead.albumImageUrl, LEAD_COVER_SIZE)}
+            srcSet={coverSrcSet(lead.albumImageUrl)}
           />
         </PlayCover>
       ) : (
@@ -33,7 +37,9 @@ export function FrontDoorLead({ lead }: { lead: TrackListItem }): ReactNode {
           alt=""
           className="fd-lead-cover"
           priority
+          sizes={LEAD_COVER_SIZES}
           src={albumCoverAtSize(lead.albumImageUrl, LEAD_COVER_SIZE)}
+          srcSet={coverSrcSet(lead.albumImageUrl)}
         />
       )}
       <div className="fd-lead-body">

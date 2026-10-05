@@ -11,7 +11,8 @@ import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumBreadcrumbsJsonLd, musicAlbumJsonLd } from "@/lib/log-schema";
-import { albumCoverAtSize } from "@/lib/media";
+import { FINDING_COVER_SIZES } from "@/components/graph-sections";
+import { albumCoverAtSize, coverPreloadLink } from "@/lib/media";
 import { bioMetaDescription } from "@/lib/meta-description";
 import { type AlbumPageData } from "./-album-page-data";
 
@@ -66,18 +67,14 @@ function albumHead(loaderData: AlbumPageData | undefined) {
           : `The tracks on ${name}, with the artists behind them.`;
   const imageUrl = albumCoverAtSize(coverImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
 
-  const leadImageUrl = albumCoverAtSize(
+  const leadPreload = coverPreloadLink(
     findings.find((finding) => finding.logId)?.albumImageUrl,
     "medium",
+    FINDING_COVER_SIZES,
   );
 
   return {
-    links: [
-      { href: pageUrl, rel: "canonical" },
-      ...(leadImageUrl
-        ? [{ as: "image", fetchPriority: "high" as const, href: leadImageUrl, rel: "preload" }]
-        : []),
-    ],
+    links: [{ href: pageUrl, rel: "canonical" }, ...(leadPreload ? [leadPreload] : [])],
     meta: [
       { title },
       { content: description, name: "description" },
