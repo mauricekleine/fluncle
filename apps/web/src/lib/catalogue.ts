@@ -54,6 +54,7 @@ export const GRAPH_GROUP_TRACK_LIMIT = 20;
 export const GRAPH_GROUP_ROW_CEILING = GRAPH_GROUP_PAGE_SIZE * GRAPH_GROUP_TRACK_LIMIT;
 
 export type UpcomingTrackPage = {
+  findingTotal: number;
   findings: TrackListItem[];
   page: number;
   pageCount: number;

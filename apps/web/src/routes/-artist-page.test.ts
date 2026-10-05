@@ -137,6 +137,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     getArtistNeighbours.mockResolvedValue([]);
     listArtistCatalogue.mockResolvedValue(NO_CATALOGUE);
     listArtistUpcoming.mockResolvedValue({
+      findingTotal: 0,
       findings: [],
       page: 1,
       pageCount: 1,
@@ -150,6 +151,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     getFindingsByArtist.mockResolvedValue([]);
     countArtistFindings.mockResolvedValue(0);
     listArtistUpcoming.mockResolvedValue({
+      findingTotal: 0,
       findings: [],
       page: 1,
       pageCount: 1,

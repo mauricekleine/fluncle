@@ -124,7 +124,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
               ...catalogue.groups.map((group) => group.name),
             ],
             bio,
-            findingCount: findings.length,
+            findingCount: findings.length + upcoming.findingTotal,
             name,
             trackCount: catalogue.totalTracks + findings.length + upcoming.total,
           }),

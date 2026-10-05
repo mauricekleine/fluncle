@@ -161,6 +161,8 @@ describe("upcoming entity tracks", () => {
     expect(label.tracks).toEqual([]);
     expect(artist.findings.map((finding) => finding.trackId)).toEqual(["long-finding"]);
     expect(label.findings.map((finding) => finding.trackId)).toEqual(["long-finding"]);
+    expect(artist.findingTotal).toBe(1);
+    expect(label.findingTotal).toBe(1);
   });
 
   it("omits spoken-word catalogue rows and keeps a spoken-word finding", async () => {

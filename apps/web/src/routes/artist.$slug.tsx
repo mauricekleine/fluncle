@@ -164,7 +164,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
       : {
           description: artistMetaDescription({
             bio,
-            findingCount: dossier.findingCount,
+            findingCount: dossier.findingCount + upcoming.findingTotal,
             name,
             trackCount: catalogue.totalTracks + dossier.findingCount + upcoming.total,
           }),

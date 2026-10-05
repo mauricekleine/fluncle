@@ -150,6 +150,7 @@ beforeEach(() => {
   listRelatedFindings.mockResolvedValue([]);
   listLabelCatalogue.mockResolvedValue(NO_LABEL_CATALOGUE);
   listLabelUpcoming.mockResolvedValue({
+    findingTotal: 0,
     findings: [],
     page: 1,
     pageCount: 1,
@@ -162,6 +163,7 @@ beforeEach(() => {
 describe("the label page", () => {
   it("passes upcoming rows into their own page block", async () => {
     listLabelUpcoming.mockResolvedValue({
+      findingTotal: 0,
       findings: [],
       page: 1,
       pageCount: 1,

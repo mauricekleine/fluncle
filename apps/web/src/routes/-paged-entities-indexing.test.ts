@@ -4,6 +4,7 @@ import { type HubOrder } from "@/lib/hub-order";
 import { type AlbumHubEntry } from "@/lib/server/albums";
 import { type ArtistHubEntry } from "@/lib/server/artists";
 import { type LabelHubEntry } from "@/lib/server/labels";
+import { type TrackListItem } from "@/lib/server/tracks";
 import { type ArtistPageData } from "./-artist-page-data";
 import { type LabelPageData } from "./-label-page-data";
 
@@ -170,7 +171,7 @@ const hubs = [
   },
 ];
 
-const upcoming = { findings: [], page: 1, pageCount: 3, total: 0, tracks: [] };
+const upcoming = { findingTotal: 0, findings: [], page: 1, pageCount: 3, total: 0, tracks: [] };
 
 function record(name: string | undefined): CatalogueRecord {
   return { name, releaseDate: undefined, slug: name?.toLowerCase(), tracks: [] };
@@ -401,6 +402,25 @@ describe("entity head track counts", () => {
     expect(description(labelHead(labelData(futureOnly)))).toBe(
       "Drum & bass released on Depth: 5 tracks.",
     );
+  });
+
+  it("counts upcoming findings as recommended alongside the released ones", () => {
+    const mixed = {
+      catalogue: { groups: [], page: 1, pageCount: 1, totalGroups: 0, totalTracks: 0 },
+      upcoming: { ...upcoming, findingTotal: 1, pageCount: 1, total: 1 },
+    };
+    const artist = artistData(mixed);
+
+    expect(
+      description(artistHead({ ...artist, dossier: { ...artist.dossier, findingCount: 1 } })),
+    ).toBe(
+      "Drum & bass by Drift: 2 tracks, both recommended by Fluncle, with the releases and labels behind them.",
+    );
+    expect(
+      description(
+        labelHead(labelData({ ...mixed, findings: [{ trackId: "released" } as TrackListItem] })),
+      ),
+    ).toBe("Drum & bass released on Depth: 2 tracks, both recommended by Fluncle.");
   });
 });
 
