@@ -1,5 +1,5 @@
 import { Button } from "@fluncle/ui/components/button";
-import * as Sentry from "@sentry/tanstackstart-react";
+import { captureBrowserException } from "@/lib/browser-sentry";
 import { type ErrorComponentProps, Link } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
 
@@ -15,7 +15,7 @@ const COPY = {
 
 export function RootErrorState({ error, reset }: ErrorComponentProps): ReactNode {
   useEffect(() => {
-    Sentry.captureException(error);
+    captureBrowserException(error);
   }, [error]);
 
   return (

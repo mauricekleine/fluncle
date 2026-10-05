@@ -2,9 +2,9 @@
 
 Fluncle's web app (`apps/web`) reports unexpected errors to **Sentry** for private diagnostics — the stack traces and context an operator needs to fix a break, visible only to the operator. This is deliberately separate from the **public liveness** surface: the `/status` + `/health` stack (and the on-box `record_health` layer described in [docs/agents/hermes-agent.md](./agents/hermes-agent.md)) answers "is Fluncle up?" for anyone; Sentry answers "what exactly threw, and where?" for the operator. The two never overlap — the health stack is untouched by this wiring, and Sentry never renders on a public surface.
 
-## The posture: errors + sampled DB-query tracing
+## The posture: errors, sampled DB queries, and browser web vitals
 
-Sentry runs on the Team plan with a 5M-spans/month budget. Capture errors and sampled DB-query tracing; keep session replay and profiling disabled, with `sendDefaultPii: false`. The Worker also replaces Sentry's default HTTP integration with `maxRequestBodySize: "none"`, because that integration otherwise captures JSON request bodies independently of the PII switch; raw request bodies therefore never enter error events or spans. Operation-receipt inspection and reconciliation are POST-only and the keyed GET route is removed. `beforeSend`, `beforeSendTransaction`, and `beforeSendSpan` still replace a stale keyed path segment with `{operationKey}` so delayed telemetry or an overlooked old caller cannot leak its coordinate.
+Sentry runs on the Team plan with a 5M-spans/month budget. Capture errors, sampled DB-query tracing, and browser web vitals; keep session replay and profiling disabled, with `sendDefaultPii: false`. Both runtimes share host classification and named sampling rates in `apps/web/src/lib/sentry-sampling.ts`. Turso fetches do not create `http.client` spans because the libSQL wrapper already emits richer, privacy-safe `db.query` spans; fetch breadcrumbs remain enabled. The Worker also replaces Sentry's default HTTP integration with `maxRequestBodySize: "none"`, because that integration otherwise captures JSON request bodies independently of the PII switch; raw request bodies therefore never enter error events or spans. Operation-receipt inspection and reconciliation are POST-only and the keyed GET route is removed. `beforeSend`, `beforeSendTransaction`, and `beforeSendSpan` still replace a stale keyed path segment with `{operationKey}` so delayed telemetry or an overlooked old caller cannot leak its coordinate.
 
 ### What tracing captures
 
@@ -20,23 +20,32 @@ The span import (`startSpan`) comes from **`@sentry/core`** (env-agnostic), NOT 
 
 ### The sampler policy
 
-Tracing is sampled by a `tracesSampler` keyed on the transaction name (method + path, e.g. `GET /me/recommendations`), with named rate constants:
+The Worker sampler in `lib/server/sentry-options.ts` applies these decisions in order:
 
-- **1.0 (`TRACE_RATE_ALWAYS`)** for the scaling-risk surfaces — any name matching `recommend`, `search`, or `frontier` (the recs / vector-scan paths). These are traced on every request so a slow scan is never missed.
-- **0 (`TRACE_RATE_NONE`)** for pure noise with no query value — health/status probes, robots/sitemap/llms.txt/.well-known, and the OG + cover image + static-asset routes.
-- **0.2 (`TRACE_RATE_BASELINE`)** for everything else — a modest low-traffic baseline.
+1. Noise routes (health/status, robots/sitemap/llms.txt/.well-known, OG/cover images, previews, and static assets): 0.
+2. Requests served by a non-production host: 0.
+3. `/api/v1/admin/database-admission`: 0.
+4. Other `/api/v1/admin/` transactions: 0.01 (`ADMIN_TRACE_RATE`), retaining a trickle for persistent slow-query and N+1 patterns.
+5. Automated or missing user agents: 0, including crawlers, command-line clients, headless browsers, and Sentry uptime probes.
+6. Human traffic with a boolean `parentSampled`: inherit that decision so browser traces stay connected to server-fn requests.
+7. Names matching `recommend`, `search`, or `frontier`: 1.0 (`TRACE_RATE_ALWAYS`).
+8. Everything else, including `/admin` HTML: 0.2 (`TRACE_RATE_BASELINE`).
 
-The name substring is deliberately coarse: server-fn endpoints share a generic transaction name, so this can't perfectly route-match those, but it reliably traces the risk paths and drops the noise. These are the **low-traffic starting settings** — as volume grows toward the 5M-spans/mo budget, lower the baseline first and refine the route lists rather than widening them; keep an eye on the span quota.
+Name matching is deliberately coarse because server-fn endpoints share generic transaction names. Browser tracing samples human production traffic at 0.5 (`BROWSER_TRACE_RATE`) and excludes automated and non-production traffic.
+
+Environment follows the serving host, independently of CI or the build machine: `fluncle.com`, its subdomains, and `.onion` mirrors are `production`; localhost, its subdomains, loopback addresses, and `0.0.0.0` are `local`; other hosts, including `workers.dev`, are `preview`. The browser reads `window.location.hostname`. Worker error and transaction hooks derive the environment from `event.request.url`; events without a request URL keep their existing environment. Local production bundles and miniflare therefore cannot label request-backed events as production.
 
 ### Cost posture and the pending alert
 
-The Team plan's 5M spans/mo is the budget the sampler is tuned against. The **p95 slow-load alert** (fire when a route's p95 crosses a threshold) is configured **operator-side in Sentry** once spans are flowing — it is a deferred dashboard step, not code.
+These are estimates from the 2026-10 baseline, not measured post-deploy volumes. Accepted spans total 12.73M over 30 days against the Team plan's 5M/month budget. The seven-day breakdown is 3.40M: Turso `http.client` 1.58M, database-admission 0.538M, other admin 0.427M, `/track/*` 0.516M (77% bot traffic), artist + album 0.227M (about 73% bots), and the remainder about 0.11M.
+
+The policy projects Turso and admission spans to zero, other admin to about 0.02M/week, human track pages to about 0.12M/week, artist + album to about 0.06M/week, and the remainder to about 0.1M/week: roughly 0.3M/week or 1.3M/month server-side. At about 1.8k browser sessions/month, 0.5 sampling adds an estimated worst-case 0.1–0.2M spans/month. The total is roughly 1.5M/month, 30% of budget. Watch accepted spans after deploy to validate the projection. The p95 slow-load alert is configured operator-side in Sentry.
 
 ## What is covered today
 
-**Browser** — `apps/web/src/client.tsx` initializes the SDK (`@sentry/tanstackstart-react`) before hydration, which installs the global `error` and `unhandledrejection` handlers, so an unhandled client exception is captured with its stack. A failed route-chunk load after a deploy reloads the page once per URL within a 60-second window; `client.tsx` registers the only `vite:preloadError` listener. Error events raised while that reload is pending (up to 10 seconds) are dropped.
+**Browser** — `apps/web/src/client.tsx` calls `startBrowserSentry`, which installs a lightweight, bounded buffer for the latest 20 `error` and `unhandledrejection` events. After the window `load` event, `lib/browser-sentry.ts` dynamically loads `lib/browser-sentry-sdk.ts` during browser idle time, with a timer fallback. The loader is scheduled outside the React tree: an extra sibling under `hydrateRoot` shifts every `useId` value and breaks hydration. The SDK module uses named imports to exclude replay and user-feedback implementations. After initialization, the loader removes the early listeners and replays buffered errors in order with their unhandled-error mechanisms. TanStack router tracing uses parameterized route IDs, falling back to generic browser tracing when the router is unavailable. Pageload spans start at the navigation time origin, preserving their duration after lazy initialization. Buffered performance observers recover LCP, FCP, and CLS entries from before initialization; TTFB reads the navigation performance entry. Session replay and profiling stay disabled. A failed route-chunk load after a deploy reloads the page once per URL within a 60-second window; `client.tsx` registers the only `vite:preloadError` listener and passes the guard's `isReloading` to `startBrowserSentry`, so error events raised while that reload is pending (up to 10 seconds) are dropped.
 
-**The root error boundary** — `apps/web/src/components/root-error-state.tsx` is the root route's `errorComponent` (sibling of `NotFoundBlackHole`, the `notFoundComponent`). A custom error boundary is **not** auto-captured by the router, so it reports the caught error itself via `captureException`. It renders a quiet, canon-styled "rough re-entry" state with a way back — never raw error detail on a public surface.
+**The root error boundary** — `apps/web/src/components/root-error-state.tsx` is the root route's `errorComponent` (sibling of `NotFoundBlackHole`, the `notFoundComponent`). A custom error boundary is **not** auto-captured by the router, so it reports the caught error through the same lazy load-then-capture module. It renders a quiet, canon-styled "rough re-entry" state with a way back — never raw error detail on a public surface.
 
 **The Worker** — `apps/web/src/server.ts` wraps the entire custom server entry with `Sentry.withSentry` (`@sentry/cloudflare`, the Cloudflare-native path). The wrap sits over the whole `fetch`, so an unhandled throw from **either** path — `handleOrpc` (mounted first) or the TanStack router beneath it — is captured with a stack.
 
@@ -44,7 +53,7 @@ The Team plan's 5M spans/mo is the budget the sampler is tuned against. The **p9
 
 **Backpressure is not a fault.** A `DueWorkMaintenancePendingError` is a typed "come back": a bounded due-work maintenance pass converged as far as its budget allowed and the read it fronted is deferred, not broken. It is recognized at **both** wire boundaries, because they capture independently. On the API side every oRPC op answers a `due_work_maintenance_pending` 503 with no capture, guaranteed in one place by the router-level middleware (`lib/server/orpc-backpressure.ts`, applied once in `lib/server/orpc.ts`) rather than by each handler's catch, so an op with no catch — or a throw from a middleware or an input validator — cannot surface a deferred read as a 500; `apiFault` gives the same answer for the handlers that do catch. On the **server-fn** side `redactServerFnFault` echoes it like any deliberate typed error. That second half is not theoretical: an `/admin` board's loader reaches the same guarded read through its `createServerFn` handler and never touches `apiFault`, so without the recognizer there every paused read on that board is captured with `source: serverfn.redaction` and reads as an error. The box sweeps read the 503 as an exit-zero pause (`due_work_repair_pending` in the run ledger), so a write burst never pages.
 
-Both SDKs initialize **only in a production build** (`import.meta.env.PROD`, statically `false` under `vite dev` / `bun run dev` / the smoke routine, `true` in the deployed Worker bundle). A dev session sends nothing, and when the DSN is absent the SDK is inert.
+Both SDKs report **only in a production build** (`import.meta.env.PROD`). Dev and test runs stay inert. A production build served locally reports errors as `local` and sends no traces; a preview host reports errors as `preview` and sends no traces. A missing DSN disables reporting.
 
 ## CSP violation reports — the report sink
 
