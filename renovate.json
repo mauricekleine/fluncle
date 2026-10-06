@@ -90,7 +90,7 @@
       "dependencyDashboardApproval": true
     },
     {
-      "description": "GUARD: Shadcn currently resolves @modelcontextprotocol/sdk 1.30.0, patched because its published root export targets absent files (upstream #2273); a Shadcn or direct SDK bump must remove the patch if fixed upstream or re-key and revalidate it. Surface it on the dashboard instead of auto-PRing.",
+      "description": "GUARD: Shadcn currently resolves @modelcontextprotocol/sdk 1.31.0, patched because its published root export targets absent files (upstream #2273); a Shadcn or direct SDK bump must remove the patch if fixed upstream or re-key and revalidate it. Surface it on the dashboard instead of auto-PRing.",
       "matchPackageNames": ["shadcn", "@modelcontextprotocol/sdk"],
       "dependencyDashboardApproval": true
     }
