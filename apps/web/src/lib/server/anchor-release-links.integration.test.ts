@@ -516,6 +516,44 @@ describe("release-link anchor rung", () => {
     ).toBe(checkedAt);
   });
 
+  it("reads every release's prior link in one query and honours each one", async () => {
+    const { probeAnchorReleaseLink } = await import("./anchor");
+    await seed("mb_rec-1", "rec-1", "Weightless", 261_901);
+    const checkedAt = "2026-09-20T00:00:00.000Z";
+    const mappedAlbum = "B".repeat(22);
+    await db.execute({
+      args: ["release-1", null, checkedAt, "release-2", mappedAlbum, checkedAt],
+      sql: "insert into anchor_release_links (release_mbid, spotify_album_id, checked_at) values (?, ?, ?), (?, ?, ?)",
+    });
+    mbFetch.mockImplementation(async (path: string) => ({
+      data: path.startsWith("/recording/")
+        ? { releases: [{ id: "release-1" }, { id: "release-2" }, { id: "release-3" }] }
+        : {
+            media: [{ tracks: [{ recording: { id: "rec-1" } }] }],
+            relations: [{ url: { resource: `https://open.spotify.com/album/${albumId}` } }],
+          },
+      rateLimited: false,
+    }));
+    const execute = vi.spyOn(db, "execute");
+    const now = new Date("2026-10-01T00:00:00.000Z");
+    const probe = await probeAnchorReleaseLink("mb_rec-1", now);
+    const linkReads = execute.mock.calls.filter(([statement]) =>
+      /from anchor_release_links/.test(typeof statement === "string" ? statement : statement.sql),
+    );
+    execute.mockRestore();
+    expect(linkReads).toHaveLength(1);
+    expect(probe.result.backoffSkipped).toBe(1);
+    expect(
+      probe.evidence.map(({ albumId: id, checkedAt: at, releaseId }) => [releaseId, id, at]),
+    ).toEqual([
+      ["release-2", mappedAlbum, null],
+      ["release-3", albumId, now.toISOString()],
+    ]);
+    expect(
+      mbFetch.mock.calls.filter(([path]) => String(path).startsWith("/release/release-1")),
+    ).toHaveLength(0);
+  });
+
   it("caches recording-to-release IDs for thirty days", async () => {
     const { probeAnchorReleaseLink } = await import("./anchor");
     await seed("mb_rec-1", "rec-1", "Weightless", 261_901);
