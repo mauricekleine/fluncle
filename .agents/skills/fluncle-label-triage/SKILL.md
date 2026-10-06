@@ -78,7 +78,7 @@ Workflow({ scriptPath: "<skill>/scripts/triage-workflow.js",
                    total: <n>, batch: 10, censusBatch: 5, concurrency: 6 } })
 ```
 
-`concurrency` (default 6, also on `verify-workflow.js`) caps how many workers run at once. Every evidence call queues on one MusicBrainz limiter of about a request a second shared across processes, so more workers buy no throughput: each call only waits longer, and past roughly a dozen workers the waits outlast the workers' shell timeouts and labels come back `unclear` unread (measured: 34 of 1,181 labels across two rounds at 14 workers, and 0 of 15 on a retry at 3). The briefs tell workers to re-run a timed-out call rather than rule on it. A round whose `unclear` evidence reads "the evidence command did not return" hit this limit; re-run those labels at a lower `concurrency`.
+`concurrency` defaults to 6 and caps workers in each research, census and verification phase. Evidence calls share one MusicBrainz limiter across processes, so launching more workers increases queue waits without increasing MusicBrainz throughput. Each brief sets the evidence command's Bash timeout to 600000 ms and directs workers to retry a timed-out call using cached sources. A timeout leaves the evidence incomplete; retry it before assigning a verdict. If a round reports that the evidence command did not return, re-run those labels with a lower `concurrency`.
 
 The script already guards the harness's stringified-`args` delivery (a workflow that returns instantly with zero agents IS that trap) and embeds both research briefs. Every brief names this file by path, so each worker reads the standing rulings and the oracle ladder below, and hands out the evidence command. It runs in two phases:
 

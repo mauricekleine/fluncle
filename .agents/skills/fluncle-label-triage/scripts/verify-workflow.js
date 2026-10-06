@@ -41,13 +41,9 @@ for (let s = 0; s < total; s += batch) {
   starts.push(s);
 }
 
-// Every worker's evidence calls queue on ONE MusicBrainz limiter (about a request a second,
-// shared across processes), so more simultaneous workers add no throughput: each call just
-// waits longer, until the worker's shell times out first and the label comes back unread.
-// Lanes cap how many workers run at once; the rest start as lanes free up.
 const CONCURRENCY = Math.max(1, Number(cfg.concurrency) || 6);
 const pooled = async (thunks) => {
-  const out = new Array(thunks.length).fill(null);
+  const out = Array.from({ length: thunks.length }, () => null);
   let next = 0;
   const lane = async () => {
     while (next < thunks.length) {

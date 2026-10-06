@@ -75,8 +75,10 @@ Launch the Workflow with `<skill>/scripts/triage-workflow.js`:
 Workflow({ scriptPath: "<skill>/scripts/triage-workflow.js",
            args: { file: ".../undecided.json", enabled: ".../calib-enabled.txt",
                    disabled: ".../calib-disabled.txt", rules: ".../calib-rules.txt",
-                   total: <n>, batch: 10, censusBatch: 5 } })
+                   total: <n>, batch: 10, censusBatch: 5, concurrency: 6 } })
 ```
+
+`concurrency` defaults to 6 and caps workers in each research, census and verification phase. Evidence calls share one MusicBrainz limiter across processes, so launching more workers increases queue waits without increasing MusicBrainz throughput. Each brief sets the evidence command's Bash timeout to 600000 ms and directs workers to retry a timed-out call using cached sources. A timeout leaves the evidence incomplete; retry it before assigning a verdict. If a round reports that the evidence command did not return, re-run those labels with a lower `concurrency`.
 
 The script already guards the harness's stringified-`args` delivery (a workflow that returns instantly with zero agents IS that trap) and embeds both research briefs. Every brief names this file by path, so each worker reads the standing rulings and the oracle ladder below, and hands out the evidence command. It runs in two phases:
 
