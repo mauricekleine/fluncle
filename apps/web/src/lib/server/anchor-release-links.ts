@@ -159,6 +159,25 @@ async function eligibleSiblingIds(recordingIds: string[]): Promise<string[]> {
   return [...ids].sort();
 }
 
+type ReleaseLinkRow = { checked_at: string; release_mbid: string; spotify_album_id: null | string };
+
+async function readReleaseLinks(releaseIds: string[]): Promise<Map<string, ReleaseLinkRow>> {
+  if (releaseIds.length === 0) {
+    return new Map();
+  }
+  const db = await getDb();
+  const rows = typedRows<ReleaseLinkRow>(
+    (
+      await db.execute({
+        args: releaseIds,
+        sql: `select release_mbid, checked_at, spotify_album_id from anchor_release_links
+          where release_mbid in (${releaseIds.map(() => "?").join(",")})`,
+      })
+    ).rows,
+  );
+  return new Map(rows.map((row) => [row.release_mbid, row]));
+}
+
 // oxlint-disable-next-line complexity
 export async function probeReleaseLinks(
   trackId: string,
@@ -219,15 +238,9 @@ export async function probeReleaseLinks(
       logEvent("warn", "anchor.release-cache-write-failed", { error, recordingMbid });
     }
   }
+  const priorLinks = await readReleaseLinks(releaseIds);
   for (const releaseId of releaseIds) {
-    const prior = typedRows<{ checked_at: string; spotify_album_id: null | string }>(
-      (
-        await db.execute({
-          args: [releaseId],
-          sql: "select checked_at, spotify_album_id from anchor_release_links where release_mbid = ?",
-        })
-      ).rows,
-    )[0];
+    const prior = priorLinks.get(releaseId);
     if (
       prior &&
       now.getTime() - Date.parse(prior.checked_at) < MISS_BACKOFF_MS &&
