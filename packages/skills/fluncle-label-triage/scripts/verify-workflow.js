@@ -41,6 +41,23 @@ for (let s = 0; s < total; s += batch) {
   starts.push(s);
 }
 
+const CONCURRENCY = Math.max(1, Number(cfg.concurrency) || 6);
+const pooled = async (thunks) => {
+  const out = Array.from({ length: thunks.length }, () => null);
+  let next = 0;
+  const lane = async () => {
+    while (next < thunks.length) {
+      const i = next++;
+      out[i] = await thunks[i]().catch(() => null);
+    }
+  };
+  await parallel(Array.from({ length: Math.min(CONCURRENCY, thunks.length) }, () => lane));
+
+  return out;
+};
+
+const EVIDENCE_PATIENCE = `The command waits its turn on a MusicBrainz rate limit shared by every worker, so one call can take minutes while other workers are busy. Run it with the Bash tool's \`timeout\` at 600000. A call that times out is a queue, not evidence: re-run it, and every source it already fetched comes back from cache. Never rule a label \`unclear\` because the command had not returned.`;
+
 const brief = (
   start,
 ) => `You are the SECOND OPINION on crawl-seed label verdicts for **Fluncle**, a drum & bass archive. A first researcher already ruled each label below \`dnb\` or \`not_dnb\` at medium or low confidence. Fluncle's crawler only STORES tracks from \`enabled\` (dnb) labels, so a wrong "dnb" pollutes a public DnB archive and a wrong "not_dnb" silently loses good music. Your job is to TRY TO REFUTE each verdict with evidence the first pass did not cite. Default to doubt: a verdict you cannot independently confirm stays unconfirmed.
@@ -57,7 +74,7 @@ Read the JSON array at \`${file}\` and take **items [${start}, ${start + batch})
 Read BOTH before judging. Majors, subsidiaries, distributors and aggregators are OUT even when they carry DnB; DnB-specific media brands (Drum&BassArena, UKF, Knowledge) are IN; house/techno/trance/EDM/trap/dubstep/grime/UKG/pop/rock/jazz/reggae labels are OUT. Jungle and every DnB subgenre (liquid, neuro, jump-up, techstep, drumfunk, halftime, ragga jungle, jungletek-dominant) are IN.
 
 ## Method — look for what the first pass did NOT look at
-1. **The evidence command with the census**: \`fluncle admin labels evidence <mb_label_id> --census --json\` (run from the repo root; when the installed \`fluncle\` lacks the command, use \`bun apps/cli/src/cli.ts admin labels evidence …\`). The census reads first credits over up to five MusicBrainz pages (roughly 400 releases on a large label), far past the 25 releases a first pass usually read; the Beatport genre facet, Apple's genres and Discogs' per-release styles are the rungs a first pass most often skipped. Each source reports a \`status\` and its own \`errors\`.
+1. **The evidence command with the census**: \`fluncle admin labels evidence <mb_label_id> --census --json\` (run from the repo root; when the installed \`fluncle\` lacks the command, use \`bun apps/cli/src/cli.ts admin labels evidence …\`). The census reads first credits over up to five MusicBrainz pages (roughly 400 releases on a large label), far past the 25 releases a first pass usually read; the Beatport genre facet, Apple's genres and Discogs' per-release styles are the rungs a first pass most often skipped. Each source reports a \`status\` and its own \`errors\`. ${EVIDENCE_PATIENCE}
 2. **Do not write fetchers.** Never curl MusicBrainz, Discogs, Beatport or Apple for anything the command returns: it holds the rate limits every worker shares, retries, and caches.
 3. **The artists' own pages** when the first pass already cited the label's Discogs styles: \`firecrawl scrape <artist url>\` or WebFetch.
 4. **Web** only for what is still open: the label's own Bandcamp / SoundCloud / RA bio.
@@ -75,7 +92,7 @@ One entry per label via the structured schema. Do not write any files.`;
 phase("Verify");
 
 const model = cfg.model || "opus";
-const results = await parallel(
+const results = await pooled(
   starts.map(
     (s) => () => agent(brief(s), { label: `verify ${s}-${s + batch}`, model, schema: VERDICTS }),
   ),
