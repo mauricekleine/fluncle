@@ -84,7 +84,7 @@ Beyond the two masters, the bundle may carry up to three EXTRA rendered cuts —
 - **`footage.landscape.mp4`** — a bespoke landscape render, CLEAN. The escape hatch above: a dedicated 16:9 reflow for a finding whose off-centre subject the square centre-crop mangles.
 - **`footage.landscape.social.mp4`** — a bespoke landscape render with BAKED text. Landscape where the page does not own the chrome.
 
-The full presigned upload field set (`footage`, `footage-social`, `footage-notext`, `footage-landscape`, `footage-landscape-social`, `poster`, `cover`, `plate`, `plate-background`, `note`, `composition`, `props`, `render`, `intent`, `metrics`, `scene`) lives in `apps/web/src/lib/server/video-bundle.ts` (`VIDEO_ARTIFACTS`), and the CLI's `--dir` resolves the conventional filenames in `apps/cli/src/commands/track.ts`. Only `footage` is required; the rest ride along when present.
+The full presigned upload field set (`footage`, `footage-social`, `footage-notext`, `footage-landscape`, `footage-landscape-social`, `poster`, `cover`, `plate`, `plate-background`, `note`, `composition`, `props`, `render`, `intent`, `metrics`, `scene`) lives in `apps/web/src/lib/server/video-bundle.ts` (`VIDEO_ARTIFACTS`), and the CLI's `--dir` resolves the conventional filenames in `runTrackVideo` (`apps/cli/src/cli.ts`). `footage` is required unless the upload is plates-only or passes `--allow-partial`, and a footage upload also needs the re-render contract (`composition`, `props`, `render`) unless `--allow-partial` (`RERENDER_CONTRACT_FIELDS`, `apps/cli/src/commands/track.ts`); the rest ride along when present.
 
 ## Constraints and watch-items
 

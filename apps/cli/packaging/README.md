@@ -35,7 +35,7 @@ cd apps/cli/dist-npm && npm pack --dry-run
 cd apps/cli/dist-npm && npm publish
 ```
 
-The name `fluncle` is currently unclaimed; the first `npm publish` registers it.
+The name `fluncle` is already registered on npm, so a publish updates the existing package.
 
 > Caveat — the file-upload subcommands (`track`/`mixtape` uploads, `preview`
 > archive) and `open` use Bun-only APIs (`Bun.file`, `Bun.spawn`). They are
