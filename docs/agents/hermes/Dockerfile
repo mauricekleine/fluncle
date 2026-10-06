@@ -313,7 +313,7 @@ RUN chmod -R a+rX /opt/fonts
 # /usr/local/lib + a /usr/local/bin/claude symlink, both world-accessible, so the
 # NON-root cron user can exec it (same world-readable property the `fluncle` CLI relies
 # on). Bump lever: this version line.
-RUN npm install -g @anthropic-ai/claude-code@2.1.290
+RUN npm install -g @anthropic-ai/claude-code@2.1.292
 
 # The committed npx-installed skill snapshot, baked for Claude Code so every
 # box `claude -p` discovers local and upstream skills: the voice crons load `copywriting-fluncle`
