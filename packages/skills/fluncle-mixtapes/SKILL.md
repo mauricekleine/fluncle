@@ -97,16 +97,16 @@ The steps are tagged 🖥️ (M5 — capture/stream + CLI: browser / OBS / maste
 
 **The canonical flow at a glance:**
 
-| Step                     | Where         | What                                                                                                                                                               |
-| ------------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Compose the plan         | 🖥️ M5 browser | `/admin/plans` — auto galaxy-slug handle, add findings, order, set the Live session date                                                                           |
-| Export to tools          | 🎛️ M2         | Rekordbox quit: `recordings list --kind plan` → `rekordbox-plan-export.py <planId>`; buy on Beatport; load Rekordbox                                               |
-| Mix + record             | 🖥️ M5 OBS     | OBS 3-track on the M5 (music T1 / mic T2); the M2 mixes, the FLX4 master feeds the M5 analog                                                                       |
-| Upload take + attach     | 🖥️ M5         | `recordings create --title … --video <take.mov>` → `recordings update <takeId> --parent-id <planId>` (operator-run directly)                                       |
-| Derive cues              | 🎛️ M2         | Rekordbox quit: `rekordbox-derive-cues.py` dry-run → `--apply <takeId>`                                                                                            |
-| Mark cue times + clip    | 🖥️ M5 browser | `/admin/studio/<takeId>` — mark mix-ins; set in/out → Create clip. Clips auto-drip to IG as Reels (`cron.clip-drip`; kill switch `fluncle admin clips drip-pause`) |
-| Promote (if you love it) | 🖥️ M5 Studio  | "Publish as mixtape" (or `recordings promote <takeId>`) — mints `.F.`, seeds the tracklist, publishes the `/log` set video                                         |
-| Distribute               | 🖥️ M5         | extract audio (`ffmpeg`) → `mixtapes distribute <logId> --video … --audio master.mp3` (operator-run directly) → `publish-youtube` → optional `resync`              |
+| Step                     | Where         | What                                                                                                                                                                                        |
+| ------------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compose the plan         | 🖥️ M5 browser | `/admin/plans` — auto galaxy-slug handle, add findings, order, set the Live session date                                                                                                    |
+| Export to tools          | 🎛️ M2         | Rekordbox quit: `recordings list --kind plan` → `rekordbox-plan-export.py <planId>`; buy on Beatport; load Rekordbox                                                                        |
+| Mix + record             | 🖥️ M5 OBS     | OBS 3-track on the M5 (music T1 / mic T2); the M2 mixes, the FLX4 master feeds the M5 analog                                                                                                |
+| Upload take + attach     | 🖥️ M5         | `recordings create --title … --video <take.mov>` → `recordings update <takeId> --parent-id <planId>` (operator-run directly)                                                                |
+| Derive cues              | 🎛️ M2         | Rekordbox quit: `rekordbox-derive-cues.py` dry-run → `--apply <takeId>`                                                                                                                     |
+| Mark cue times + clip    | 🖥️ M5 browser | `/admin/studio/<takeId>` — mark mix-ins; set in/out → Create clip. Clips queue for the IG Reel drip (parked: its sweep has no timer yet, §B4; kill switch `fluncle admin clips drip-pause`) |
+| Promote (if you love it) | 🖥️ M5 Studio  | "Publish as mixtape" (or `recordings promote <takeId>`) — mints `.F.`, seeds the tracklist, publishes the `/log` set video                                                                  |
+| Distribute               | 🖥️ M5         | extract audio (`ffmpeg`) → `mixtapes distribute <logId> --video … --audio master.mp3` (operator-run directly) → `publish-youtube` → optional `resync`                                       |
 
 ### A. Record + archive 🖥️ M5
 
@@ -199,13 +199,13 @@ In the Studio at `/admin/studio/<takeId>` (browser): mark each mix-in at the pla
 
 ### B4. The Instagram clip drip-feed 🤖 (automated)
 
-Every clip you cut **auto-enters an Instagram queue** and drips out as a Reel — you don't hand-post. Because platform treatment of live-set audio can change, validate one real Reel before enabling the cadence. A finding's master would get muted — that stays manual-only (the `fluncle-publish` skill).
+Every clip you cut **auto-enters an Instagram queue** and is built to drip out as a Reel — you don't hand-post. **Status: parked.** The drip sweep (`clip-drip-sweep.sh`) is deliberately un-deployed — no host timer, no `cron.clip-drip` registry surface, not baked into the Hermes image ([studio-clip-timer README](../../../docs/agents/hermes/studio-clip-timer/README.md)) — so queued clips post nothing until it goes live. Because platform treatment of live-set audio can change, validate one real Reel before enabling the cadence. A finding's master would get muted — that stays manual-only (the `fluncle-publish` skill).
 
 How it works:
 
 - **Auto-queue on create.** Creating a clip schedules it at `max(the queue tail, now) + a random 23–25h`. The jitter keeps post times drifting so the feed never reads as a bot posting at the same wall-clock minute daily. Default cadence ≈ 1 clip/day. The caption is rebuilt fresh at fire time: clean copy + the `fluncle://` coordinate line once promoted, else the covered cues' `Artist — Title` labels when the window plays tracks Fluncle never certified.
 - **A clip with a blank caption is never posted.** No stored caption AND no cued track under the window means the Reel would credit nobody, so the tick SKIPS it (reported as `skippedBlank`). It is not a failure: the row stays `scheduled` and fires on a later tick the moment you cue the source recording in Studio or write the clip a caption.
-- **The drip cron** (`cron.clip-drip`, ~every 20m, on the Hermes box) posts the due, cut clips through Postiz as Reels (single video + `post_type: "post"` = a Reel), bounded by a per-tick cap AND a rolling-24h IG cap (a conservative backstop under Meta's ~25/day). It's **admin-tier**, so the box's agent token drives it (the Worker owns the Postiz key). A `posted` row never re-fires (idempotent); a failed push is marked `failed` and is retryable by rescheduling.
+- **The drip sweep** (`clip-drip-sweep.sh`, once it has a host timer) posts the due, cut clips through Postiz as Reels (single video + `post_type: "post"` = a Reel), bounded by a per-tick cap AND a rolling-24h IG cap (a conservative backstop under Meta's ~25/day). It's **admin-tier**, so the box's agent token drives it (the Worker owns the Postiz key). A `posted` row never re-fires (idempotent); a failed push is marked `failed` and is retryable by rescheduling.
 - **The kill switch, and it is DEFAULT-DENY.** One global flag (`clip_drip_paused`) pauses the whole drip within one tick (the schedule stays intact; nothing fires while paused). Only an explicit `false` runs it: an unset key, a fresh preview, a lost row all read as PAUSED, so the drip stays dark until you turn it on with `drip-resume`. Toggle it from `/admin/clips` or the CLI:
 
   ```bash

@@ -135,7 +135,8 @@ but like `embed`/`capture` they are **gated at first deploy** behind a pilot:
 
   ```
   sudo bash docs/agents/hermes/install-host-timers.sh \
-    --refresh-unit fluncle-audit.service --refresh-unit fluncle-audit-review.service
+    --refresh-unit fluncle-audit.service --refresh-unit fluncle-audit.timer \
+    --refresh-unit fluncle-audit-review.service --refresh-unit fluncle-audit-review.timer
   ```
 
   Run it from a checkout of `main` on the box after a unit change — `TimeoutStartSec` in particular, since the script-budget ordering invariant above depends on it.

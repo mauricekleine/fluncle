@@ -190,7 +190,7 @@ Standing ruling: the command selects evidence and computes factual rollups and r
 
 **Missing-roster entry:** `unit`, `expectedIntervalMs`.
 
-**Row (20 columns, lossless under `--json`):** `unit`, `id`, `occurredAt` (box start time), `endedAt`, `createdAt` (Worker write time), `runDurationMs`, `exitCode`, `ok` (the derived run verdict), `selfAssertedOk` (claimed, never obeyed), `checked`, `produced`, `queueDepth`, `errors`, `vendorCalls`, `expectedIntervalMs`, `gateState`, `missingFields`, `unrecognisedFields`, `summaryStatus`, `summaryRaw`.
+**Row (26 fields, lossless under `--json`; `RunLedgerRowSchema` in `packages/contracts/src/orpc/admin-telemetry.ts`):** `unit`, `id`, `occurredAt` (box start time), `endedAt`, `createdAt` (Worker write time), `runDurationMs`, `exitCode`, `ok` (the derived run verdict), `selfAssertedOk` (claimed, never obeyed), `checked`, `produced`, `queueDepth`, `errors`, `vendorCalls`, `expectedIntervalMs`, `gateState`, `missingFields`, `unrecognisedFields`, `summaryStatus`, `summaryRaw`, `release`, `operationId`, `outcome`, `accessClass`, `attemptCount`, `batchCount`.
 
 **`summaryRaw` is always valid JSON text.** It carries a string the SWEEP wrote — a tick's last stdout line, itself a JSON document, often quoting a vendor's error — so a raw control character can reach it. The Worker escapes the C0 range to `\uXXXX` on the way in and on the way out, which is what keeps both the `--json` document and `jq '.rows[].summaryRaw | fromjson'` parseable. The escape is the same evidence, readable and reversible; a `\u001b` in a message is an ANSI sequence the sweep quoted, not corruption.
 

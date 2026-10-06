@@ -184,7 +184,7 @@ async function main(): Promise<void> {
       .catch(() => false);
 
   try {
-    await page.goto(`${BASE_URL}/admin/clips`, { waitUntil: "networkidle" });
+    await page.goto(`${BASE_URL}/admin/recordings`, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: "Upload recording" }).waitFor({ state: "visible" });
 
     if (SCENARIOS.has("A")) {

@@ -6,7 +6,7 @@ description: >-
 
 # Fluncle box restore — putting rave-02 back
 
-rave-02 is the box every Fluncle automation runs on: the Hermes container (a long-lived runtime with no chat platform and no model) plus ~44 host systemd timers driving the `--no-agent` sweeps. This skill is the one entry point for **resurrecting it**, and for answering the cheaper question — _could we?_ — before you ever need to.
+rave-02 is the box every Fluncle automation runs on: the Hermes container (a long-lived runtime with no chat platform and no model) plus dozens of host systemd timers (`ls -d docs/agents/hermes/*-timer`) driving the `--no-agent` sweeps. This skill is the one entry point for **resurrecting it**, and for answering the cheaper question — _could we?_ — before you ever need to.
 
 The rebuild is assembled from the linked assets across the public repository and private companion; follow them in the order below. **Do not reconstruct any of it from source.** Each step below names the asset that does the work; follow the link, run the thing, come back.
 
@@ -109,4 +109,4 @@ Not "it should be fine". Concretely, in this order:
 5. **The role boundary intact.** An agent-token read returns `{ok:true}` and a publish-class command comes back **403**. That is [`hermes-agent.md` § Verify](../../../docs/agents/hermes-agent.md); the pre-smoke in `pin-watch` runs the same pair, so a rebuilt box that passes it is a box whose credential is correctly scoped.
 6. **The backup loop closed.** Run `preflight.ts` again against the rebuilt box. All eight checks passing is the definition of done, because it means the next rebuild is possible too.
 
-Two timers ship operator-gated on a genuinely new box (the embed sweep wants a peak-RAM validation, the capture sweep wants its bucket) — `install-host-timers.sh` assumes a previously-validated box and starts everything. On a first-ever provision, read those two timer READMEs before trusting them.
+Two timers ship operator-gated on a genuinely new box (the embed sweep wants a peak-RAM validation, the capture sweep wants its bucket) — `install-host-timers.sh` assumes a previously-validated box and enables every timer except the DORMANT-parked ones. On a first-ever provision, read those two timer READMEs before trusting them.

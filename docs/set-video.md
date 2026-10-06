@@ -50,8 +50,8 @@ Full renders use the RFC §6 encode (h264, `crf 20` under a `~22 Mbit` VBV cap, 
 
 ## QA
 
-- **Arc gate per chapter** — `judge:metrics` (`analyze-motion.ts`) runs on the rendered piece; a chapter-length clip evolves _more_ than a 20 s clip, so it passes the arc floor comfortably (the recalibration note + a chapter-length reference verdict live in `packages/video/calibration/verdicts.json`). The gate's `qa.json` is written beside the output.
-- **Flash on transition spans** — the travel transitions are the only fast-motion moments; the flash gate covers the chunks that span a seam (and the composited whole).
+- **Arc read (advisory)** — `judge:metrics` (`analyze-motion.ts`) runs once, on the final `set.mp4`. A minutes-long chapter is a steady-state slice that can read below the 20 s arc floor by construction, so `render-set` reports the arc as advisory and chapter aliveness is judged off the stills and a visual review (the chapter-length reference verdict, 012.2.4L, lives in `packages/video/calibration/verdicts.json`). Its `qa.json` is written beside the output.
+- **Flash gate (hard)** — the travel transitions are the only fast-motion moments; the flash gate runs on the composited whole, and `render-set` reports it as the one HARD verdict (PASS or FAIL, details in `qa.json`).
 - The whole-piece read is judged off the set energy curve (the dreamer's continuity is derived from `analyze-set.ts`'s whole-set analysis artifact).
 
 ## The data source

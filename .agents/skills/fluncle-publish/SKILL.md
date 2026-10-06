@@ -72,14 +72,14 @@ fluncle admin tracks draft <track_id|log_id> --platform youtube     # uploads a 
 An on-box cron runs `advance_publish_queue` every 30 minutes. Eligible findings publish to YouTube and enter TikTok's private inbox automatically. Authorization comes from the global pause/resume switch and the readiness gates below.
 
 - **The kill switch** — `fluncle admin publish pause` / `resume`, or the toggle in the `/admin/findings` header. **Default-deny:** only an explicit `false` in the `publish_advance_paused` setting means running, so an unset flag reads as PAUSED. One flip, effective within one tick, no deploy.
-- **The readiness gates (Worker-side, not yours to reimplement)** — a finding is only advanced when it has a coordinate, a finalized render with BOTH masters (`video_squared_at`), 15 minutes of settle, its whole publishable bundle served on R2 (the server-side mirror of the CLI's `bundle_incomplete` guard), and a non-empty caption.
+- **The readiness gates (Worker-side, not yours to reimplement)** — a finding is only advanced when it has a coordinate, a finalized render with BOTH masters (`video_squared_at`), six hours of settle, its whole publishable bundle served on R2 (the server-side mirror of the CLI's `bundle_incomplete` guard), and a non-empty caption.
 - **Never twice** — the advance claims the `(track, platform)` row atomically before any Postiz call, and it only ever picks a platform with **no row at all**. A `failed` push is therefore **never auto-retried**: the finding keeps its row in the `/admin` attention queue and the operator owns the retry (the manual workflows below are exactly that retry).
 
 Treat auto-advance as the sole autonomous publishing path. Agent-tier YouTube pushes receive 403. Diagnose held findings with `fluncle admin publish advance --json`.
 
 ## Instagram — manual for FINDINGS; automated for set CLIPS
 
-**A set CLIP is the exception, and it IS automated** (the clip drip-feed — a separate object from a finding). Set clips use their live-mixed set audio and publish through the automated Instagram clip queue documented in the `fluncle-mixtapes` skill. This skill stays finding-only: **no `--platform instagram` for a finding.**
+**A set CLIP is the exception, and it is built for automation** (the clip drip-feed — a separate object from a finding). Set clips use their live-mixed set audio and queue for the automated Instagram clip drip documented in the `fluncle-mixtapes` skill, whose sweep is parked (no host timer yet; see that skill's §B4). This skill stays finding-only: **no `--platform instagram` for a finding.**
 
 ## Platforms
 

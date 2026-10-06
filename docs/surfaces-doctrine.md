@@ -71,7 +71,7 @@ On `/fresh`, tracks from one record fold into one release; a record whose tracks
 
 The `/api/v1/status` resource is public and emits only public service fields; `secondsSinceProberReport` must follow the healthcheck prober’s own `hermes` report, since another service can report recently while the prober is silent. File-route carve-outs mount the same handler at `/api/*` and `/api/v1/*` so POST bodies survive; oRPC operations have only the versioned mount.
 
-Cross-origin browser reads are derived from the composed oRPC router: only unauthenticated GET operations receive `Access-Control-Allow-Origin: *`, including error responses and preflights. The matcher excludes `get_replica_token` because it returns a device credential and `get_current_private_user` because a cross-origin request without its session cookie would falsely report no user. An unrecognized path, authenticated operation, or write receives no CORS allowance.
+Cross-origin browser reads are derived from the composed oRPC router: only unauthenticated GET operations receive `Access-Control-Allow-Origin: *`, including error responses and preflights. The matcher excludes `get_replica_token` because it returns a device credential, `get_current_private_user` because a cross-origin request without its session cookie would falsely report no user, and `list_digest_follows` because it returns one signed-link recipient's follows. An unrecognized path, authenticated operation, or write receives no CORS allowance.
 
 All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertises them.
 
@@ -136,9 +136,8 @@ Fresh feeds use release dates, including the first day represented by a month- o
 | `discovery.api-catalog`     | `/.well-known/api-catalog`             | `application/linkset+json` | the RFC 9727 linkset pointing at the machine-readable surfaces                                                                    | tertiary  |
 | `discovery.agent-card`      | `/.well-known/agent-card.json`         | `application/json`         | the A2A agent card — Fluncle's actionable public skills (search, list, read, submit, subscribe)                                   | tertiary  |
 | `discovery.agent-skills`    | `/.well-known/agent-skills/index.json` | `application/json`         | the fluncle-api agent skill index (with the SKILL.md digest)                                                                      | tertiary  |
-
-| `discovery.oembed` | `/oembed` | `application/json+oembed` | the oEmbed 1.0 provider — a pasted /log, /mixtapes, or /artist link unfurls as a rich finding card (frames `/embed/<logId>`) | tertiary |
-| `discovery.cli-installer` | `/cli/latest.sh` | `text/x-shellscript` | the one-line CLI installer — picks the right `fluncle` binary for the machine off the latest GitHub release and drops it in place | tertiary |
+| `discovery.oembed`          | `/oembed`                              | `application/json+oembed`  | the oEmbed 1.0 provider — a pasted /log, /mixtapes, or /artist link unfurls as a rich finding card (frames `/embed/<logId>`)      | tertiary  |
+| `discovery.cli-installer`   | `/cli/latest.sh`                       | `text/x-shellscript`       | the one-line CLI installer — picks the right `fluncle` binary for the machine off the latest GitHub release and drops it in place | tertiary  |
 
 `apps/web/public/llms.txt` is the body source imported by `handleAgentDiscovery`. Because Cloudflare serves static assets before Worker routes, `assets.run_worker_first` sends `/llms.txt` through that handler.
 

@@ -199,7 +199,7 @@ Then watch the next crawl tick: the seed should resolve to `mb_label_id` and min
 
 **The case the namesake purge deliberately leaves behind.** `purge-artists.ts` deletes an artist WHOLE, so it spares any artist holding genuine enabled-label tracks — correctly, because deleting them would take a real drum & bass page with them. What survives that rule is the **conflated row**: ONE `artists` row carrying a real DnB act AND an unrelated same-named act whose tracks arrived on the impostor walk. The impostor's tracks still render on the real act's public page.
 
-**How a row ends up holding two acts — sealed in code, so this is cleanup, not an ongoing leak.** All name-based edge writers apply the homonym seal: MBID match wins; a name may claim only an unclaimed row; a row with another MBID receives no edge (`apps/web/src/lib/server/artists.ts` § THE HOMONYM SEAL).
+**How a row ends up holding two acts — sealed in code, so this is cleanup, not an ongoing leak.** All name-based edge writers apply the homonym seal: MBID match wins; a name may claim only an unclaimed row; a row with another MBID receives no edge ([docs/artist-relationship.md](../../../docs/artist-relationship.md#homonym-seal) § Homonym seal).
 
 ### 1 — Detect (read-only)
 
