@@ -1,4 +1,4 @@
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement } from "@libsql/client";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -537,8 +537,10 @@ describe("release-link anchor rung", () => {
     const execute = vi.spyOn(db, "execute");
     const now = new Date("2026-10-01T00:00:00.000Z");
     const probe = await probeAnchorReleaseLink("mb_rec-1", now);
-    const linkReads = execute.mock.calls.filter(([statement]) =>
-      /from anchor_release_links/.test(typeof statement === "string" ? statement : statement.sql),
+    const statements = execute.mock.calls.map(([statement]) => statement as unknown as InStatement);
+    const linkReads = statements.filter(
+      (statement): statement is Exclude<InStatement, string> =>
+        typeof statement !== "string" && /from anchor_release_links/.test(statement.sql),
     );
     execute.mockRestore();
     expect(linkReads).toHaveLength(1);
