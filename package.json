@@ -99,7 +99,15 @@
     "yaml": "~2.9.1"
   },
   "overrides": {
-    "undici": "7.29.1"
+    "@modelcontextprotocol/sdk": "1.31.0",
+    "compression": "1.8.2",
+    "proxy-addr": "2.0.8",
+    "sharp": "0.35.5",
+    "shell-quote": "1.11.0",
+    "source-map-js": "1.2.2",
+    "tinypool": "2.1.2",
+    "undici": "7.29.1",
+    "vue": "3.5.42"
   },
   "lint-staged": {
     "*": [
@@ -114,11 +122,19 @@
   },
   "packageManager": "bun@1.4.2",
   "// overrides": {
-    "undici": "Drop when @scalar/json-magic's exact undici dependency is 7.29.1 or newer."
+    "@modelcontextprotocol/sdk": "Drop when shadcn requires SDK 1.31.0 or newer; keep the root-export patch keyed to the resolved SDK version until upstream #2273 is fixed.",
+    "compression": "Drop when Expo and React Native tooling require compression 1.8.2 or newer.",
+    "proxy-addr": "Drop when every Express chain requires proxy-addr 2.0.8 or newer.",
+    "sharp": "Drop when Transformers and every Miniflare chain require sharp 0.35.5 or newer, including exact pins.",
+    "shell-quote": "Drop when React Native devtools and Expo tooling require shell-quote 1.11.0 or newer.",
+    "source-map-js": "Drop when every compiler, CSS, and source-map tooling chain requires source-map-js 1.2.2 or newer.",
+    "tinypool": "Drop when oxfmt requires tinypool 2.1.2 or newer.",
+    "undici": "Drop when @scalar/json-magic's exact undici dependency is 7.29.1 or newer.",
+    "vue": "Drop when every Vue consumer requires Vue 3.5.42 or newer; Vue pins its renderer, compilers, and runtime to the same exact release."
   },
   "patchedDependencies": {
     "@remotion/bundler@4.0.499": "patches/@remotion%2Fbundler@4.0.499.patch",
-    "@modelcontextprotocol/sdk@1.30.0": "patches/@modelcontextprotocol%2Fsdk@1.30.0.patch"
+    "@modelcontextprotocol/sdk@1.31.0": "patches/@modelcontextprotocol%2Fsdk@1.31.0.patch"
   },
   "trustedDependencies": [
     "@shopify/react-native-skia"
