@@ -337,6 +337,26 @@ describe("listUnresolvedIssues — pagination + compaction against an injected f
 const SWEEP_TS = join(import.meta.dir, "sentry-triage-sweep.ts");
 const SWEEP_SH = join(import.meta.dir, "sentry-triage-sweep.sh");
 const CRON_OUTPUT_SH = join(import.meta.dir, "cron-output.sh");
+const SCRIPT_PATH_EXPORT = 'export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"';
+
+function copySweepScript(destination: string, stubBin: string): void {
+  const sourceText = readFileSync(SWEEP_SH, "utf8");
+  if (!sourceText.includes(SCRIPT_PATH_EXPORT)) {
+    throw new Error(`sentry fixture could not find the production PATH export in ${SWEEP_SH}`);
+  }
+  const fixturePrelude = [
+    SCRIPT_PATH_EXPORT,
+    `export PATH="${stubBin}:\${PATH}"`,
+    "for command_name in gh claude; do",
+    '  resolved_command="$(command -v "${command_name}" || true)"',
+    `  if [ "\${resolved_command}" != "${stubBin}/\${command_name}" ]; then`,
+    '    echo "sentry fixture resolved ${command_name} to ${resolved_command:-<missing>}, expected the stub" >&2',
+    "    exit 96",
+    "  fi",
+    "done",
+  ].join("\n");
+  writeFileSync(destination, sourceText.replace(SCRIPT_PATH_EXPORT, fixturePrelude), "utf8");
+}
 
 function lastJsonLine(text: string): Record<string, unknown> {
   const last = text
@@ -504,7 +524,7 @@ describe("the env scrub (the real driver + a real secrets file) — what claude 
     mkdirSync(binDir, { recursive: true });
     mkdirSync(ws, { recursive: true });
 
-    copyFileSync(SWEEP_SH, join(scriptDir, "sentry-triage-sweep.sh"));
+    copySweepScript(join(scriptDir, "sentry-triage-sweep.sh"), binDir);
     copyFileSync(CRON_OUTPUT_SH, join(scriptDir, "cron-output.sh"));
     copyFileSync(join(import.meta.dir, "agent-env.sh"), join(scriptDir, "agent-env.sh"));
     copyFileSync(join(import.meta.dir, "agent-pass.sh"), join(scriptDir, "agent-pass.sh"));
@@ -678,7 +698,7 @@ describe("the driver's /status line (the real sentry-triage-sweep.sh) — it fol
     const cronDir = join(root, "cron-output");
     mkdirSync(scriptDir, { recursive: true });
 
-    copyFileSync(SWEEP_SH, join(scriptDir, "sentry-triage-sweep.sh"));
+    copySweepScript(join(scriptDir, "sentry-triage-sweep.sh"), join(root, "bin"));
     copyFileSync(CRON_OUTPUT_SH, join(scriptDir, "cron-output.sh"));
     copyFileSync(join(import.meta.dir, "agent-env.sh"), join(scriptDir, "agent-env.sh"));
     copyFileSync(join(import.meta.dir, "agent-pass.sh"), join(scriptDir, "agent-pass.sh"));

@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { CONTRACT_OPERATION_NAMES, CONTRACT_OPERATION_ROUTES } from "@fluncle/contracts/orpc";
@@ -521,6 +521,7 @@ const ADMIN_CARVE_OUT_ROUTES = new Set([
 ]);
 
 const ADMIN_DIR = fileURLToPath(new URL("../../routes/api/admin", import.meta.url));
+const V1_ADMIN_DIR = fileURLToPath(new URL("../../routes/api/v1/admin", import.meta.url));
 
 function listRouteBasenames(dir: string, prefix = ""): string[] {
   const out: string[] = [];
@@ -649,6 +650,27 @@ describe("oRPC admin-route contract coverage", () => {
       expect(
         documented.has(canonical(`admin/${basename}`)),
         `admin route file "${basename}" has no entry in ADMIN_ROUTE_OPS — document it (with its canonical verb_noun, or PENDING) or add it as a carve-out`,
+      ).toBe(true);
+    }
+  });
+
+  it("every /api/v1/admin route file is a pure alias of an /api/admin route this net walks", () => {
+    const walked = new Set(listRouteBasenames(ADMIN_DIR));
+    const mirrored = listRouteBasenames(V1_ADMIN_DIR);
+
+    expect(mirrored.length).toBeGreaterThan(0);
+
+    for (const basename of mirrored) {
+      expect(
+        walked.has(basename),
+        `v1 admin route file "${basename}" has no /api/admin twin — no coverage net walks it; move its handlers to /api/admin and alias them`,
+      ).toBe(true);
+
+      const source = readFileSync(`${V1_ADMIN_DIR}/${basename}.ts`, "utf8");
+
+      expect(
+        source.includes(`/admin/${basename}";`) && source.includes("aliasHandlers(serverHandlers)"),
+        `v1 admin route file "${basename}" must only alias the serverHandlers of /api/admin/${basename}`,
       ).toBe(true);
     }
   });
