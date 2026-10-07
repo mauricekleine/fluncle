@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
 import { parseDocument } from "yaml";
 
 const WORKFLOW_DIRECTORY = join(import.meta.dir, "../../.github/workflows");
@@ -153,6 +155,81 @@ describe("security, release, and deploy topology", () => {
     const auditSource = source("dependency-audit.yml");
     expect(auditSource).toContain("bun audit --json");
     expect(auditSource).toContain("bun run audit");
+  });
+
+  test("dependency audit always reports its context and runs fully outside PRs", () => {
+    const audit = workflow("dependency-audit.yml");
+    expect(at(audit, "on", "pull_request", "paths")).toBeUndefined();
+    expect(at(audit, "on", "pull_request", "paths-ignore")).toBeUndefined();
+    expect(at(audit, "on", "push", "branches")).toEqual(["main"]);
+    expect(at(audit, "on", "workflow_dispatch")).toBeDefined();
+    expect(at(audit, "on", "schedule")).toBeDefined();
+    expect(at(audit, "jobs", "audit", "name")).toBe("Audit bun.lock dependencies");
+    const steps = at(audit, "jobs", "audit", "steps") as Array<Record<string, unknown>>;
+    for (const name of ["Setup Bun", "Report audit findings", "Audit dependencies"]) {
+      expect(steps.find((step) => step.name === name)?.if).toBe(
+        "github.event_name != 'pull_request' || steps.dependencies.outputs.changed == 'true'",
+      );
+    }
+    expect(steps.find((step) => step.name === "Report unchanged dependencies")?.if).toBe(
+      "github.event_name == 'pull_request' && steps.dependencies.outputs.changed == 'false'",
+    );
+  });
+
+  test("dependency selection executes against the PR merge-base diff", () => {
+    const steps = at(workflow("dependency-audit.yml"), "jobs", "audit", "steps") as Array<
+      Record<string, unknown>
+    >;
+    const script = steps.find((step) => step.id === "dependencies")?.run;
+    if (typeof script !== "string") {
+      throw new Error("dependency detection step is missing");
+    }
+    const root = mkdtempSync(join(tmpdir(), "dependency-diff-"));
+    const env = {
+      ...process.env,
+      GIT_AUTHOR_EMAIL: "fixture@example.com",
+      GIT_AUTHOR_NAME: "Fixture",
+      GIT_COMMITTER_EMAIL: "fixture@example.com",
+      GIT_COMMITTER_NAME: "Fixture",
+    };
+    const git = (...args: string[]) => {
+      const result = spawnSync("git", args, { cwd: root, encoding: "utf8", env });
+      if (result.status !== 0) {
+        throw new Error(result.stderr);
+      }
+      return result.stdout.trim();
+    };
+    try {
+      git("init", "--quiet");
+      writeFileSync(join(root, "README.md"), "base");
+      git("add", ".");
+      const base = git("commit-tree", git("write-tree"), "-m", "base");
+      for (const [path, expected] of [
+        ["README.md", false],
+        ["bun.lock", true],
+        ["package.json", true],
+        ["apps/web/package.json", true],
+        ["packages/a space/package.json", true],
+        ["apps/web/package.json.backup", false],
+      ] as const) {
+        git("read-tree", "--reset", "-u", base);
+        mkdirSync(dirname(join(root, path)), { recursive: true });
+        writeFileSync(join(root, path), "changed");
+        git("add", path);
+        const head = git("commit-tree", git("write-tree"), "-p", base, "-m", "change");
+        const output = join(root, "output");
+        writeFileSync(output, "");
+        const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", script], {
+          cwd: root,
+          encoding: "utf8",
+          env: { ...env, BASE_SHA: base, GITHUB_OUTPUT: output, HEAD_SHA: head, RUNNER_TEMP: root },
+        });
+        expect(result.status, result.stderr).toBe(0);
+        expect(readFileSync(output, "utf8"), path).toBe(`changed=${expected}\n`);
+      }
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   test("releases consume exact-SHA Quality completion without calling Quality again", () => {
