@@ -74,18 +74,19 @@ if ! command -v tailscale >/dev/null 2>&1; then
 fi
 systemctl enable --now tailscaled
 
-log "Bringing Tailscale online (plain sshd over the tailnet; no Tailscale SSH)"
+log "Bringing Tailscale online with Tailscale SSH enabled"
 ts_args=(
 	--auth-key="${TS_AUTHKEY}"
 	--hostname="${TS_HOSTNAME}"
 	--accept-dns=true
+	--ssh
 )
 if [[ -n "${TS_TAGS}" ]]; then
 	ts_args+=(--advertise-tags="${TS_TAGS}")
 fi
 tailscale up "${ts_args[@]}"
 
-log "Hardening SSH daemon (admin on port ${ADMIN_SSH_PORT}, key-only)"
+log "Configuring OpenSSH fallback (admin on port ${ADMIN_SSH_PORT}, key-only)"
 sshd_config="/etc/ssh/sshd_config.d/99-devbox-hardening.conf"
 cat >"${sshd_config}" <<SSHD
 Port ${ADMIN_SSH_PORT}
@@ -106,7 +107,9 @@ ufw allow in on tailscale0
 ufw --force enable
 
 log "Bootstrap complete"
-printf 'Admin over the tailnet (plain sshd, key-only, no Tailscale-SSH check):\n'
+printf 'Primary login, Tailscale SSH on port 22:\n'
+printf '  tailscale ssh %s@%s\n' "${USERNAME}" "${TS_HOSTNAME}"
+printf 'OpenSSH fallback (key-only, port %s):\n' "${ADMIN_SSH_PORT}"
 printf '  ssh -p %s %s@%s\n' "${ADMIN_SSH_PORT}" "${USERNAME}" "${TS_HOSTNAME}"
 if [[ -z "${TS_TAGS}" ]]; then
 	printf 'Reminder: disable Tailscale key expiry for this node (no public fallback) in the admin console (Machines -> ... -> Disable key expiry), or re-run with TS_TAGS set.\n'
