@@ -43,6 +43,8 @@ export default defineConfig({
 
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.{ts,tsx}"],
 
+    maxWorkers: "50%",
+
     setupFiles: ["src/test/block-network.ts"],
 
     testTimeout: 20000,
