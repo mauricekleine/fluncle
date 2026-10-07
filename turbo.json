@@ -1,5 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "concurrency": "50%",
   "cacheMaxAge": "7d",
   "cacheMaxSize": "10GB",
   "globalDependencies": ["tsconfig.json", "bunfig.toml", "patches/**"],

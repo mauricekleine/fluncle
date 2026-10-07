@@ -59,7 +59,7 @@
     "check:fix": "bun run lint:fix && bun run format",
     "deploy:gate": "bun run format:check && bun run lint && bun run go:check && bun run typecheck && bun run test && bun run test:scripts:worker",
     "deploy:verify": "node scripts/quality/deploy-verify.mjs",
-    "dev": "turbo run dev",
+    "dev": "turbo run dev --concurrency=10",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "go:check": "turbo run lint format:check --filter=@fluncle/ssh --filter=@fluncle/dns",
