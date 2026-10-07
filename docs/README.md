@@ -1,0 +1,65 @@
+# Documentation map
+
+Read the entry matching the area you are changing before editing it. [AGENTS.md](../AGENTS.md) holds the rules every session needs.
+
+- [Development conventions](./development.md): HTTP routes, SSR and queries, Effect, shared UI, package checks, dependencies, and local skill installation.
+- [README.md](../README.md) - repo overview: package layout, local dev, deployment, CLI, Raycast, publish flow.
+- [LORE.md](../LORE.md) - the story canon; wins on story over the other three canons.
+- [PRODUCT.md](../PRODUCT.md) - product purpose, brand direction, design principles, accessibility.
+- [DESIGN.md](../DESIGN.md) - the visual canon (the Nostalgic Cosmos) and its named visual rules.
+- [VOICE.md](../VOICE.md) - the language canon: persona, vocabulary, voice rules, surface registers.
+- [docs/local-database.md](../docs/local-database.md) - read before touching databases, dev/worktree DB setup, or the migrate step; holds the hosted-vs-local query shapes.
+- [docs/quality-system.md](../docs/quality-system.md) - read when changing CI, the classifier or deploy verification.
+- [docs/database-performance.md](../docs/database-performance.md) - read before any database performance or scale claim, budget, or fixture change.
+- [docs/track-lifecycle.md](../docs/track-lifecycle.md) - read when changing how a track is added, enriched, updated, or tagged.
+- [docs/admin-shell.md](../docs/admin-shell.md) - read before building or changing any `/admin` surface, admin auth, or the admin browser fixtures.
+- [docs/client-bundle.md](../docs/client-bundle.md) - read before importing server code or CSS into an `apps/web` route; the `fluncle-client-chunk-purity` build gate enforces it.
+- [docs/error-tracking.md](../docs/error-tracking.md) - read when touching Sentry, tracing, source maps, or the sentry-triage cron.
+- [docs/search.md](../docs/search.md) - read when changing search: the resolver tiers, the sonic tier, degradation.
+- [docs/artist-relationship.md](../docs/artist-relationship.md) - read when changing the artist entity, artist resolution, or `/artist` pages.
+- [docs/catalogue-crawler.md](../docs/catalogue-crawler.md) - read when changing the catalogue crawler, its boundary gate, or the crawl frontier.
+- [docs/label-entity.md](../docs/label-entity.md) - read when changing the label entity, crawl-seed rulings, or `/admin/labels`.
+- [docs/album-entity.md](../docs/album-entity.md) - read when changing albums or the graph pages (log, artist, label, album) and their hub indexes, including the unnamed tier.
+- [docs/track-destination.md](../docs/track-destination.md) - read when changing `/track/<trackId>`, its indexing predicates, or its sitemap.
+- [docs/album-artwork.md](../docs/album-artwork.md) - read when changing cover masters, image serving, or artwork sources.
+- [docs/the-ear.md](../docs/the-ear.md) - read when changing catalogue ranking or capture priority.
+- [docs/gpu-batch-embed.md](../docs/gpu-batch-embed.md) - read when changing audio work queues, the certification rail on `updateTrack`, or the batch embed.
+- [docs/vector-serving.md](../docs/vector-serving.md) - read before touching `apps/sonar`, `POST /search`, its fallback, or the sonar feature flags.
+- [docs/artifact-change-protocol.md](../docs/artifact-change-protocol.md) - read when producing or consuming a derived artifact stream (Sonar, device mirror).
+- [docs/agents/newsletter-agent.md](../docs/agents/newsletter-agent.md) - read when changing the weekly newsletter sweep or its send flow.
+- [packages/video/README.md](../packages/video/README.md) - read when changing the Remotion video machinery or the video output contract.
+- [docs/video-variants.md](../docs/video-variants.md) - read when changing video masters or their derived variants.
+- [docs/live-show-setup.md](../docs/live-show-setup.md) - operator runbook for the live show rig and its pre-show checklist.
+- [docs/set-video.md](../docs/set-video.md) - runbook for rendering a mixtape's hour-long set video.
+- [docs/fluncle-studio.md](../docs/fluncle-studio.md) - read when changing recordings, the recording upload, or set → clip cutting.
+- [docs/mixtape-recording-setup.md](../docs/mixtape-recording-setup.md) - operator runbook for wiring the mixtape recording rig.
+- [packages/live/README.md](../packages/live/README.md) - read when changing the live runtime (the glass and the bridge) or RANDOM-VJ mode.
+- [docs/live-deck-identity.md](../docs/live-deck-identity.md) - read when changing live deck identification (MIDI + OCR) for unordered sets.
+- [packages/media/README.md](../packages/media/README.md) - read when changing rendered stills: OG cards, banners, app icon, covers.
+- [docs/galaxy.md](../docs/galaxy.md) - read when changing the Galaxy game.
+- [docs/galaxy-sprites.md](../docs/galaxy-sprites.md) - read when making Galaxy sprite or audio assets.
+- [docs/agents/prompt-registry.md](../docs/agents/prompt-registry.md) - read before changing any runtime model prompt; a DB row overrides the baked default.
+- [docs/agents/enrichment-agent.md](../docs/agents/enrichment-agent.md) - bootstrap for the async track agent (enrich → video → publish).
+- [docs/agents/render-conductor.md](../docs/agents/render-conductor.md) - read when changing the per-finding video render pipeline or its conductor.
+- [packages/skills/fluncle-box-restore](../packages/skills/fluncle-box-restore) - read when rebuilding the sweep host or checking restore readiness.
+- [docs/agents/hermes-agent.md](../docs/agents/hermes-agent.md) - read when changing the Hermes sweep box, its agent-token role model, or its secrets.
+- [docs/agents/observation-agent.md](../docs/agents/observation-agent.md) - read when changing the audio observation or its voice gate.
+- [docs/agents/note-agent.md](../docs/agents/note-agent.md) - read when changing the auto-authored finding note.
+- [docs/agents/bio-agent.md](../docs/agents/bio-agent.md) - read when changing artist, label, or album bios.
+- [docs/agents/triage-agent.md](../docs/agents/triage-agent.md) - read when changing submission triage verdicts.
+- [docs/agents/logbook-agent.md](../docs/agents/logbook-agent.md) - read when changing the Logbook or its `[[<logId>]]` token contract.
+- [docs/agents/cluster-engine.md](../docs/agents/cluster-engine.md) - read when changing sonic-galaxy clustering or its cron.
+- [docs/agents/smoke-routine.md](../docs/agents/smoke-routine.md) - read when changing or diagnosing the nightly admin-smoke routine.
+- [docs/socials/](../docs/socials/) - the social accounts, profile assets, and bio conventions.
+- [packages/skills/fluncle-mixtapes](../packages/skills/fluncle-mixtapes) - read when publishing a mixtape or changing the mixtape model.
+- [docs/naming-conventions.md](../docs/naming-conventions.md) - read before naming a new CLI / API / MCP / SSH operation.
+- [docs/surfaces-doctrine.md](../docs/surfaces-doctrine.md) - the registry-driven map of every surface and its per-context weights.
+- [docs/dig.md](../docs/dig.md) - read when changing findings over DNS (`apps/dns`).
+- [docs/tor.md](../docs/tor.md) - read when changing the Tor onion mirror.
+- [packages/skills/fluncle-surfaces](../packages/skills/fluncle-surfaces) - read when registering or changing a surface.
+- `mk-agent-orchestration` (installed globally, not vendored) - routing, delegation, worktrees, and review.
+- [docs/mobile-release.md](../docs/mobile-release.md) - runbook from simulator to TestFlight to App Store review.
+- [docs/app-store-review.md](../docs/app-store-review.md) - read before any store submission.
+- [docs/reach-tier2-activation.md](../docs/reach-tier2-activation.md) - runbook for the `/reach` page's platform numbers.
+- [docs/audit-backlog.md](../docs/audit-backlog.md) - the nightly audit's findings ledger; a worklist, never specification.
+- [docs/db-scale-backlog.md](../docs/db-scale-backlog.md) - the DB query-shape scale ledger; a worklist, never specification.
