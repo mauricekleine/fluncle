@@ -93,5 +93,7 @@ printf 'Streaming %s hardening script to root@%s\n' "${PROFILE}" "${SERVER_IPV4}
 	cat "${BOOTSTRAP_SCRIPT}"
 } | ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 "root@${SERVER_IPV4}" 'bash -s'
 
-printf '\nBootstrap complete. Verify with (plain sshd over the tailnet, both profiles):\n'
+printf '\nBootstrap complete. Verify Tailscale SSH on port 22 (primary login):\n'
+printf '  tailscale ssh %s@%s\n' "${USERNAME}" "${TS_HOSTNAME}"
+printf 'OpenSSH fallback (key-only, port %s):\n' "${ADMIN_SSH_PORT:-2222}"
 printf '  ssh -p %s %s@%s\n' "${ADMIN_SSH_PORT:-2222}" "${USERNAME}" "${TS_HOSTNAME}"
