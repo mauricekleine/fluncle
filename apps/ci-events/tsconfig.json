@@ -1,9 +1,0 @@
-{
-  "extends": "../../tsconfig.json",
-  "compilerOptions": {
-    "lib": ["ES2024", "WebWorker"],
-    "noEmit": true,
-    "types": ["@types/bun"]
-  },
-  "include": ["src/**/*.ts", "worker-configuration.d.ts"]
-}

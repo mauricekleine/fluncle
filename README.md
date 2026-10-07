@@ -26,7 +26,6 @@ Crawler and discovery surfaces (all under <https://www.fluncle.com>): `/robots.t
 ## Monorepo Layout
 
 ```text
-apps/ci-events        Optional Cloudflare Queue consumer. Turns terminal Workers Builds events into GitHub repository dispatches (docs/quality-system.md).
 apps/cli              Bun/TypeScript CLI. Thin client for public reads and admin API calls.
 apps/dns              Go DNS server behind dig.fluncle.com — findings answered over DNS TXT (docs/dig.md).
 apps/extension        Fluncle Lens, an MV3 Chrome extension. Linkifies fluncle:// coordinates on any page.

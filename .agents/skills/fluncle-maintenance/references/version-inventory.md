@@ -4,7 +4,7 @@ Every pinned/baked version in Fluncle's runtime supply chain, with where it live
 
 All commands assume the repo root as the working directory. The "check latest" one-liners are read-only (npm/curl) — safe to run on any tick.
 
-**Automation covers most of this.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps item **1** (the `oven/bun` base = bun), items **3–4** (the `fluncle` CLI, the Claude Code CLI), and item **7** (yt-dlp) on every `fluncle` release + hourly, and opens a PR for a safe bump (a major is reported); **Renovate** (`renovate.json`) owns item **6** (the Actions digests); items **2**, **5**, **8**, and **9** (node, boat.dev, uv, gh) are pinned but manual-watch. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
+**Automation covers most of this.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps item **1** (the `oven/bun` base = bun), items **3–4** (the `fluncle` CLI, the Claude Code CLI), and item **7** (yt-dlp) on every `fluncle` release + hourly, and opens a PR for a safe bump (a major is reported); the nightly `mk-dependency-upgrades` routine owns item **6** (the Actions digests); items **2**, **5**, **8**, and **9** (node, boat.dev, uv, gh) are pinned but manual-watch. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
 
 **A pin absent from this inventory is a pin nobody watches.** Every baked binary needs a row here. Item-level failures (e.g. `ytDlpFailures`) do not flip a run's verdict, so an unlisted pin that falls behind fails silently while each tick reports healthy.
 
@@ -105,25 +105,12 @@ The image is built `FROM oven/bun:<ver>-debian@sha256:<digest>` (Debian trixie),
 
 ---
 
-## 6. GitHub Actions pins — AXIS COMPLETE, Renovate owns it
+## 6. GitHub Actions pins
 
-Every action in every workflow is SHA-pinned, and Renovate maintains the digests. Do not hand-resolve tags to digests.
+Every action stays pinned to an immutable commit. The nightly `mk-dependency-upgrades` routine inventories Actions with taze, applies mature same-major updates, and reports new majors as proposals. `taze.config.ts` holds mutable branch-tip actions for explicit review.
 
-`renovate.json` (repo root) configures the Renovate GitHub App for the `github-actions` and `npm` managers. For Actions, the `helpers:pinGitHubActionDigests` preset applies: it SHA-pins any newly-added action and refreshes each digest (same-major) as the action ships updates, while a new major waits for dependency-dashboard approval.
-
-- **Verify the axis still holds** — every `uses:` should carry a 40-char SHA. A bare `@vN` is an action someone added by hand, and pinning that one at its current major is the only fix this item still asks for.
-
-  ```bash
-  grep -rn 'uses: ' .github/workflows/
-  ```
-
-- **Verify Renovate is actually flowing** — an installed-but-silent app looks exactly like an up-to-date repo, so check for its PRs rather than assuming:
-
-  ```bash
-  gh pr list --author 'app/renovate' --state all --limit 10
-  ```
-
-- **Safety:** pinning a stray action at its current major is SAFE to ship — it changes no behaviour (the same commit the tag resolves to today), and the CI run proves the workflow still parses. Bumping an action to a **new major** = brake (report it). Adding a Renovate config is safe but should be named explicitly in the PR.
+- Verify every `uses:` carries a 40-character SHA. Pin a newly added action at its current major before shipping.
+- Run the root taze inventory in default, minor, and major modes. Dependency PRs follow the normal Hyperspeed review and green-CI merge path.
 
 ---
 
@@ -173,14 +160,14 @@ Every action in every workflow is SHA-pinned, and Renovate maintains the digests
 
 ## Quick reference table
 
-| #   | Item                | File (marker)                                                                       | Current pin (read)             | Check latest                                      | Ship end-to-end?                  |
-| --- | ------------------- | ----------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------- | --------------------------------- |
-| 1   | bun base image      | `Dockerfile` `FROM oven/bun:<ver>-debian@sha256:` + `package.json` `packageManager` | `grep '^FROM oven/bun'`        | bun GH `releases/latest` + Docker Hub tag         | patch/minor yes, major brake      |
-| 2   | node + npm          | `Dockerfile` `COPY --from=node:<ver>-trixie-slim@sha256:`                           | `grep 'COPY --from=node:'`     | nodejs.org dist index + Docker Hub tag            | **Never** (manual watch)          |
-| 3   | `fluncle` CLI       | `Dockerfile` `releases/download/v<ver>/fluncle-linux-` (standalone binary)          | `grep 'download/v.*/fluncle-'` | `npm view fluncle version`                        | patch/minor yes, major brake      |
-| 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                           | `grep 'claude-code@'`          | `npm view @anthropic-ai/claude-code version`      | patch/minor yes, major/auth brake |
-| 5   | boat.dev CLI        | `Dockerfile` `releases/download/boat-cli-v<ver>/boat-linux-`                        | `grep 'boat-cli-v'`            | vendor release list (`boat-cli-v*` tags)          | **Never** (manual watch)          |
-| 6   | GitHub Actions pins | `.github/workflows/*.yml` `uses: …@<sha> # vN`                                      | `grep 'uses:.*@'`              | Renovate PRs (`gh pr list --author app/renovate`) | **Renovate (auto-pins + tracks)** |
-| 7   | yt-dlp              | `Dockerfile` `yt-dlp/releases/download/<ver>/yt-dlp_linux`                          | `grep 'yt-dlp/releases/down'`  | yt-dlp GH `releases/latest`                       | **Always** (staleness = outage)   |
-| 8   | uv                  | `Dockerfile` `COPY --from=ghcr.io/astral-sh/uv:<ver>@sha256:`                       | `grep 'astral-sh/uv:'`         | uv GH `releases/latest`                           | **Never** (manual watch)          |
-| 9   | gh                  | `Dockerfile` `cli/cli/releases/download/v<ver>/gh_`                                 | `grep 'cli/cli/releases'`      | gh GH `releases/latest`                           | **Never** (manual watch)          |
+| #   | Item                | File (marker)                                                                       | Current pin (read)             | Check latest                                 | Ship end-to-end?                  |
+| --- | ------------------- | ----------------------------------------------------------------------------------- | ------------------------------ | -------------------------------------------- | --------------------------------- |
+| 1   | bun base image      | `Dockerfile` `FROM oven/bun:<ver>-debian@sha256:` + `package.json` `packageManager` | `grep '^FROM oven/bun'`        | bun GH `releases/latest` + Docker Hub tag    | patch/minor yes, major brake      |
+| 2   | node + npm          | `Dockerfile` `COPY --from=node:<ver>-trixie-slim@sha256:`                           | `grep 'COPY --from=node:'`     | nodejs.org dist index + Docker Hub tag       | **Never** (manual watch)          |
+| 3   | `fluncle` CLI       | `Dockerfile` `releases/download/v<ver>/fluncle-linux-` (standalone binary)          | `grep 'download/v.*/fluncle-'` | `npm view fluncle version`                   | patch/minor yes, major brake      |
+| 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                           | `grep 'claude-code@'`          | `npm view @anthropic-ai/claude-code version` | patch/minor yes, major/auth brake |
+| 5   | boat.dev CLI        | `Dockerfile` `releases/download/boat-cli-v<ver>/boat-linux-`                        | `grep 'boat-cli-v'`            | vendor release list (`boat-cli-v*` tags)     | **Never** (manual watch)          |
+| 6   | GitHub Actions pins | `.github/workflows/*.yml` `uses: …@<sha> # vN`                                      | `grep 'uses:.*@'`              | Root taze inventory                          | **Nightly dependency routine**    |
+| 7   | yt-dlp              | `Dockerfile` `yt-dlp/releases/download/<ver>/yt-dlp_linux`                          | `grep 'yt-dlp/releases/down'`  | yt-dlp GH `releases/latest`                  | **Always** (staleness = outage)   |
+| 8   | uv                  | `Dockerfile` `COPY --from=ghcr.io/astral-sh/uv:<ver>@sha256:`                       | `grep 'astral-sh/uv:'`         | uv GH `releases/latest`                      | **Never** (manual watch)          |
+| 9   | gh                  | `Dockerfile` `cli/cli/releases/download/v<ver>/gh_`                                 | `grep 'cli/cli/releases'`      | gh GH `releases/latest`                      | **Never** (manual watch)          |

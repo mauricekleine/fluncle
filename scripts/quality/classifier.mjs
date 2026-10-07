@@ -21,7 +21,6 @@ const FULL_FILES = new Set([
   "bunfig.toml",
   "opencode.json",
   "package.json",
-  "renovate.json",
   "skills-lock.json",
   "tsconfig.json",
   "turbo.json",
