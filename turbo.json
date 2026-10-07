@@ -1,8 +1,9 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "concurrency": "50%",
+  "concurrency": "100%",
   "cacheMaxAge": "7d",
   "cacheMaxSize": "10GB",
+  "globalPassThroughEnv": ["FLEET_CPU_CAP", "TURBO_CONCURRENCY"],
   "globalDependencies": ["tsconfig.json", "bunfig.toml", "patches/**"],
   "tasks": {
     "build": {
