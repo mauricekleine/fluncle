@@ -3,12 +3,10 @@ name: Post-deploy Probe
 on:
   push:
     branches: [main]
-  repository_dispatch:
-    types: [cloudflare-workers-build]
   workflow_dispatch:
     inputs:
       build_uuid:
-        description: Cloudflare build UUID for rollout testing
+        description: Cloudflare build UUID for a manual probe
         required: true
         type: string
       sha:
@@ -23,7 +21,7 @@ on:
 
 concurrency:
   cancel-in-progress: true
-  group: post-deploy-${{ github.event_name == 'push' && github.sha || github.event.client_payload.build_uuid || inputs.build_uuid || github.run_id }}
+  group: post-deploy-${{ github.event_name == 'push' && github.sha || inputs.build_uuid || github.run_id }}
 
 permissions:
   contents: read

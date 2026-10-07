@@ -1,9 +1,0 @@
-version: 2
-updates:
-  - package-ecosystem: "npm"
-    directory: "/.deepsec"
-    schedule:
-      interval: "monthly"
-    open-pull-requests-limit: 0
-    ignore:
-      - dependency-name: "*"

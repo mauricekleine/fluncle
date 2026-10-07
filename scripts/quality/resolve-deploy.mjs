@@ -55,7 +55,7 @@ export function resolveDeployInput({ event, eventName }) {
     };
   }
 
-  const payload = eventName === "repository_dispatch" ? event.client_payload : event.inputs;
+  const payload = event.inputs;
   const sha = payload?.sha;
   const status = payload?.status;
   const buildUuid = payload?.build_uuid;

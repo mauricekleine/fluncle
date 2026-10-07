@@ -17,6 +17,7 @@
     "../.claude/hooks/**/*.cts",
     "../.codex/hooks/**/*.ts",
     "../.codex/hooks/**/*.mts",
-    "../.codex/hooks/**/*.cts"
+    "../.codex/hooks/**/*.cts",
+    "../apps/mobile/taze.config.ts"
   ]
 }

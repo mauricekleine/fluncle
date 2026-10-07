@@ -251,10 +251,13 @@ describe("security, release, and deploy topology", () => {
     expect(releasesSource).not.toContain('git push -f origin "refs/tags/$RELEASE_TAG"');
   });
 
-  test("post-deploy has event initiation plus a dynamic bounded fallback", () => {
+  test("post-deploy supports main pushes and manual probes with bounded polling", () => {
     const deploy = workflow("post-deploy-probe.yml");
     const deploySource = source("post-deploy-probe.yml");
-    expect(at(deploy, "on", "repository_dispatch", "types")).toEqual(["cloudflare-workers-build"]);
+    expect(Object.keys(at(deploy, "on") as Record<string, unknown>).sort()).toEqual([
+      "push",
+      "workflow_dispatch",
+    ]);
     expect(at(deploy, "on", "push", "paths-ignore")).toBeUndefined();
     expect(deploySource).toContain("resolve-deploy.mjs");
     expect(deploySource).toContain("deadline=1200");
@@ -264,13 +267,13 @@ describe("security, release, and deploy topology", () => {
     );
   });
 
-  test("post-deploy keeps every pushed SHA while deduplicating one dispatched build", () => {
+  test("post-deploy keeps every pushed SHA while deduplicating one manual build", () => {
     const deploy = workflow("post-deploy-probe.yml");
     const concurrencyGroup = at(deploy, "concurrency", "group");
 
     expect(at(deploy, "concurrency", "cancel-in-progress")).toBe(true);
     expect(concurrencyGroup).toBe(
-      "post-deploy-${{ github.event_name == 'push' && github.sha || github.event.client_payload.build_uuid || inputs.build_uuid || github.run_id }}",
+      "post-deploy-${{ github.event_name == 'push' && github.sha || inputs.build_uuid || github.run_id }}",
     );
     expect(concurrencyGroup).not.toContain("github.event_name == 'push' && 'fallback'");
   });

@@ -14,8 +14,8 @@ describe("post-deploy event handling", () => {
     for (const status of ["succeeded", "failed", "canceled"] as const) {
       expect(
         resolveDeployInput({
-          event: { client_payload: { build_uuid: "build-1", sha: SHA, status } },
-          eventName: "repository_dispatch",
+          event: { inputs: { build_uuid: "build-1", sha: SHA, status } },
+          eventName: "workflow_dispatch",
         }),
       ).toEqual({ buildUuid: "build-1", enabled: true, mode: "event", sha: SHA, status });
     }
@@ -30,8 +30,8 @@ describe("post-deploy event handling", () => {
     ]) {
       expect(() =>
         resolveDeployInput({
-          event: { client_payload: clientPayload },
-          eventName: "repository_dispatch",
+          event: { inputs: clientPayload },
+          eventName: "workflow_dispatch",
         }),
       ).toThrow();
     }
