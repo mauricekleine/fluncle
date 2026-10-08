@@ -19,7 +19,7 @@ describe("local secret file encoding", () => {
   });
 
   it("rejects an unrepresentable secret without including its value", () => {
-    const value = "all'\"`\\n";
+    const value = "all'\"`\\n#tail";
 
     expect(() => dotenvLine("TOKEN", value)).toThrow("Cannot encode TOKEN");
   });
