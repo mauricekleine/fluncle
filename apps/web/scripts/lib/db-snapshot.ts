@@ -1,6 +1,9 @@
-import { type InArgs, type ResultSet, type Value } from "@libsql/client";
+import { createClient, type InArgs, type ResultSet, type Value } from "@libsql/client";
 import { mkdir, open, rename, rm, stat } from "node:fs/promises";
-import { dirname } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+
+import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 
 import {
   DUMP_SCHEMA_SQL,
@@ -37,11 +40,18 @@ export type SnapshotOptions = {
   client: SnapshotClient;
   flushBytes?: number;
   header: string;
+  ifMissing?: boolean;
   log?: (line: string) => void;
   now?: () => number;
   outPath: string;
   pageRows?: number;
 };
+
+export function devSnapshotPath(): string {
+  const dataHome = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+
+  return join(dataHome, "fluncle", "seed.sql");
+}
 
 export function previousSnapshotPath(outPath: string): string {
   return outPath.endsWith(".sql")
@@ -51,6 +61,72 @@ export function previousSnapshotPath(outPath: string): string {
 
 export function partialSnapshotPath(outPath: string): string {
   return `${outPath}.partial`;
+}
+
+export function lockSnapshotPath(outPath: string): string {
+  return `${outPath}.lock`;
+}
+
+const COMPLETE_MARKER = "-- Complete: ";
+const LOCK_POLL_MS = 250;
+
+export async function isCompleteSnapshot(outPath: string): Promise<boolean> {
+  let handle;
+
+  try {
+    handle = await open(outPath, "r");
+  } catch {
+    return false;
+  }
+
+  try {
+    const { size } = await handle.stat();
+    const length = Math.min(size, 256);
+    const buffer = Buffer.alloc(length);
+
+    await handle.read(buffer, 0, length, size - length);
+
+    const lastLine = buffer.toString("utf8").trimEnd().split("\n").at(-1) ?? "";
+
+    return lastLine.startsWith(COMPLETE_MARKER);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function acquireSnapshotLock(
+  outPath: string,
+  log: (line: string) => void,
+): Promise<() => Promise<void>> {
+  const lockPath = lockSnapshotPath(outPath);
+
+  await mkdir(dirname(outPath), { recursive: true });
+
+  const lock = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: `file:${lockPath}` });
+  let announced = false;
+
+  for (;;) {
+    try {
+      const held = await lock.transaction("write");
+
+      return async () => {
+        await held.rollback().catch(() => {});
+        lock.close();
+      };
+    } catch (error) {
+      if ((error as { code?: string }).code !== "SQLITE_BUSY") {
+        lock.close();
+        throw error;
+      }
+    }
+
+    if (!announced) {
+      log(`Another pull holds ${lockPath}; waiting for it to finish.`);
+      announced = true;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
+  }
 }
 
 function textCell(value: Value | undefined, what: string): string {
@@ -114,7 +190,28 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-export async function pullSnapshot(options: SnapshotOptions): Promise<SnapshotReport> {
+export async function pullSnapshot(
+  options: SnapshotOptions & { ifMissing: true },
+): Promise<SnapshotReport | null>;
+export async function pullSnapshot(options: SnapshotOptions): Promise<SnapshotReport>;
+export async function pullSnapshot(options: SnapshotOptions): Promise<SnapshotReport | null> {
+  const log = options.log ?? (() => {});
+  const release = await acquireSnapshotLock(options.outPath, log);
+
+  try {
+    if (options.ifMissing && (await isCompleteSnapshot(options.outPath))) {
+      log(`A complete snapshot already exists at ${options.outPath}; nothing to pull.`);
+
+      return null;
+    }
+
+    return await pullSnapshotLocked(options);
+  } finally {
+    await release();
+  }
+}
+
+async function pullSnapshotLocked(options: SnapshotOptions): Promise<SnapshotReport> {
   const now = options.now ?? Date.now;
   const log = options.log ?? (() => {});
   const pageRows = Math.max(1, Math.floor(options.pageRows ?? SNAPSHOT_PAGE_ROWS));

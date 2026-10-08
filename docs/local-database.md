@@ -6,7 +6,7 @@ How Fluncle does databases across prod, dev, and parallel worktrees. The app sta
 
 - **Prod** is the remote `fluncle` Turso database. The deployed Worker reads `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` from Cloudflare secrets and talks to it over HTTPS via `@libsql/client/web`.
 - **Local dev** talks to a **per-worktree private libSQL server** (`turso dev`) backed by a plain SQLite file at `apps/web/.dev/local.db`. The app code is unchanged — `db.ts` still uses `@libsql/client/web`; it just points at `http://127.0.0.1:<port>` instead of a remote URL. The rest of the local Worker secrets are rendered from `apps/web/.dev.vars.tpl` with 1Password.
-- **The snapshot is pulled from production** (`fluncle`), read-only, via `db:pull-prod`. Prod credentials are never in `.dev.vars` — they live only in 1Password and are read at run time, so pulling prod data is a deliberate, human-in-the-loop step.
+- **The snapshot is pulled from production** (`fluncle`), read-only, via `db:pull-prod`, into `~/.local/share/fluncle/seed.sql` (`$XDG_DATA_HOME/fluncle/seed.sql` when that is set): outside every checkout, so any worktree pulls it and every worktree adopts it. Prod credentials are never in `.dev.vars` — they live only in 1Password and are read at run time, so pulling prod data is a deliberate, human-in-the-loop step.
 
 Why a local server and not a bare `file:./local.db`? The dev server runs the app inside **workerd** (via `@cloudflare/vite-plugin`), which has no filesystem, and `@libsql/client/web` does not support `file:` URLs. A local libSQL server over HTTP is the one form both the Worker runtime and the dev tooling can share, and it mirrors how prod connects.
 
@@ -25,8 +25,8 @@ bun run --cwd apps/web dev
 bun run --cwd apps/web db:refresh-dev
 
 # Refresh the snapshot itself from production (read-only). Needs 1Password
-# unlocked. Run this in the main checkout when you want newer data; worktrees
-# clone it.
+# unlocked. Run it from any worktree when you want newer data; every worktree
+# adopts it with db:refresh-dev.
 bun run --cwd apps/web db:pull-prod
 ```
 
@@ -48,11 +48,11 @@ bun run --cwd apps/web db:migrate    # apply pending migrations
 Superset provisions each worktree automatically (`.superset/config.json`): after `bun install`, it renders `.dev.vars` with `db:secrets`, then runs `db:refresh-dev`, which:
 
 1. Picks a deterministic per-worktree port (8100–8999, derived from the worktree path) and rewrites `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` in the worktree's `.dev.vars` to that local server.
-2. Rebuilds `apps/web/.dev/local.db` from the golden snapshot at `$SUPERSET_ROOT_PATH/apps/web/.dev/seed.sql` (the main checkout's snapshot). If no snapshot exists yet, it bootstraps one from production via `db:pull-prod` (which needs 1Password unlocked).
+2. Rebuilds `apps/web/.dev/local.db` from the golden snapshot at `~/.local/share/fluncle/seed.sql`. If no snapshot exists yet, it bootstraps one from production via `db:pull-prod` (which needs 1Password unlocked).
 
 So a new worktree comes up with its own isolated, prod-shaped database and a private port. Run several in parallel and their migrations stay independent.
 
-Worktrunk (`wt switch --create <branch>`) provisions a worktree from `.config/wt.toml` before handing it over. `wt step copy-ignored --require-include` copies nothing unless `.worktreeinclude` exists; with that file present, it reflink-copies the main checkout's files that are both gitignored and listed in `.worktreeinclude` (the `node_modules` trees, the Rust `apps/sonar/target`, and the local env files), then `bun install --frozen-lockfile` reconciles that install with the branch's lockfile. The local database under `apps/web/.dev/` is never copied, so the copied `.dev.vars` still points at the main checkout's local server; run `bun run --cwd apps/web db:refresh-dev` when the worktree needs a database of its own. Worktrunk reads `.worktreeinclude` from the main checkout, so a change to it applies once the main checkout has pulled it.
+Worktrunk (`wt switch --create <branch>`) provisions a worktree from `.config/wt.toml` before handing it over. `wt step copy-ignored --require-include` copies nothing unless `.worktreeinclude` exists; with that file present, it reflink-copies the main checkout's files that are both gitignored and listed in `.worktreeinclude` (the `node_modules` trees, the Rust `apps/sonar/target`, and the local env files), then `bun install --frozen-lockfile` reconciles that install with the branch's lockfile. The local database under `apps/web/.dev/` is never copied, so the copied `.dev.vars` still points at the source checkout's local server; run `bun run --cwd apps/web db:refresh-dev` when the worktree needs a database of its own. Worktrunk reads `.worktreeinclude` from the main checkout, so a change to it applies once the main checkout has pulled it.
 
 The E2E stack derives its own pair the same way — Vite `:3140–:3339` and libSQL `:9440–:9639`, from the worktree path (`apps/web/tests/e2e/stack.ts`) — so two worktrees can run their suites at once instead of refusing each other's ports.
 
@@ -66,15 +66,16 @@ To preview a worktree's DB-backed route in a browser without provisioning anythi
 
 ## Keeping dev in sync with prod
 
-The snapshot comes straight from production, so it is as fresh as the last `db:pull-prod`. Everyday local work needs no credentials at all — it only reads the already-dumped `seed.sql`. When you want newer data, unlock 1Password and run `db:pull-prod` in the main checkout, then `db:refresh-dev` in each worktree to adopt it. The pull is read-only (`SELECT`s); production credentials are read at run time from the 1Password item that `FLUNCLE_TURSO_OP_ITEM` points at (`db-pull-prod.ts` reads that env var; the concrete item lives in the ops runbook note) and never touch `.dev.vars`.
+The snapshot comes straight from production, so it is as fresh as the last `db:pull-prod`. Everyday local work needs no credentials at all — it only reads the already-dumped `seed.sql`. When you want newer data, unlock 1Password and run `db:pull-prod` from any worktree, then `db:refresh-dev` in each worktree to adopt it. The pull is read-only (`SELECT`s); production credentials are read at run time from the 1Password item that `FLUNCLE_TURSO_OP_ITEM` points at (`db-pull-prod.ts` reads that env var; the concrete item lives in the ops runbook note) and never touch `.dev.vars`.
 
 ### How the pull scales
 
 The production corpus is gigabytes (hundreds of thousands of tracks, each carrying 4 KiB vector BLOBs), so `db:pull-prod` never reads a table in one request and never holds the dump in memory:
 
 - **Keyset pages.** Each table is read `WHERE rowid > ? ORDER BY rowid LIMIT ?` (a `WITHOUT ROWID` table pages on its primary key), 250 rows per request by default; `--page-rows <n>` changes it. The cursor is bound as the value the previous page returned, so a BLOB key goes back as a BLOB, never as text.
-- **Streamed to disk.** Rows are written to `.dev/seed.sql.partial` as they arrive, and only a fully written file is renamed to `.dev/seed.sql`. The last line reads `-- Complete: <tables> tables, <rows> rows.`, and the second line records when the pull started.
+- **Streamed to disk.** Rows are written to `seed.sql.partial` beside the snapshot as they arrive, and only a fully written file is renamed to `seed.sql`. The last line reads `-- Complete: <tables> tables, <rows> rows.`, and the second line records when the pull started.
 - **No stale file posing as fresh.** At start the existing `seed.sql` is moved to `seed.previous.sql`. A successful pull deletes it, along with any copy an earlier failed pull left behind; a failed pull removes the partial file, leaves the old dump under its `previous` name, prints why, and exits non-zero. `db:refresh-dev` only reads `seed.sql`, so a failed pull can never be adopted by mistake.
+- **One pull at a time.** Pulls serialize on a write transaction in `seed.sql.lock`, a SQLite file beside the snapshot; the operating system releases it when the holder exits, so a dead pull leaves nothing to clean up. `db:refresh-dev` bootstraps with `db:pull-prod --if-missing`, so a worktree that waited adopts the snapshot the first pull finished instead of pulling again.
 - **AUTOINCREMENT heads survive.** After the rows, the dump writes each dumped table's `sqlite_sequence` head, so a restored table resumes numbering where the source did even when compaction has deleted every row (the artifact change log fences consumers on that head).
 - **A receipt.** A successful pull prints each table's row count, the total rows, the bytes written, and the elapsed time.
 
@@ -108,12 +109,12 @@ The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build s
 - `apps/web/scripts/dev.ts` — local dev orchestrator (server + migrate + Vite).
 - `apps/web/scripts/render-dev-vars.ts` — render `apps/web/.dev.vars` from `apps/web/.dev.vars.tpl` via `op inject --account "$FLUNCLE_1PASSWORD_ACCOUNT"`; the 1Password item path comes from `FLUNCLE_1PASSWORD_ENV_ITEM`.
 - `apps/web/scripts/db-refresh.ts` — clone the snapshot into this worktree's `local.db` and point `.dev.vars` at a local port.
-- `apps/web/scripts/db-pull-prod.ts` — dump production to `.dev/seed.sql` over libSQL HTTP, with prod creds read from 1Password at run time (no `turso` CLI login, no creds in `.dev.vars`). The paging, streaming, and atomic-rename logic lives in `apps/web/scripts/lib/db-snapshot.ts` (see _How the pull scales_). The dump skips `tracks_fts` and its FTS5 shadow tables — a derived artifact ([docs/search.md](./search.md)) the dev flow's own `db:migrate` rebuilds; dumping them double-creates the shadow tables on restore.
+- `apps/web/scripts/db-pull-prod.ts` — dump production to `~/.local/share/fluncle/seed.sql` over libSQL HTTP, with prod creds read from 1Password at run time (no `turso` CLI login, no creds in `.dev.vars`). The paging, streaming, and atomic-rename logic lives in `apps/web/scripts/lib/db-snapshot.ts` (see _How the pull scales_). The dump skips `tracks_fts` and its FTS5 shadow tables — a derived artifact ([docs/search.md](./search.md)) the dev flow's own `db:migrate` rebuilds; dumping them double-creates the shadow tables on restore.
 - `apps/web/scripts/migrate.ts`: load the generated SQL, pair it with the journal, and atomically apply the pending suffix with its ledger stamps.
 - `apps/web/scripts/guard-production-migrations.ts`: validate the generated journal and read the target ledger maximum that determines the pending suffix.
 - `apps/web/scripts/migrate-telemetry.ts`: keep local unprovisioned runs optional, but make the pre-publication production telemetry migration required and fatal on failure.
 - `apps/web/.dev.vars.tpl` — committed 1Password reference template for local Worker secrets.
-- `apps/web/.dev/` — local database + snapshot (gitignored).
+- `apps/web/.dev/` — local database (gitignored); the snapshot lives at `~/.local/share/fluncle/seed.sql`.
 
 ## Local is not production — never trust `turso dev` for a performance claim
 

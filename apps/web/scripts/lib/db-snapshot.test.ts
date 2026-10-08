@@ -1,6 +1,7 @@
 import { type Client, createClient, type InArgs, type ResultSet } from "@libsql/client";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,7 +9,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import { createIntegrationDb, seedCatalogueTrack } from "../../src/lib/server/integration-db";
 import {
+  devSnapshotPath,
   formatSnapshotReport,
+  isCompleteSnapshot,
+  lockSnapshotPath,
   partialSnapshotPath,
   previousSnapshotPath,
   pullSnapshot,
@@ -125,7 +129,114 @@ afterEach(async () => {
   await rm(dir, { force: true, recursive: true });
 });
 
+describe("devSnapshotPath", () => {
+  it("lives under the data directory, outside any checkout", () => {
+    const previous = process.env.XDG_DATA_HOME;
+
+    process.env.XDG_DATA_HOME = "/data";
+    try {
+      expect(devSnapshotPath()).toBe("/data/fluncle/seed.sql");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.XDG_DATA_HOME;
+      } else {
+        process.env.XDG_DATA_HOME = previous;
+      }
+    }
+  });
+});
+
 describe("pullSnapshot", () => {
+  it("serializes overlapping pulls and lets a waiting bootstrap adopt the finished snapshot", async () => {
+    const lines: string[] = [];
+    const [first, second] = await Promise.all([
+      pullSnapshot({
+        client: source,
+        header: "-- first",
+        ifMissing: true,
+        log: (line) => lines.push(line),
+        outPath,
+        pageRows: 1,
+      }),
+      pullSnapshot({
+        client: source,
+        header: "-- second",
+        ifMissing: true,
+        log: (line) => lines.push(line),
+        outPath,
+        pageRows: 1,
+      }),
+    ]);
+
+    expect([first, second].filter(Boolean)).toHaveLength(1);
+    expect(lines.some((line) => line.includes("waiting for it to finish"))).toBe(true);
+    expect(await isCompleteSnapshot(outPath)).toBe(true);
+    expect(existsSync(partialSnapshotPath(outPath))).toBe(false);
+
+    const restored = createClient({
+      concurrency: LOCAL_DB_CONCURRENCY,
+      intMode: "bigint",
+      url: `file:${join(dir, "restored.db")}`,
+    });
+
+    try {
+      await restored.executeMultiple(await readFile(outPath, "utf8"));
+      expect(await rowsOf(restored, "SELECT * FROM tracks ORDER BY track_id")).toEqual(
+        await rowsOf(source, "SELECT * FROM tracks ORDER BY track_id"),
+      );
+    } finally {
+      restored.close();
+    }
+  });
+
+  it("waits for a lock another connection holds and pulls once it is released", async () => {
+    await mkdir(join(dir, "dev"), { recursive: true });
+
+    const holder = createClient({
+      concurrency: LOCAL_DB_CONCURRENCY,
+      url: `file:${lockSnapshotPath(outPath)}`,
+    });
+    const held = await holder.transaction("write");
+    const lines: string[] = [];
+    const pull = pullSnapshot({
+      client: source,
+      header: "-- test",
+      log: (line) => lines.push(line),
+      outPath,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(existsSync(outPath)).toBe(false);
+    expect(lines.some((line) => line.includes("waiting for it to finish"))).toBe(true);
+
+    await held.rollback();
+    holder.close();
+
+    expect((await pull).totalRows).toBeGreaterThan(0);
+    expect(await isCompleteSnapshot(outPath)).toBe(true);
+  });
+
+  it("is released by the operating system when the holding process dies", async () => {
+    await mkdir(join(dir, "dev"), { recursive: true });
+
+    const lockPath = lockSnapshotPath(outPath);
+    const child = spawn(
+      "bun",
+      [
+        "-e",
+        `const { createClient } = await import("@libsql/client"); const lock = createClient({ concurrency: 1, url: "file:${lockPath}" }); await lock.transaction("write"); console.log("held"); setTimeout(() => process.exit(0), 400);`,
+      ],
+      { cwd: process.cwd(), stdio: ["ignore", "pipe", "inherit"] },
+    );
+
+    await new Promise<void>((resolve) => child.stdout.on("data", () => resolve()));
+
+    const report = await pullSnapshot({ client: source, header: "-- test", outPath });
+
+    expect(report.totalRows).toBeGreaterThan(0);
+    expect(await isCompleteSnapshot(outPath)).toBe(true);
+  });
+
   it("restores every table byte-faithfully across many small pages", async () => {
     const report = await pullSnapshot({
       client: source,
