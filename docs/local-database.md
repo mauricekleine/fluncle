@@ -6,7 +6,7 @@ How Fluncle does databases across prod, dev, and parallel worktrees. The app sta
 
 - **Prod** is the remote `fluncle` Turso database. The deployed Worker reads `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` from Cloudflare secrets and talks to it over HTTPS via `@libsql/client/web`.
 - **No Turso login.** Agents and local dev never need `turso auth login`: `turso dev` runs the local server without an account, and anything that reads production uses the read-only database credential from the secret manager. The Turso CLI login is an operator step for one-time token mints only.
-- **Local dev** talks to a **per-worktree private libSQL server** (`turso dev`) backed by a plain SQLite file at `apps/web/.dev/local.db`. The app code is unchanged — `db.ts` still uses `@libsql/client/web`; it just points at `http://127.0.0.1:<port>` instead of a remote URL. The rest of the local Worker secrets are rendered from `apps/web/.dev.vars.tpl` with 1Password.
+- **Local dev** talks to a **per-worktree private libSQL server** (`turso dev`) backed by a plain SQLite file at `apps/web/.dev/local.db`. The app code is unchanged — `db.ts` still uses `@libsql/client/web`; it just points at `http://127.0.0.1:<port>` instead of a remote URL. Local Worker secrets come from `apps/web/.dev.vars.tpl` with 1Password, through a rendered file on macOS or the process environment on Linux.
 - **The snapshot is pulled from production** (`fluncle`), read-only, via `db:pull-prod`, into `~/.local/share/fluncle/seed.sql` (`$XDG_DATA_HOME/fluncle/seed.sql` when that is set): outside every checkout, so any worktree pulls it and every worktree adopts it. Prod credentials are never in `.dev.vars` — they are resolved at run time (see [Production credentials for the pull](#production-credentials-for-the-pull)), so pulling prod data is a deliberate, human-in-the-loop step.
 
 Why a local server and not a bare `file:./local.db`? The dev server runs the app inside **workerd** (via `@cloudflare/vite-plugin`), which has no filesystem, and `@libsql/client/web` does not support `file:` URLs. A local libSQL server over HTTP is the one form both the Worker runtime and the dev tooling can share, and it mirrors how prod connects.
@@ -25,13 +25,21 @@ bun run --cwd apps/web dev
 # Refresh local dev data from the latest snapshot (rebuilds local.db).
 bun run --cwd apps/web db:refresh-dev
 
-# Refresh the snapshot itself from production (read-only). Needs the turso CLI
-# logged in, or FLUNCLE_TURSO_OP_ITEM with 1Password unlocked. Run it from any
+# Refresh the snapshot itself from production (read-only). Uses FLUNCLE_TURSO_OP_ITEM through the CLI wrapper or an operator account. Run it from any
 # worktree when you want newer data; every worktree adopts it with db:refresh-dev.
 bun run --cwd apps/web db:pull-prod
 ```
 
-`db:secrets` runs `op inject` against the 1Password item named by `FLUNCLE_1PASSWORD_ENV_ITEM` and writes the plaintext local file at `apps/web/.dev.vars` (gitignored). `dev` is a thin orchestrator (`apps/web/scripts/dev.ts`): it reads `TURSO_DATABASE_URL` from `.dev.vars`, and when that is a local `http://127.0.0.1:…` URL it starts `turso dev --db-file .dev/local.db`, waits for it, runs `db:migrate`, then starts Vite. If the URL is remote it just runs Vite against it.
+`db:secrets` reads the 1Password item named by `FLUNCLE_1PASSWORD_ENV_ITEM`; `FLUNCLE_1PASSWORD_ACCOUNT` is optional when the CLI wrapper selects a service account. On macOS, its default writes the resolved variables to the gitignored `apps/web/.dev.vars` with owner-only permissions. On Linux, it starts `dev` through `op run` without writing secrets to disk. Supply a command to use process-only secrets on either platform:
+
+```bash
+bun run --cwd apps/web db:secrets -- bun run dev
+bun run --cwd apps/web db:secrets -- true
+```
+
+Process-only mode requires a worktree without `.dev.vars`, because Cloudflare gives that file precedence over process secrets. `dev` enables Cloudflare's process environment input in that worktree and uses the same deterministic local database port as `db:refresh-dev` when the template leaves the database URL empty. It seeds the local database, starts `turso dev`, applies migrations and starts Vite. Existing macOS `.dev.vars` configuration keeps its current behavior.
+
+Credentials set to `disabled-for-agents` and Discord webhook URLs on `discord.invalid` disable those integrations. Optional consumers skip them; required consumers report the disabled variable by name. A disabled admin bearer never authorizes a request.
 
 ## Migrations
 
@@ -118,7 +126,7 @@ The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build s
 ## Files
 
 - `apps/web/scripts/dev.ts` — local dev orchestrator (server + migrate + Vite).
-- `apps/web/scripts/render-dev-vars.ts` — render `apps/web/.dev.vars` from `apps/web/.dev.vars.tpl` via `op inject --account "$FLUNCLE_1PASSWORD_ACCOUNT"`; the 1Password item path comes from `FLUNCLE_1PASSWORD_ENV_ITEM`.
+- `apps/web/scripts/render-dev-vars.ts` — read `apps/web/.dev.vars.tpl` with `op run`, writing a local file on macOS or starting a process on Linux; explicit commands use process-only secrets on either platform.
 - `apps/web/scripts/db-refresh.ts` — clone the snapshot into this worktree's `local.db` and point `.dev.vars` at a local port.
 - `apps/web/scripts/db-pull-prod.ts` — dump production to `~/.local/share/fluncle/seed.sql` over libSQL HTTP, with prod creds read from 1Password at run time (no `turso` CLI login, no creds in `.dev.vars`). The paging, streaming, and atomic-rename logic lives in `apps/web/scripts/lib/db-snapshot.ts` (see _How the pull scales_). The dump skips `tracks_fts` and its FTS5 shadow tables — a derived artifact ([docs/search.md](./search.md)) the dev flow's own `db:migrate` rebuilds; dumping them double-creates the shadow tables on restore.
 - `apps/web/scripts/migrate.ts`: load the generated SQL, pair it with the journal, and atomically apply the pending suffix with its ledger stamps.

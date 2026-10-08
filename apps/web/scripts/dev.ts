@@ -5,8 +5,18 @@ import { createClient } from "@libsql/client/web";
 import { LOCAL_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { existsSync } from "node:fs";
+import { portForWorktree } from "./lib/local-db-port";
 
 config({ path: ".dev.vars", quiet: true });
+
+if (!existsSync(".dev.vars")) {
+  process.env.CLOUDFLARE_INCLUDE_PROCESS_ENV = "true";
+
+  if (!process.env.TURSO_DATABASE_URL) {
+    process.env.TURSO_DATABASE_URL = `http://127.0.0.1:${portForWorktree(process.cwd())}`;
+    process.env.TURSO_AUTH_TOKEN = "local-dev";
+  }
+}
 
 const url = process.env.TURSO_DATABASE_URL ?? "";
 const isLocal = /^http:\/\/(127\.0\.0\.1|localhost):\d+/.test(url);
