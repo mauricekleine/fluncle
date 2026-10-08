@@ -35,7 +35,7 @@ async function resolveSeed(): Promise<string> {
   }
 
   console.log(`No dev snapshot at ${seed} — bootstrapping from production…`);
-  await $`bun run scripts/db-pull-prod.ts`;
+  await $`bun run scripts/db-pull-prod.ts --if-missing`;
 
   return seed;
 }

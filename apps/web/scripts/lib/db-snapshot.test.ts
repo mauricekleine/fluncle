@@ -1,6 +1,6 @@
 import { type Client, createClient, type InArgs, type ResultSet } from "@libsql/client";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,6 +10,8 @@ import { createIntegrationDb, seedCatalogueTrack } from "../../src/lib/server/in
 import {
   devSnapshotPath,
   formatSnapshotReport,
+  isCompleteSnapshot,
+  lockSnapshotPath,
   partialSnapshotPath,
   previousSnapshotPath,
   pullSnapshot,
@@ -144,6 +146,59 @@ describe("devSnapshotPath", () => {
 });
 
 describe("pullSnapshot", () => {
+  it("serializes overlapping pulls and lets a waiting bootstrap adopt the finished snapshot", async () => {
+    const lines: string[] = [];
+    const [first, second] = await Promise.all([
+      pullSnapshot({
+        client: source,
+        header: "-- first",
+        ifMissing: true,
+        log: (line) => lines.push(line),
+        outPath,
+        pageRows: 1,
+      }),
+      pullSnapshot({
+        client: source,
+        header: "-- second",
+        ifMissing: true,
+        log: (line) => lines.push(line),
+        outPath,
+        pageRows: 1,
+      }),
+    ]);
+
+    expect([first, second].filter(Boolean)).toHaveLength(1);
+    expect(lines.some((line) => line.includes("waiting for it to finish"))).toBe(true);
+    expect(await isCompleteSnapshot(outPath)).toBe(true);
+    expect(existsSync(lockSnapshotPath(outPath))).toBe(false);
+    expect(existsSync(partialSnapshotPath(outPath))).toBe(false);
+
+    const restored = createClient({
+      concurrency: LOCAL_DB_CONCURRENCY,
+      intMode: "bigint",
+      url: `file:${join(dir, "restored.db")}`,
+    });
+
+    try {
+      await restored.executeMultiple(await readFile(outPath, "utf8"));
+      expect(await rowsOf(restored, "SELECT * FROM tracks ORDER BY track_id")).toEqual(
+        await rowsOf(source, "SELECT * FROM tracks ORDER BY track_id"),
+      );
+    } finally {
+      restored.close();
+    }
+  });
+
+  it("clears a lock left by a dead process and pulls", async () => {
+    await mkdir(join(dir, "dev"), { recursive: true });
+    await writeFile(lockSnapshotPath(outPath), "2147483646");
+
+    const report = await pullSnapshot({ client: source, header: "-- test", outPath });
+
+    expect(report.totalRows).toBeGreaterThan(0);
+    expect(existsSync(lockSnapshotPath(outPath))).toBe(false);
+  });
+
   it("restores every table byte-faithfully across many small pages", async () => {
     const report = await pullSnapshot({
       client: source,
