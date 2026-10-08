@@ -27,7 +27,17 @@ log "Installing base public SSH app packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-	ca-certificates curl gnupg sudo ufw openssh-server fail2ban
+	ca-certificates curl gnupg sudo ufw openssh-server fail2ban unattended-upgrades
+
+log "Scheduling overnight security reboots"
+timedatectl set-timezone Europe/Amsterdam
+cat >/etc/apt/apt.conf.d/99-fluncle-reboots <<'APT'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "04:30";
+APT
+systemctl enable --now apt-daily.timer apt-daily-upgrade.timer
 
 log "Creating private admin user ${USERNAME}"
 if ! id "${USERNAME}" >/dev/null 2>&1; then
