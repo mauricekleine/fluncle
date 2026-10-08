@@ -204,8 +204,10 @@ async function completeUpload(url: string, parts: CompletedPart[]): Promise<void
   }
 }
 
+const UPLOAD_ABORT_TIMEOUT_MS = 5_000;
+
 async function abortUpload(url: string): Promise<void> {
-  await fetch(url, { method: "DELETE" });
+  await fetch(url, { method: "DELETE", signal: AbortSignal.timeout(UPLOAD_ABORT_TIMEOUT_MS) });
 }
 
 async function assertFfmpeg(): Promise<void> {

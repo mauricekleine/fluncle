@@ -82,39 +82,42 @@ describe("armDeadline", () => {
     const { schedule, scheduled } = fakeScheduler();
     const beforeExitCode = process.exitCode;
 
-    armDeadline(240, {
-      command: "admin labels evidence 8f1c",
-      exit: (code) => {
-        exits.push(code);
-      },
-      graceMs: 10_000,
-      json: false,
-      now: () => 1_000_000,
-      report: (message) => reports.push(message),
-      schedule,
-    });
+    try {
+      armDeadline(240, {
+        command: "admin labels evidence 8f1c",
+        exit: (code) => {
+          exits.push(code);
+        },
+        graceMs: 10_000,
+        json: false,
+        now: () => 1_000_000,
+        report: (message) => reports.push(message),
+        schedule,
+      });
 
-    expect(deadlineAt()).toBe(1_240_000);
-    expect(remainingDeadlineMs(() => 1_100_000)).toBe(140_000);
-    expect(scheduled.map((entry) => entry.ms)).toEqual([240_000]);
-    expect(deadlineSignal().aborted).toBe(false);
+      expect(deadlineAt()).toBe(1_240_000);
+      expect(remainingDeadlineMs(() => 1_100_000)).toBe(140_000);
+      expect(scheduled.map((entry) => entry.ms)).toEqual([240_000]);
+      expect(deadlineSignal().aborted).toBe(false);
 
-    noteProgress("waiting 95 s for a discogs slot behind other callers on this machine");
-    scheduled[0]?.fire();
+      noteProgress("waiting 95 s for a discogs slot behind other callers on this machine");
+      scheduled[0]?.fire();
 
-    expect(deadlineFired()).toBe(true);
-    expect(deadlineSignal().aborted).toBe(true);
-    expect(process.exitCode).toBe(TIMEOUT_EXIT_CODE);
-    expect(reports).toEqual([
-      "fluncle admin labels evidence 8f1c stopped after 240 s: waiting 95 s for a discogs slot behind other callers on this machine. Set --timeout or FLUNCLE_TIMEOUT in seconds (0 disables the deadline).",
-    ]);
-    expect(exits).toEqual([]);
-    expect(scheduled.map((entry) => entry.ms)).toEqual([240_000, 10_000]);
+      expect(deadlineFired()).toBe(true);
+      expect(deadlineSignal().aborted).toBe(true);
+      expect(process.exitCode).toBe(TIMEOUT_EXIT_CODE);
+      expect(reports).toEqual([
+        "fluncle admin labels evidence 8f1c stopped after 240 s: waiting 95 s for a discogs slot behind other callers on this machine. Set --timeout or FLUNCLE_TIMEOUT in seconds (0 disables the deadline).",
+      ]);
+      expect(exits).toEqual([]);
+      expect(scheduled.map((entry) => entry.ms)).toEqual([240_000, 10_000]);
 
-    scheduled[1]?.fire();
+      scheduled[1]?.fire();
 
-    expect(exits).toEqual([TIMEOUT_EXIT_CODE]);
-    process.exitCode = beforeExitCode;
+      expect(exits).toEqual([TIMEOUT_EXIT_CODE]);
+    } finally {
+      process.exitCode = beforeExitCode ?? 0;
+    }
   });
 
   test("disarming after the action completes cancels the timer so a slow update check cannot fail a finished command", () => {
@@ -137,20 +140,35 @@ describe("armDeadline", () => {
     expect(remainingDeadlineMs()).toBeNull();
   });
 
-  test("assertBeforeDeadline refuses to start work once the deadline has passed", () => {
-    const { schedule } = fakeScheduler();
+  test("assertBeforeDeadline fires the deadline synchronously when a blocking call outlived it", () => {
+    const reports: string[] = [];
+    const { schedule, scheduled } = fakeScheduler();
+    const beforeExitCode = process.exitCode;
 
-    armDeadline(1, {
-      command: "tracks get x",
-      json: false,
-      now: () => Date.now() - 5_000,
-      schedule,
-    });
+    try {
+      armDeadline(1, {
+        command: "admin labels list",
+        json: false,
+        now: () => Date.now() - 5_000,
+        report: (message) => reports.push(message),
+        schedule,
+      });
 
-    expect(() => assertBeforeDeadline("reading the token")).toThrow(
-      "the deadline passed while reading the token",
-    );
-    expect(remainingDeadlineMs()).toBeLessThan(0);
+      expect(() => assertBeforeDeadline("reading the token")).toThrow(
+        "the deadline passed while reading the token",
+      );
+      expect(remainingDeadlineMs()).toBeLessThan(0);
+      expect(deadlineFired()).toBe(true);
+      expect(deadlineSignal().aborted).toBe(true);
+      expect(process.exitCode).toBe(TIMEOUT_EXIT_CODE);
+      expect(reports).toEqual([
+        "fluncle admin labels list stopped after 1 s. Set --timeout or FLUNCLE_TIMEOUT in seconds (0 disables the deadline).",
+      ]);
+      expect(scheduled[0]?.cancelled).toBe(true);
+      expect(scheduled.map((entry) => entry.ms)).toEqual([1_000, 10_000]);
+    } finally {
+      process.exitCode = beforeExitCode ?? 0;
+    }
   });
 
   test("the message stands on its own without a progress note", () => {

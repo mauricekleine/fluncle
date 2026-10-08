@@ -1,4 +1,7 @@
 import { describe, expect, test as bunTest } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
 import {
   ARTIST_RULE_BOUNDARY,
@@ -69,6 +72,36 @@ describe("fluncle CLI parsing and JSON output", () => {
         });
       } finally {
         await server.stop(true);
+      }
+    },
+  );
+
+  testCli(
+    "a token lookup that outlives the deadline still exits 124 with the timeout code",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "fluncle-cli-op-"));
+
+      try {
+        const op = join(dir, "op");
+        writeFileSync(op, "#!/bin/sh\nsleep 0.4\nprintf tok\n");
+        chmodSync(op, 0o755);
+
+        const result = await runCli(["--timeout", "0.1", "admin", "labels", "list", "--json"], {
+          FLUNCLE_API_TOKEN_REF: "op://vault/item/field",
+          HOME: dir,
+          NODE_ENV: "development",
+          PATH: `${dir}:${process.env.PATH ?? ""}`,
+        });
+
+        expect(result.exitCode).toBe(124);
+        expect(JSON.parse(result.stdout)).toEqual({
+          code: "timeout",
+          message:
+            "fluncle admin labels list stopped after 0.1 s. Set --timeout or FLUNCLE_TIMEOUT in seconds (0 disables the deadline).",
+          ok: false,
+        });
+      } finally {
+        rmSync(dir, { force: true, recursive: true });
       }
     },
   );

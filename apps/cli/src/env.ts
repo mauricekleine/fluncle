@@ -90,6 +90,7 @@ function resolveTokenRef(): void {
       timeout,
     });
   } catch (error) {
+    assertBeforeDeadline("reading FLUNCLE_API_TOKEN_REF with op");
     const timedOut = (error as NodeJS.ErrnoException).code === "ETIMEDOUT";
 
     throw new Error(

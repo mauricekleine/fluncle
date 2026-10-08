@@ -9,6 +9,7 @@ type DeadlineState = {
   at: null | number;
   cancel: (() => void) | null;
   controller: AbortController;
+  fire: (() => void) | null;
   fired: boolean;
   note: null | string;
 };
@@ -17,6 +18,7 @@ const state: DeadlineState = {
   at: null,
   cancel: null,
   controller: new AbortController(),
+  fire: null,
   fired: false,
   note: null,
 };
@@ -110,20 +112,29 @@ export function armDeadline(seconds: number, options: DeadlineOptions): void {
     });
 
   state.at = now() + seconds * 1000;
-  state.cancel = schedule(() => {
+  state.fire = () => {
+    if (state.fired) {
+      return;
+    }
+
     const message = timeoutMessage(options.command, seconds, state.note);
     state.fired = true;
-    state.cancel = null;
+    disarmDeadline();
     report(message);
     process.exitCode = TIMEOUT_EXIT_CODE;
     state.controller.abort(new CliError("timeout", message));
     schedule(() => exit(TIMEOUT_EXIT_CODE), options.graceMs ?? CLEANUP_GRACE_MS);
-  }, seconds * 1000);
+  };
+  state.cancel = schedule(state.fire, seconds * 1000);
 }
 
 export function disarmDeadline(): void {
   state.cancel?.();
   state.cancel = null;
+}
+
+export function fireDeadlineNow(): void {
+  state.fire?.();
 }
 
 export function deadlineAt(): null | number {
@@ -146,6 +157,7 @@ export function assertBeforeDeadline(doing: string): void {
   const remaining = remainingDeadlineMs();
 
   if (remaining !== null && remaining <= 0) {
+    fireDeadlineNow();
     throw new CliError("timeout", `the deadline passed while ${doing}`);
   }
 }
@@ -161,6 +173,7 @@ export function progressNote(): null | string {
 export function resetDeadlineForTests(): void {
   disarmDeadline();
   state.at = null;
+  state.fire = null;
   state.fired = false;
   state.note = null;
   state.controller = new AbortController();
