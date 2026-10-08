@@ -38,14 +38,14 @@ function answerByField(command: string[]): string {
 
 describe("opReference", () => {
   it("adds the op:// scheme that op read requires", () => {
-    expect(opReference("Fluncle Agents/Turso Production Read-only", "TURSO_AUTH_TOKEN")).toBe(
-      "op://Fluncle Agents/Turso Production Read-only/TURSO_AUTH_TOKEN",
+    expect(opReference("<vault with spaces>/<item>", "TURSO_AUTH_TOKEN")).toBe(
+      "op://<vault with spaces>/<item>/TURSO_AUTH_TOKEN",
     );
   });
 
   it("keeps a reference that already carries the scheme or a trailing slash", () => {
-    expect(opReference("op://Vault/Item/", "TURSO_DATABASE_URL")).toBe(
-      "op://Vault/Item/TURSO_DATABASE_URL",
+    expect(opReference("op://<vault>/<item>/", "TURSO_DATABASE_URL")).toBe(
+      "op://<vault>/<item>/TURSO_DATABASE_URL",
     );
   });
 });
@@ -56,7 +56,7 @@ describe("resolveProductionCredentials", () => {
 
     const credentials = await resolveProductionCredentials(
       {
-        FLUNCLE_TURSO_OP_ITEM: "Vault/Item",
+        FLUNCLE_TURSO_OP_ITEM: "<vault>/<item>",
         TURSO_AUTH_TOKEN: ` ${TOKEN} `,
         TURSO_DATABASE_URL: `${URL}\n`,
       },
@@ -82,7 +82,7 @@ describe("resolveProductionCredentials", () => {
     const credentials = await resolveProductionCredentials(
       {
         FLUNCLE_1PASSWORD_ACCOUNT: "https://example.1password.com/",
-        FLUNCLE_TURSO_OP_ITEM: "Vault/Item",
+        FLUNCLE_TURSO_OP_ITEM: "<vault>/<item>",
       },
       run,
     );
@@ -92,14 +92,14 @@ describe("resolveProductionCredentials", () => {
       [
         "op",
         "read",
-        "op://Vault/Item/TURSO_DATABASE_URL",
+        "op://<vault>/<item>/TURSO_DATABASE_URL",
         "--account",
         "https://example.1password.com/",
       ],
       [
         "op",
         "read",
-        "op://Vault/Item/TURSO_AUTH_TOKEN",
+        "op://<vault>/<item>/TURSO_AUTH_TOKEN",
         "--account",
         "https://example.1password.com/",
       ],
@@ -109,22 +109,22 @@ describe("resolveProductionCredentials", () => {
   it("omits --account when FLUNCLE_1PASSWORD_ACCOUNT is unset", async () => {
     const { calls, run } = recorder(answerByField);
 
-    await resolveProductionCredentials({ FLUNCLE_TURSO_OP_ITEM: "op://Vault/Item" }, run);
+    await resolveProductionCredentials({ FLUNCLE_TURSO_OP_ITEM: "op://<vault>/<item>" }, run);
 
     expect(calls).toEqual([
-      ["op", "read", "op://Vault/Item/TURSO_DATABASE_URL"],
-      ["op", "read", "op://Vault/Item/TURSO_AUTH_TOKEN"],
+      ["op", "read", "op://<vault>/<item>/TURSO_DATABASE_URL"],
+      ["op", "read", "op://<vault>/<item>/TURSO_AUTH_TOKEN"],
     ]);
   });
 
   it("names the 1Password path and the tool's error when op read fails, never a value", async () => {
     const { run } = recorder((command) =>
-      command.includes("op://Vault/Item/TURSO_AUTH_TOKEN")
+      command.includes("op://<vault>/<item>/TURSO_AUTH_TOKEN")
         ? new Error("[ERROR] authorization timeout")
         : `${URL}\n`,
     );
 
-    const failure = resolveProductionCredentials({ FLUNCLE_TURSO_OP_ITEM: "Vault/Item" }, run);
+    const failure = resolveProductionCredentials({ FLUNCLE_TURSO_OP_ITEM: "<vault>/<item>" }, run);
 
     await expect(failure).rejects.toThrow(/1Password \(FLUNCLE_TURSO_OP_ITEM\)/);
     await expect(failure).rejects.toThrow(/authorization timeout/);
