@@ -2,7 +2,8 @@
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { repositoryRoot } from "./classifier.mjs";
 
 function parseArguments(argv) {
@@ -125,7 +126,14 @@ function run(commandDefinition) {
   return new Promise((resolvePromise) => {
     const child = spawn(commandDefinition.program, commandDefinition.args, {
       cwd: repositoryRoot(),
-      env: process.env,
+      env: {
+        ...process.env,
+        TURBO_CACHE_DIR:
+          process.env.TURBO_CACHE_DIR ||
+          (process.env.CI
+            ? ".turbo/cache"
+            : join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "turbo", "fluncle")),
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
