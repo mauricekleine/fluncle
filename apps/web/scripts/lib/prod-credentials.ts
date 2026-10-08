@@ -1,5 +1,5 @@
 export const DEFAULT_TURSO_DB = "fluncle";
-export const TURSO_TOKEN_EXPIRATION = "1h";
+export const TURSO_TOKEN_EXPIRATION = "1d";
 
 export type CredentialSource = "environment" | "1password" | "turso-cli";
 
