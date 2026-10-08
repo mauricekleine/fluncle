@@ -3,13 +3,23 @@ import { CliError, printJson } from "./output";
 export const DEFAULT_NON_INTERACTIVE_TIMEOUT_SECONDS = 240;
 export const TIMEOUT_EXIT_CODE = 124;
 export const TIMEOUT_ENV = "FLUNCLE_TIMEOUT";
+export const CLEANUP_GRACE_MS = 10_000;
 
 type DeadlineState = {
   at: null | number;
+  cancel: (() => void) | null;
+  controller: AbortController;
+  fired: boolean;
   note: null | string;
 };
 
-const state: DeadlineState = { at: null, note: null };
+const state: DeadlineState = {
+  at: null,
+  cancel: null,
+  controller: new AbortController(),
+  fired: false,
+  note: null,
+};
 
 export function parseTimeoutSeconds(value: string | undefined, source: string): null | number {
   if (value === undefined || value.trim() === "") {
@@ -60,17 +70,26 @@ export function timeoutMessage(command: string, seconds: number, note: null | st
   return `fluncle ${command} stopped after ${seconds} s${waiting}. Set --timeout or ${TIMEOUT_ENV} in seconds (0 disables the deadline).`;
 }
 
-export function armDeadline(
-  seconds: number,
-  options: {
-    command: string;
-    exit?: (code: number) => never;
-    json: boolean;
-    now?: () => number;
-    report?: (message: string) => void;
-    schedule?: (fire: () => void, ms: number) => void;
-  },
-): void {
+export type DeadlineOptions = {
+  command: string;
+  exit?: (code: number) => void;
+  graceMs?: number;
+  json: boolean;
+  now?: () => number;
+  report?: (message: string) => void;
+  schedule?: (fire: () => void, ms: number) => () => void;
+};
+
+function defaultSchedule(fire: () => void, ms: number): () => void {
+  const timer = setTimeout(fire, ms);
+  timer.unref();
+
+  return () => clearTimeout(timer);
+}
+
+export function armDeadline(seconds: number, options: DeadlineOptions): void {
+  disarmDeadline();
+
   if (seconds <= 0) {
     state.at = null;
     return;
@@ -78,6 +97,7 @@ export function armDeadline(
 
   const now = options.now ?? Date.now;
   const exit = options.exit ?? ((code: number) => process.exit(code));
+  const schedule = options.schedule ?? defaultSchedule;
   const report =
     options.report ??
     ((message: string) => {
@@ -88,21 +108,46 @@ export function armDeadline(
 
       console.error(message);
     });
-  const schedule =
-    options.schedule ??
-    ((fire: () => void, ms: number) => {
-      setTimeout(fire, ms).unref();
-    });
 
   state.at = now() + seconds * 1000;
-  schedule(() => {
-    report(timeoutMessage(options.command, seconds, state.note));
-    exit(TIMEOUT_EXIT_CODE);
+  state.cancel = schedule(() => {
+    const message = timeoutMessage(options.command, seconds, state.note);
+    state.fired = true;
+    state.cancel = null;
+    report(message);
+    process.exitCode = TIMEOUT_EXIT_CODE;
+    state.controller.abort(new CliError("timeout", message));
+    schedule(() => exit(TIMEOUT_EXIT_CODE), options.graceMs ?? CLEANUP_GRACE_MS);
   }, seconds * 1000);
+}
+
+export function disarmDeadline(): void {
+  state.cancel?.();
+  state.cancel = null;
 }
 
 export function deadlineAt(): null | number {
   return state.at;
+}
+
+export function deadlineFired(): boolean {
+  return state.fired;
+}
+
+export function deadlineSignal(): AbortSignal {
+  return state.controller.signal;
+}
+
+export function remainingDeadlineMs(now: () => number = Date.now): null | number {
+  return state.at === null ? null : state.at - now();
+}
+
+export function assertBeforeDeadline(doing: string): void {
+  const remaining = remainingDeadlineMs();
+
+  if (remaining !== null && remaining <= 0) {
+    throw new CliError("timeout", `the deadline passed while ${doing}`);
+  }
 }
 
 export function noteProgress(note: string): void {
@@ -114,6 +159,9 @@ export function progressNote(): null | string {
 }
 
 export function resetDeadlineForTests(): void {
+  disarmDeadline();
   state.at = null;
+  state.fired = false;
   state.note = null;
+  state.controller = new AbortController();
 }

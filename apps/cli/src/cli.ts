@@ -7,7 +7,14 @@ import { Command, CommanderError, Option } from "commander";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
 import { type TelemetryMissingField } from "./commands/admin-telemetry";
 import { type FreshView } from "./commands/fresh";
-import { armDeadline, resolveTimeoutSeconds, TIMEOUT_ENV } from "./deadline";
+import {
+  armDeadline,
+  deadlineFired,
+  disarmDeadline,
+  resolveTimeoutSeconds,
+  TIMEOUT_ENV,
+  TIMEOUT_EXIT_CODE,
+} from "./deadline";
 import { setEnvProfile } from "./env";
 import { spotifyPlaylistUrl, telegramUrl } from "./links";
 import { maybePrintLiveCallout } from "./live";
@@ -596,6 +603,10 @@ async function main(args = process.argv.slice(2)): Promise<void> {
       return;
     }
 
+    if (deadlineFired()) {
+      process.exit(TIMEOUT_EXIT_CODE);
+    }
+
     const normalized = normalizeCommanderError(error);
 
     if (process.argv.includes("--json") || args.includes("--json")) {
@@ -605,6 +616,12 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     }
 
     process.exit(1);
+  }
+
+  disarmDeadline();
+
+  if (deadlineFired()) {
+    process.exit(TIMEOUT_EXIT_CODE);
   }
 
   const { notifyIfUpdateAvailable } = await import("./update-notifier");

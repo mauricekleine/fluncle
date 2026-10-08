@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Data, Effect, Schedule } from "effect";
-import { noteProgress } from "./deadline";
+import { deadlineSignal, noteProgress } from "./deadline";
 
 export type EvidenceSource = "apple" | "beatport" | "discogs" | "musicbrainz";
 
@@ -454,7 +454,7 @@ export async function fetchEvidenceJson<T>(
     async (signal) => {
       const response = await http.fetch(url, {
         headers: { Accept: "application/json", "User-Agent": EVIDENCE_USER_AGENT, ...headers },
-        signal,
+        signal: AbortSignal.any([signal, deadlineSignal()]),
       });
 
       return { headers: response.headers, status: response.status, text: await response.text() };

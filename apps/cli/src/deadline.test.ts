@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   armDeadline,
+  assertBeforeDeadline,
   deadlineAt,
+  deadlineFired,
+  deadlineSignal,
   DEFAULT_NON_INTERACTIVE_TIMEOUT_SECONDS,
+  disarmDeadline,
   noteProgress,
   parseTimeoutSeconds,
+  remainingDeadlineMs,
   resetDeadlineForTests,
   resolveTimeoutSeconds,
   TIMEOUT_EXIT_CODE,
@@ -49,49 +54,103 @@ describe("resolveTimeoutSeconds", () => {
   });
 });
 
+type Scheduled = { cancelled: boolean; fire: () => void; ms: number };
+
+function fakeScheduler(): {
+  scheduled: Scheduled[];
+  schedule: (fire: () => void, ms: number) => () => void;
+} {
+  const scheduled: Scheduled[] = [];
+
+  return {
+    schedule: (fire, ms) => {
+      const entry = { cancelled: false, fire, ms };
+      scheduled.push(entry);
+
+      return () => {
+        entry.cancelled = true;
+      };
+    },
+    scheduled,
+  };
+}
+
 describe("armDeadline", () => {
-  test("records the deadline and, when it fires, reports the latest progress note and exits 124", () => {
+  test("firing reports the latest progress note, aborts in-flight work, and exits 124 after the cleanup grace", () => {
     const reports: string[] = [];
     const exits: number[] = [];
-    let fire: (() => void) | undefined;
+    const { schedule, scheduled } = fakeScheduler();
+    const beforeExitCode = process.exitCode;
 
     armDeadline(240, {
       command: "admin labels evidence 8f1c",
-      exit: ((code: number) => {
+      exit: (code) => {
         exits.push(code);
-      }) as unknown as (code: number) => never,
+      },
+      graceMs: 10_000,
       json: false,
       now: () => 1_000_000,
       report: (message) => reports.push(message),
-      schedule: (callback, ms) => {
-        expect(ms).toBe(240_000);
-        fire = callback;
-      },
+      schedule,
     });
 
     expect(deadlineAt()).toBe(1_240_000);
-    noteProgress("waiting 95 s for a discogs slot behind other callers on this machine");
-    fire?.();
+    expect(remainingDeadlineMs(() => 1_100_000)).toBe(140_000);
+    expect(scheduled.map((entry) => entry.ms)).toEqual([240_000]);
+    expect(deadlineSignal().aborted).toBe(false);
 
-    expect(exits).toEqual([TIMEOUT_EXIT_CODE]);
+    noteProgress("waiting 95 s for a discogs slot behind other callers on this machine");
+    scheduled[0]?.fire();
+
+    expect(deadlineFired()).toBe(true);
+    expect(deadlineSignal().aborted).toBe(true);
+    expect(process.exitCode).toBe(TIMEOUT_EXIT_CODE);
     expect(reports).toEqual([
       "fluncle admin labels evidence 8f1c stopped after 240 s: waiting 95 s for a discogs slot behind other callers on this machine. Set --timeout or FLUNCLE_TIMEOUT in seconds (0 disables the deadline).",
     ]);
+    expect(exits).toEqual([]);
+    expect(scheduled.map((entry) => entry.ms)).toEqual([240_000, 10_000]);
+
+    scheduled[1]?.fire();
+
+    expect(exits).toEqual([TIMEOUT_EXIT_CODE]);
+    process.exitCode = beforeExitCode;
+  });
+
+  test("disarming after the action completes cancels the timer so a slow update check cannot fail a finished command", () => {
+    const { schedule, scheduled } = fakeScheduler();
+
+    armDeadline(1, { command: "version", json: false, schedule });
+    disarmDeadline();
+
+    expect(scheduled.map((entry) => entry.cancelled)).toEqual([true]);
+    expect(deadlineFired()).toBe(false);
   });
 
   test("a disabled deadline arms nothing", () => {
-    let scheduled = 0;
+    const { schedule, scheduled } = fakeScheduler();
 
-    armDeadline(0, {
-      command: "version",
+    armDeadline(0, { command: "version", json: false, schedule });
+
+    expect(scheduled).toEqual([]);
+    expect(deadlineAt()).toBeNull();
+    expect(remainingDeadlineMs()).toBeNull();
+  });
+
+  test("assertBeforeDeadline refuses to start work once the deadline has passed", () => {
+    const { schedule } = fakeScheduler();
+
+    armDeadline(1, {
+      command: "tracks get x",
       json: false,
-      schedule: () => {
-        scheduled += 1;
-      },
+      now: () => Date.now() - 5_000,
+      schedule,
     });
 
-    expect(scheduled).toBe(0);
-    expect(deadlineAt()).toBeNull();
+    expect(() => assertBeforeDeadline("reading the token")).toThrow(
+      "the deadline passed while reading the token",
+    );
+    expect(remainingDeadlineMs()).toBeLessThan(0);
   });
 
   test("the message stands on its own without a progress note", () => {
