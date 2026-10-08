@@ -3,3 +3,6 @@ copy = "wt step copy-ignored --require-include"
 
 [[pre-start]]
 install = "bun install --frozen-lockfile"
+
+[[pre-start]]
+cargo = "mkdir -p \"$HOME/.cache/cargo/fluncle\" && if [ ! -e apps/sonar/target ]; then ln -s \"$HOME/.cache/cargo/fluncle\" apps/sonar/target; fi"
