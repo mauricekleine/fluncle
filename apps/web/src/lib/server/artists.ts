@@ -514,10 +514,10 @@ async function listArtistsByEntity(
     sql: `select distinct a.name as name, a.slug as slug, a.image_url as image_url,
                  a.image_key as image_key, a.image_state as image_state,
                  a.image_updated_at as image_updated_at
-          from artists a
-          join track_artists ta on ta.artist_id = a.id
-          join tracks on tracks.track_id = ta.track_id
-          join findings on findings.track_id = tracks.track_id
+          from findings
+          cross join tracks on tracks.track_id = findings.track_id
+          cross join track_artists ta on ta.track_id = tracks.track_id
+          cross join artists a on a.id = ta.artist_id
           where ${column} = ? and findings.log_id is not null
             and ${listedArtistWhere("a")}
           order by a.name collate nocase asc`,

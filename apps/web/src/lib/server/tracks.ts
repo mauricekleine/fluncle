@@ -671,7 +671,8 @@ async function findingsByEntity(
   const db = await getDb();
   const result = await db.execute({
     args: [entityId, ...(today === undefined ? [] : [today])],
-    sql: `select ${GRAPH_TRACK_SELECT} from ${FINDINGS_FROM}
+    sql: `select ${GRAPH_TRACK_SELECT}
+          from findings cross join tracks on tracks.track_id = findings.track_id
           where ${column} = ? and findings.log_id is not null
             and tracks.dismissed_at is null and tracks.duplicate_of_track_id is null
             ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
@@ -695,7 +696,7 @@ type AffinityTier = { args: string[]; sql: string };
 
 function findingByArtistInSql(artistIdsSql: string): string {
   return `exists (select 1 from track_artists fa
-                   where fa.track_id = tracks.track_id and fa.artist_id in (${artistIdsSql}))`;
+                   where fa.track_id = tracks.track_id and +fa.artist_id in (${artistIdsSql}))`;
 }
 
 function relatedFindingTiers(scope: RelatedFindingsScope): AffinityTier[] {

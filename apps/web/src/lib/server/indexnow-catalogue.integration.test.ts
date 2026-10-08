@@ -310,6 +310,59 @@ describe("observed catalogue versions", () => {
     expect(due.every((row) => row.changed_at === "2026-10-06T00:00:00.000Z")).toBe(true);
   });
 
+  it("dates a first-observed entity by its newest finding, and an entity without one by observation", async () => {
+    await seedCatalogue();
+    await db.batch(
+      [
+        "insert into artists (id,name,slug,created_at,updated_at,renderable_track_count,certified_finding_count) values ('quiet','Quiet','quiet','2026-07-01','2026-07-01',3,0)",
+        "insert into albums (id,name,slug,created_at,updated_at,renderable_track_count,certified_finding_count) values ('quiet','Quiet','quiet','2026-07-01','2026-07-01',3,0)",
+        "insert into labels (id,name,slug,created_at,updated_at,renderable_track_count,certified_finding_count) values ('quiet','Quiet','quiet','2026-07-01','2026-07-01',3,0)",
+        "insert into findings (track_id,log_id,added_at) values ('000001','001.0.1A','2026-08-01T00:00:00.000Z')",
+        "insert into tracks (track_id,title,artists_json,duration_ms,is_catalogue,album_id,label_id) values ('quiet-cut','Quiet','[\"Quiet\"]',270000,1,'quiet','quiet')",
+        "insert into track_artists (track_id,artist_id,position) values ('quiet-cut','quiet',0)",
+      ],
+      "write",
+    );
+    await walkAll();
+    const dated = (await versions()).filter((row) => row.kind !== "log" && row.kind !== "track");
+    expect(dated.map((row) => [row.kind, row.subject_id, row.changed_at])).toEqual([
+      ["album", "album", "2026-08-01T00:00:00.000Z"],
+      ["album", "quiet", OBSERVED],
+      ["artist", "artist", "2026-08-01T00:00:00.000Z"],
+      ["artist", "quiet", OBSERVED],
+      ["label", "label", "2026-08-01T00:00:00.000Z"],
+      ["label", "quiet", OBSERVED],
+    ]);
+  });
+
+  it("reads entity lastmod from one findings aggregate, never a findings walk per entity", async () => {
+    const executed: InStatement[] = [];
+    const execute = db.execute.bind(db);
+    vi.spyOn(db, "execute").mockImplementation((statement: InStatement) => {
+      executed.push(statement);
+      return execute(statement);
+    });
+    for (const kind of ["artist", "album", "label"] as const) {
+      await walkIndexNowCatalogue({ kind });
+    }
+    const walks = executed.filter(
+      (statement) => typeof statement !== "string" && statement.sql.includes("finding_lastmod"),
+    );
+    expect(walks).toHaveLength(3);
+    for (const statement of walks) {
+      if (typeof statement === "string") {
+        continue;
+      }
+      const plan = await execute({
+        args: statement.args,
+        sql: `explain query plan ${statement.sql}`,
+      });
+      const details = plan.rows.map((row) => String(row.detail));
+      expect(details).toContain("MATERIALIZE finding_lastmod");
+      expect(details.filter((detail) => /\bf USING/.test(detail))).toHaveLength(1);
+    }
+  });
+
   it("observes finding artwork and links and published mixtape members", async () => {
     await seedCatalogue();
     await db.execute(
@@ -630,6 +683,35 @@ describe("catalogue claims and acknowledgements", () => {
     ]);
     expect((await claimIndexNowCatalogue(4)).items).toEqual(claim.items.slice(0, 4));
     expect(await versions()).toEqual(before);
+  });
+
+  it("walks only the due versions of each backfill kind, never the whole catalogue behind them", async () => {
+    await seedCatalogue();
+    await walkAll();
+    const executed: InStatement[] = [];
+    const execute = db.execute.bind(db);
+    vi.spyOn(db, "execute").mockImplementation((statement: InStatement) => {
+      executed.push(statement);
+      return execute(statement);
+    });
+    await claimIndexNowCatalogue();
+    const backfills = executed.filter(
+      (statement) => typeof statement !== "string" && statement.sql.includes("changed_at <= ?"),
+    );
+    expect(backfills).toHaveLength(5);
+    for (const statement of backfills) {
+      if (typeof statement === "string") {
+        continue;
+      }
+      const plan = await execute({ ...statement, sql: `explain query plan ${statement.sql}` });
+      const outer = plan.rows
+        .filter((row) => Number(row.parent) === 0)
+        .map((row) => String(row.detail));
+      expect(outer[0]).toMatch(
+        /^SEARCH search_page_versions USING INDEX search_page_versions_due_idx \(<expr>=\?/,
+      );
+      expect(outer.filter((detail) => detail.startsWith("SCAN "))).toStrictEqual([]);
+    }
   });
 
   it("claims later material changes and newly observed pages before every backfill kind", async () => {

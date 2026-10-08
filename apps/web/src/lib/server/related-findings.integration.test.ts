@@ -1,4 +1,4 @@
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -9,7 +9,13 @@ import {
   seedLabel,
   seedTrack,
 } from "./integration-db";
-import { listRelatedFindings, RELATED_FINDINGS_LIMIT } from "./tracks";
+import { listArtistsByAlbum, listArtistsByLabel } from "./artists";
+import {
+  getFindingsByAlbum,
+  getFindingsByLabel,
+  listRelatedFindings,
+  RELATED_FINDINGS_LIMIT,
+} from "./tracks";
 
 let db: Client;
 
@@ -230,5 +236,106 @@ describe("what a related findings band never shows", () => {
     const related = await listRelatedFindings({ kind: "track", trackId: "seed" });
 
     expect(related).toHaveLength(RELATED_FINDINGS_LIMIT);
+  });
+});
+
+describe("the related findings statement at catalogue scale", () => {
+  it("seeks each finding's artist edges by track and tests them against the entity's artists as a set", async () => {
+    const executed: InStatement[] = [];
+    const execute = db.execute.bind(db);
+    vi.spyOn(db, "execute").mockImplementation((statement: InStatement) => {
+      executed.push(statement);
+      return execute(statement);
+    });
+
+    await listRelatedFindings({ kind: "label", labelId: "label-home" });
+    await listRelatedFindings({ albumId: "album-home", kind: "album" });
+    await listRelatedFindings({ artistId: "artist-home", kind: "artist" });
+    await listRelatedFindings({ kind: "track", trackId: "missing" });
+
+    expect(executed).toHaveLength(4);
+    for (const statement of executed) {
+      if (typeof statement === "string") {
+        continue;
+      }
+      const plan = await execute({
+        args: statement.args,
+        sql: `explain query plan ${statement.sql}`,
+      });
+      const edgeSeeks = plan.rows
+        .map((row) => String(row.detail))
+        .filter((detail) => detail.startsWith("SEARCH fa "));
+      expect(edgeSeeks.length).toBeGreaterThan(0);
+      for (const detail of edgeSeeks) {
+        expect(detail).toMatch(/\(track_id=\?\)$/);
+      }
+    }
+  });
+});
+
+describe("an entity page's findings and artist chips", () => {
+  it("lists the label's and album's findings and the artists credited on them", async () => {
+    await finding("home-old", "700.1.1A", "2026-07-01T00:00:00.000Z", {
+      albumId: "album-home",
+      artistIds: ["artist-home"],
+      labelId: "label-home",
+    });
+    await finding("home-new", "700.1.2A", "2026-08-01T00:00:00.000Z", {
+      artistIds: ["artist-neighbour", "artist-home"],
+      labelId: "label-home",
+    });
+    await finding("away", "700.1.3A", "2026-09-01T00:00:00.000Z", {
+      albumId: "album-away",
+      artistIds: ["artist-away"],
+      labelId: "label-away",
+    });
+    await catalogueTrack("home-unlit", {
+      albumId: "album-home",
+      artistIds: ["artist-roamer"],
+      labelId: "label-home",
+    });
+
+    expect(ids(await getFindingsByLabel("label-home", TODAY))).toStrictEqual([
+      "home-new",
+      "home-old",
+    ]);
+    expect(ids(await getFindingsByAlbum("album-home"))).toStrictEqual(["home-old"]);
+    expect((await listArtistsByLabel("label-home")).map((chip) => chip.slug)).toStrictEqual([
+      "artist-home",
+      "artist-neighbour",
+    ]);
+    expect((await listArtistsByAlbum("album-home")).map((chip) => chip.slug)).toStrictEqual([
+      "artist-home",
+    ]);
+  });
+
+  it("drives from the findings, never from a walk of every track on the label or album", async () => {
+    const executed: InStatement[] = [];
+    const execute = db.execute.bind(db);
+    vi.spyOn(db, "execute").mockImplementation((statement: InStatement) => {
+      executed.push(statement);
+      return execute(statement);
+    });
+
+    await getFindingsByLabel("label-home", TODAY);
+    await getFindingsByAlbum("album-home");
+    await listArtistsByLabel("label-home");
+    await listArtistsByAlbum("album-home");
+
+    expect(executed).toHaveLength(4);
+    for (const statement of executed) {
+      if (typeof statement === "string") {
+        continue;
+      }
+      const plan = await execute({
+        args: statement.args,
+        sql: `explain query plan ${statement.sql}`,
+      });
+      const outer = plan.rows
+        .filter((row) => Number(row.parent) === 0)
+        .map((row) => String(row.detail));
+      expect(outer[0]).toMatch(/^SCAN findings\b/);
+      expect(outer.filter((detail) => detail.startsWith("SCAN "))).toHaveLength(1);
+    }
   });
 });
