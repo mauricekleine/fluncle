@@ -1,4 +1,5 @@
 import { type Client, createClient, type InArgs, type ResultSet } from "@libsql/client";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -170,7 +171,6 @@ describe("pullSnapshot", () => {
     expect([first, second].filter(Boolean)).toHaveLength(1);
     expect(lines.some((line) => line.includes("waiting for it to finish"))).toBe(true);
     expect(await isCompleteSnapshot(outPath)).toBe(true);
-    expect(existsSync(lockSnapshotPath(outPath))).toBe(false);
     expect(existsSync(partialSnapshotPath(outPath))).toBe(false);
 
     const restored = createClient({
@@ -189,14 +189,49 @@ describe("pullSnapshot", () => {
     }
   });
 
-  it("clears a lock left by a dead process and pulls", async () => {
+  it("waits for a lock another connection holds and pulls once it is released", async () => {
     await mkdir(join(dir, "dev"), { recursive: true });
-    await writeFile(lockSnapshotPath(outPath), "2147483646");
+
+    const holder = createClient({ url: `file:${lockSnapshotPath(outPath)}` });
+    const held = await holder.transaction("write");
+    const lines: string[] = [];
+    const pull = pullSnapshot({
+      client: source,
+      header: "-- test",
+      log: (line) => lines.push(line),
+      outPath,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(existsSync(outPath)).toBe(false);
+    expect(lines.some((line) => line.includes("waiting for it to finish"))).toBe(true);
+
+    await held.rollback();
+    holder.close();
+
+    expect((await pull).totalRows).toBeGreaterThan(0);
+    expect(await isCompleteSnapshot(outPath)).toBe(true);
+  });
+
+  it("is released by the operating system when the holding process dies", async () => {
+    await mkdir(join(dir, "dev"), { recursive: true });
+
+    const lockPath = lockSnapshotPath(outPath);
+    const child = spawn(
+      "bun",
+      [
+        "-e",
+        `const { createClient } = await import("@libsql/client"); const lock = createClient({ url: "file:${lockPath}" }); await lock.transaction("write"); console.log("held"); setTimeout(() => process.exit(0), 400);`,
+      ],
+      { cwd: process.cwd(), stdio: ["ignore", "pipe", "inherit"] },
+    );
+
+    await new Promise<void>((resolve) => child.stdout.on("data", () => resolve()));
 
     const report = await pullSnapshot({ client: source, header: "-- test", outPath });
 
     expect(report.totalRows).toBeGreaterThan(0);
-    expect(existsSync(lockSnapshotPath(outPath))).toBe(false);
+    expect(await isCompleteSnapshot(outPath)).toBe(true);
   });
 
   it("restores every table byte-faithfully across many small pages", async () => {

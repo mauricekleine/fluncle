@@ -1,5 +1,5 @@
-import { type InArgs, type ResultSet, type Value } from "@libsql/client";
-import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
+import { createClient, type InArgs, type ResultSet, type Value } from "@libsql/client";
+import { mkdir, open, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -92,45 +92,30 @@ export async function isCompleteSnapshot(outPath: string): Promise<boolean> {
   }
 }
 
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
 async function acquireSnapshotLock(
   outPath: string,
   log: (line: string) => void,
 ): Promise<() => Promise<void>> {
   const lockPath = lockSnapshotPath(outPath);
-  let announced = false;
 
   await mkdir(dirname(outPath), { recursive: true });
 
+  const lock = createClient({ url: `file:${lockPath}` });
+  let announced = false;
+
   for (;;) {
     try {
-      const handle = await open(lockPath, "wx");
+      const held = await lock.transaction("write");
 
-      await handle.writeFile(String(process.pid));
-      await handle.close();
-
-      return () => rm(lockPath, { force: true });
+      return async () => {
+        await held.rollback().catch(() => {});
+        lock.close();
+      };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      if ((error as { code?: string }).code !== "SQLITE_BUSY") {
+        lock.close();
         throw error;
       }
-    }
-
-    const holder = Number(await readFile(lockPath, "utf8").catch(() => ""));
-
-    if (holder && !processAlive(holder)) {
-      log(`Removing the stale snapshot lock ${lockPath} left by process ${holder}.`);
-      await rm(lockPath, { force: true });
-      continue;
     }
 
     if (!announced) {
