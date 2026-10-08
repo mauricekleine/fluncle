@@ -85,7 +85,8 @@ DISCORD_ALERT_WEBHOOK=op://$FLUNCLE_1PASSWORD_ENV_ITEM/DISCORD_ALERT_WEBHOOK
 # PASSWORD (created in Bluesky settings, not the account password) for
 # @fluncle.com (a leading "@" in the stored identifier is fine — bluesky.ts
 # strips it). Both unset = the whole leg is a no-op.
-BLUESKY_IDENTIFIER=
+# Optional identifier: leave unset to skip Bluesky; uncomment when its field is provisioned.
+# BLUESKY_IDENTIFIER=op://$FLUNCLE_1PASSWORD_ENV_ITEM/BLUESKY_IDENTIFIER
 BLUESKY_APP_PASSWORD=op://$FLUNCLE_1PASSWORD_ENV_ITEM/BLUESKY_APP_PASSWORD
 
 VITE_FLUNCLE_SPOTIFY_PLAYLIST_URL=https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36
@@ -123,7 +124,8 @@ R2_ACCOUNT_ID=0651fd3b33d9e0b2fe72a5f13e5cf65d
 # EXPO_ACCESS_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/EXPO_ACCESS_TOKEN
 # OpenRouter context_note distil (falls back to raw snippets when absent).
 OPENROUTER_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/OPENROUTER_API_KEY
-OPENROUTER_CONTEXT_MODEL=
+# Optional model: leave unset for the application default; uncomment when its field is provisioned.
+# OPENROUTER_CONTEXT_MODEL=op://$FLUNCLE_1PASSWORD_ENV_ITEM/OPENROUTER_CONTEXT_MODEL
 # Agent-role admin Bearers: the Hermes box and Soliton coding agents each have one (absent = operator-only).
 # FLUNCLE_AGENT_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/FLUNCLE_AGENT_TOKEN
 # FLUNCLE_SOLITON_AGENT_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/FLUNCLE_SOLITON_AGENT_TOKEN

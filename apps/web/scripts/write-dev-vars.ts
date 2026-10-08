@@ -1,4 +1,5 @@
 import { parse } from "dotenv";
+import { dotenvLine } from "./lib/dotenv-line";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 
 if (process.platform === "linux") {
@@ -13,7 +14,7 @@ const lines = Object.keys(variables).map((key) => {
     throw new Error(`Unresolved local-dev variable: ${key}`);
   }
 
-  return `${key}=${JSON.stringify(value)}`;
+  return dotenvLine(key, value);
 });
 
 writeFileSync(".dev.vars", `${lines.join("\n")}\n`, { mode: 0o600 });

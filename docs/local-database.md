@@ -14,8 +14,9 @@ Why a local server and not a bare `file:./local.db`? The dev server runs the app
 ## Everyday use
 
 ```bash
-# Render local Worker secrets from 1Password. Needs FLUNCLE_1PASSWORD_ACCOUNT
-# and FLUNCLE_1PASSWORD_ENV_ITEM set in the shell, with the 1Password desktop app ready to unlock.
+# Read local Worker secrets from the item named by FLUNCLE_1PASSWORD_ENV_ITEM.
+# macOS writes .dev.vars; Linux starts dev with process-only secrets.
+# FLUNCLE_1PASSWORD_ACCOUNT is optional for service-account wrappers.
 bun run --cwd apps/web db:secrets
 
 # Start dev: boots this worktree's local libSQL server, applies pending
