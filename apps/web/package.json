@@ -49,7 +49,7 @@
     "test:e2e:install": "playwright install chromium",
     "test:e2e:report": "playwright show-report",
     "typecheck": "cf workers types && tsc --noEmit && effect-tsgo diagnostics --project tsconfig.json --strict",
-    "test": "node ../../node_modules/vitest/vitest.mjs run --coverage.enabled=${FLUNCLE_VITEST_COVERAGE:-true}"
+    "test": "bun run scripts/test.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "catalog:",

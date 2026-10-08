@@ -52,6 +52,7 @@ cd packages/ui && bunx --bun shadcn@latest add dialog
 - TypeScript: `bun run typecheck` from the repo root, or the nearest package `typecheck` for focused changes.
 - Lint and format: `bun run check` from the repo root for broad validation.
 - Web changes: `bun run --cwd apps/web typecheck`, `bun run --cwd apps/web build`, and `bun run --cwd apps/web lint` when relevant.
+- Complete web tests in fleet runs (`FLEET_CPU_CAP=1`) use `hyperspeed-boat-check` when installed. The launcher runs public committed source in an isolated sandbox with coverage and returns the suite's exact result; unavailable infrastructure or uncommitted source falls back locally. Interactive and filtered tests run locally. Set `FLEET_BOAT_CHECK=0` to keep a fleet check local.
 - CLI changes: `bun run --cwd apps/cli typecheck` and focused CLI commands such as `bun run --cwd apps/cli fluncle recent --limit 1 --json` when behavior changes.
 - Raycast changes: `bun run --cwd apps/raycast build` and `bun run --cwd apps/raycast lint`. If lint fails only on Raycast formatting, run `bun run --cwd apps/raycast lint -- --fix` and keep the resulting changes scoped to `apps/raycast`.
 - Go app changes (`apps/ssh` the rave terminal, `apps/dns` the DNS server): `go build -C apps/<app> ./...`, `gofmt -l apps/<app>` (must list nothing), and `go vet -C apps/<app> ./...`.

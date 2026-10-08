@@ -3,7 +3,7 @@
   "concurrency": "100%",
   "cacheMaxAge": "7d",
   "cacheMaxSize": "10GB",
-  "globalPassThroughEnv": ["FLEET_CPU_CAP", "TURBO_CONCURRENCY"],
+  "globalPassThroughEnv": ["FLEET_CPU_CAP", "FLEET_BOAT_CHECK", "TURBO_CONCURRENCY"],
   "globalDependencies": ["tsconfig.json", "bunfig.toml", "patches/**"],
   "tasks": {
     "build": {
