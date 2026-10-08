@@ -34,6 +34,8 @@ if ! id "${USERNAME}" >/dev/null 2>&1; then
 	useradd --create-home --shell /bin/bash --groups sudo "${USERNAME}"
 fi
 
+usermod --append --groups systemd-journal "${USERNAME}"
+
 install -d -m 0700 -o "${USERNAME}" -g "${USERNAME}" "/home/${USERNAME}/.ssh"
 if [[ -f /root/.ssh/authorized_keys ]]; then
 	install -m 0600 -o "${USERNAME}" -g "${USERNAME}" /root/.ssh/authorized_keys "/home/${USERNAME}/.ssh/authorized_keys"

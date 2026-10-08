@@ -44,6 +44,8 @@ Enforcement is at the route: agent-allowed routes call `requireAdmin` (any princ
 
 A private, Tailscale-only devbox (admin over OpenSSH on the tailnet; no public inbound TCP). Docker only — deliberately no general dev tooling, for a small blast radius. The container runs a pinned Docker image; state lives in `~/.hermes` (`/opt/data` in the container, owned by the `hermes` uid/gid 10000): the cron run markers under `cron/output/`, and the sweeps' home `home/` — the shared `0600` sweep secrets file, the render conductor's state, the prober's transition memory, per-sweep budgets — plus the audit and triage workspaces.
 
+On bootstrapped hosts, the admin user belongs to `systemd-journal` and reads service and kernel logs with `journalctl` without sudo.
+
 ## The image
 
 Built on `oven/bun` (Debian trixie) plus node + npm (copied from the matching `node:<ver>-trixie-slim` image), `uv`, the `fluncle` CLI, and the Claude Code CLI (both installed ungated; the Worker is the boundary). `tini` is PID 1 and runs [`box-entrypoint.sh`](./hermes/box-entrypoint.sh), which only idles (`sleep infinity`, arguments ignored); the image creates the `hermes` user (uid/gid 10000, home `/opt/data`) every sweep execs in as. Build context: the **repo root** (the committed skill snapshot is `COPY`d in, so the context must include `.agents/skills/`); Dockerfile at [`docs/agents/hermes/Dockerfile`](./hermes/Dockerfile).
