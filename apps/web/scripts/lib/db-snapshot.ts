@@ -3,6 +3,8 @@ import { mkdir, open, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
+
 import {
   DUMP_SCHEMA_SQL,
   isWithoutRowid,
@@ -100,7 +102,7 @@ async function acquireSnapshotLock(
 
   await mkdir(dirname(outPath), { recursive: true });
 
-  const lock = createClient({ url: `file:${lockPath}` });
+  const lock = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: `file:${lockPath}` });
   let announced = false;
 
   for (;;) {

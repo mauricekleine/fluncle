@@ -192,7 +192,10 @@ describe("pullSnapshot", () => {
   it("waits for a lock another connection holds and pulls once it is released", async () => {
     await mkdir(join(dir, "dev"), { recursive: true });
 
-    const holder = createClient({ url: `file:${lockSnapshotPath(outPath)}` });
+    const holder = createClient({
+      concurrency: LOCAL_DB_CONCURRENCY,
+      url: `file:${lockSnapshotPath(outPath)}`,
+    });
     const held = await holder.transaction("write");
     const lines: string[] = [];
     const pull = pullSnapshot({
@@ -221,7 +224,7 @@ describe("pullSnapshot", () => {
       "bun",
       [
         "-e",
-        `const { createClient } = await import("@libsql/client"); const lock = createClient({ url: "file:${lockPath}" }); await lock.transaction("write"); console.log("held"); setTimeout(() => process.exit(0), 400);`,
+        `const { createClient } = await import("@libsql/client"); const lock = createClient({ concurrency: 1, url: "file:${lockPath}" }); await lock.transaction("write"); console.log("held"); setTimeout(() => process.exit(0), 400);`,
       ],
       { cwd: process.cwd(), stdio: ["ignore", "pipe", "inherit"] },
     );
