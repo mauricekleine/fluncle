@@ -8,6 +8,10 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
+      "env": ["SENTRY_AUTH_TOKEN", "SENTRY_ORG", "SENTRY_PROJECT", "SENTRY_PROJECT_WORKER"],
+      "outputs": ["dist/**", ".cloudflare/output/**"]
+    },
+    "@fluncle/web#build": {
       "env": [
         "SENTRY_AUTH_TOKEN",
         "SENTRY_ORG",
@@ -15,10 +19,12 @@
         "SENTRY_PROJECT_WORKER",
         "WORKERS_CI_COMMIT_SHA"
       ],
+      "dependsOn": ["^build"],
       "outputs": ["dist/**", ".cloudflare/output/**"]
     },
     "fluncle-raycast#build": {
-      "cache": false
+      "cache": false,
+      "dependsOn": ["^build"]
     },
     "dev": {
       "cache": false,
