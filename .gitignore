@@ -32,7 +32,7 @@ apps/ssh/.local/
 apps/ssh/ssh
 
 # apps/sonar (Rust) build artifacts — the cargo target dir is never codebase history.
-apps/sonar/target/
+apps/sonar/target
 
 # @fluncle/media render output — throwaway working stills (app-icon candidates,
 # etc.). Committed image assets live under apps/web/public and docs/socials/banners,
