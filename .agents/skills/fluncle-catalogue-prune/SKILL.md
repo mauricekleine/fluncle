@@ -83,7 +83,7 @@ echo "PITR restore point: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$PRUNE_OUT_DIR/res
 
 Every destructive script here also writes its per-row rollback JSON before it deletes, and `restore-from-rollback.ts` replays it; that is the everyday undo, and PITR is the whole-database net behind it.
 
-For a local copy on top of the restore point, run `bun run --cwd apps/web db:pull-prod` and copy `apps/web/.dev/seed.sql` somewhere dated once it exits 0. It pages every table and streams to disk, so it copes with the full corpus; it only renames a finished dump to `seed.sql` (whose last line reads `-- Complete: …`), moves the old one aside to `seed.previous.sql` while it runs, and exits non-zero on any failure. It is a secondary backup: the pages are separate reads, so it is not one consistent instant the way the PITR restore point is. Never copy a `seed.previous.sql`, or a `seed.sql` from a pull that did not exit 0, into a backup.
+For a local copy on top of the restore point, run `bun run --cwd apps/web db:pull-prod` and copy the snapshot it names (`~/.local/share/fluncle/seed.sql`) somewhere dated once it exits 0. It pages every table and streams to disk, so it copes with the full corpus; it only renames a finished dump to `seed.sql` (whose last line reads `-- Complete: …`), moves the old one aside to `seed.previous.sql` while it runs, and exits non-zero on any failure. It is a secondary backup: the pages are separate reads, so it is not one consistent instant the way the PITR restore point is. Never copy a `seed.previous.sql`, or a `seed.sql` from a pull that did not exit 0, into a backup.
 
 ### 4 — Purge (dry-run, then confirm)
 

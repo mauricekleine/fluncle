@@ -6,9 +6,10 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { devSnapshotPath } from "./lib/db-snapshot";
+
 const DEV_DIR = ".dev";
 const LOCAL_DB = join(DEV_DIR, "local.db");
-const LOCAL_SEED = join(DEV_DIR, "seed.sql");
 
 function portForWorktree(): number {
   const hash = createHash("sha256").update(process.cwd()).digest();
@@ -27,24 +28,16 @@ function upsertEnvLine(text: string, key: string, value: string): string {
 }
 
 async function resolveSeed(): Promise<string> {
-  const rootPath = process.env.SUPERSET_ROOT_PATH;
+  const seed = devSnapshotPath();
 
-  if (rootPath) {
-    const rootSeed = join(rootPath, "apps", "web", DEV_DIR, "seed.sql");
-
-    if (existsSync(rootSeed)) {
-      return rootSeed;
-    }
+  if (existsSync(seed)) {
+    return seed;
   }
 
-  if (existsSync(LOCAL_SEED)) {
-    return LOCAL_SEED;
-  }
-
-  console.log("No dev snapshot found — bootstrapping from production…");
+  console.log(`No dev snapshot at ${seed} — bootstrapping from production…`);
   await $`bun run scripts/db-pull-prod.ts`;
 
-  return LOCAL_SEED;
+  return seed;
 }
 
 async function pointDevVarsAtLocal(port: number): Promise<void> {

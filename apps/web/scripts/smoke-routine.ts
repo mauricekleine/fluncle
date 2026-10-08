@@ -168,7 +168,7 @@ async function runSmoke(
 
 async function main(): Promise<void> {
   if (!existsSync(DEV_VARS)) {
-    fail(`${DEV_VARS} not found — copy it from the main checkout (docs/local-database.md).`);
+    fail(`${DEV_VARS} not found — render it with bun run db:secrets (docs/local-database.md).`);
   }
 
   if (!existsSync(LOCAL_DB)) {

@@ -1,6 +1,7 @@
 import { type InArgs, type ResultSet, type Value } from "@libsql/client";
 import { mkdir, open, rename, rm, stat } from "node:fs/promises";
-import { dirname } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
 import {
   DUMP_SCHEMA_SQL,
@@ -42,6 +43,12 @@ export type SnapshotOptions = {
   outPath: string;
   pageRows?: number;
 };
+
+export function devSnapshotPath(): string {
+  const dataHome = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+
+  return join(dataHome, "fluncle", "seed.sql");
+}
 
 export function previousSnapshotPath(outPath: string): string {
   return outPath.endsWith(".sql")

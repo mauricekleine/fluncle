@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import { createIntegrationDb, seedCatalogueTrack } from "../../src/lib/server/integration-db";
 import {
+  devSnapshotPath,
   formatSnapshotReport,
   partialSnapshotPath,
   previousSnapshotPath,
@@ -123,6 +124,23 @@ beforeEach(async () => {
 afterEach(async () => {
   source.close();
   await rm(dir, { force: true, recursive: true });
+});
+
+describe("devSnapshotPath", () => {
+  it("lives under the data directory, outside any checkout", () => {
+    const previous = process.env.XDG_DATA_HOME;
+
+    process.env.XDG_DATA_HOME = "/data";
+    try {
+      expect(devSnapshotPath()).toBe("/data/fluncle/seed.sql");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.XDG_DATA_HOME;
+      } else {
+        process.env.XDG_DATA_HOME = previous;
+      }
+    }
+  });
 });
 
 describe("pullSnapshot", () => {
