@@ -17,6 +17,9 @@
       ],
       "outputs": ["dist/**", ".cloudflare/output/**"]
     },
+    "fluncle-raycast#build": {
+      "cache": false
+    },
     "dev": {
       "cache": false,
       "persistent": true
@@ -45,7 +48,28 @@
     "@fluncle/web#test": {
       "dependsOn": ["^build"],
       "env": ["FLUNCLE_VITEST_COVERAGE"],
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docs/agents/hermes/scripts/**"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/**/*.{cjs,js,jsx,mjs,ts,tsx,css,go,html,json,md,mdx,rb,txt,webmanifest}",
+        "$TURBO_ROOT$/docs/**",
+        "$TURBO_ROOT$/scripts/**",
+        "$TURBO_ROOT$/packages/skills/**",
+        "$TURBO_ROOT$/apps/cli/**",
+        "$TURBO_ROOT$/apps/ssh/**",
+        "$TURBO_ROOT$/apps/sonar/src/**",
+        "$TURBO_ROOT$/apps/sonar/tests/**",
+        "$TURBO_ROOT$/apps/sonar/deploy/**",
+        "!$TURBO_ROOT$/**/{node_modules,dist,dist-npm,build,.output,.turbo,.wrangler,.cloudflare,target,coverage,out,set-out,.source,.tanstack,.cache,test-results,playwright-report,worktrees,.show-profile}/**",
+        "!$TURBO_ROOT$/.claude/settings.local.json"
+      ]
+    },
+    "@fluncle/registry#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/docs/surfaces-doctrine.md",
+        "$TURBO_ROOT$/apps/ssh/main.go"
+      ]
     }
   },
   "ui": "tui"
