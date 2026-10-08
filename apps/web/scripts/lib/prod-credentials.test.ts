@@ -131,7 +131,7 @@ describe("resolveProductionCredentials", () => {
     await expect(failure).rejects.not.toThrow(new RegExp(URL));
   });
 
-  it("falls back to a read-only one-hour turso CLI token for the default database", async () => {
+  it("falls back to a read-only one-day turso CLI token for the default database", async () => {
     const { calls, run } = recorder(answerByField);
 
     const credentials = await resolveProductionCredentials({}, run);
@@ -139,7 +139,7 @@ describe("resolveProductionCredentials", () => {
     expect(credentials).toMatchObject({ authToken: TOKEN, source: "turso-cli", url: URL });
     expect(calls).toEqual([
       ["turso", "db", "show", "fluncle", "--url"],
-      ["turso", "db", "tokens", "create", "fluncle", "--read-only", "--expiration", "1h"],
+      ["turso", "db", "tokens", "create", "fluncle", "--read-only", "--expiration", "1d"],
     ]);
   });
 

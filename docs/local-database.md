@@ -75,7 +75,7 @@ The snapshot comes straight from production, so it is as fresh as the last `db:p
 
 1. `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`, when both are set in the environment. One without the other is an error, not a silent fall-through.
 2. `FLUNCLE_TURSO_OP_ITEM`, the 1Password item holding fields named `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`, read with `op read`. The variable holds the item path without the `op://` scheme (the script adds it, so either form works), and `op read` gets `--account "$FLUNCLE_1PASSWORD_ACCOUNT"` when that is set, so a global `OP_ACCOUNT` for another account does not misroute the read. This is the path agent sessions use; the concrete item lives in the private operator documentation.
-3. Otherwise the `turso` CLI, logged in as the operator: `turso db show <db> --url` for the URL and `turso db tokens create <db> --read-only --expiration 1h` for a short-lived read-only token. `<db>` is `FLUNCLE_TURSO_DB`, default `fluncle`. This is the operator's everyday path and needs no 1Password item.
+3. Otherwise the `turso` CLI, logged in as the operator: `turso db show <db> --url` for the URL and `turso db tokens create <db> --read-only --expiration 1d` for a read-only token that expires in a day, the shortest expiration the CLI accepts (it takes whole days or `never`). `<db>` is `FLUNCLE_TURSO_DB`, default `fluncle`. This is the operator's everyday path and needs no 1Password item.
 
 The script prints which path it used and never prints, logs or writes the token. A failure names the path and the tool's own error without values.
 
