@@ -17,6 +17,9 @@
       ],
       "outputs": ["dist/**", ".cloudflare/output/**"]
     },
+    "fluncle-raycast#build": {
+      "cache": false
+    },
     "dev": {
       "cache": false,
       "persistent": true
