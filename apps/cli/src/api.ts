@@ -1,4 +1,5 @@
 import { Data, Effect } from "effect";
+import { deadlineSignal, noteProgress } from "./deadline";
 import { getApiBaseUrl, loadEnv } from "./env";
 import { CliError, isJsonFailure } from "./output";
 import { readUserToken } from "./user-token";
@@ -111,13 +112,17 @@ class ApiResponseError extends Data.TaggedError("ApiResponseError")<{
 
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = `${getApiBaseUrl()}${path}`;
+  noteProgress(`waiting for the Fluncle API: ${init.method ?? "GET"} ${path}`);
 
   return Effect.runPromise(
     Effect.gen(function* () {
       const { response, text } = yield* Effect.tryPromise({
         catch: (cause) => new ApiTransportError({ cause }),
         try: async (signal) => {
-          const response = await fetch(url, { ...init, signal });
+          const response = await fetch(url, {
+            ...init,
+            signal: AbortSignal.any([signal, deadlineSignal()]),
+          });
 
           return { response, text: await response.text() };
         },

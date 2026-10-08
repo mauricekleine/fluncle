@@ -86,6 +86,21 @@ const hang: Perform = (signal) =>
   });
 
 describe("fetchEvidenceText", () => {
+  test("a queue past the deadline fails at once instead of retrying", async () => {
+    const http = fakeHttp({ attempts: 4, intervalMs: 1_100 });
+    http.deadline = http.clock.now;
+    const { calls, perform } = scripted([reply(200, "{}")]);
+
+    const failure = await fetchEvidenceText(http, "musicbrainz", "k", perform).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(EvidenceFetchError);
+    expect((failure as EvidenceFetchError).kind).toBe("timeout");
+    expect(calls()).toBe(0);
+    expect(http.stats.requests).toBe(0);
+  });
+
   test("gives up with a timeout failure once every attempt hangs past the bound", async () => {
     const http = fakeHttp({ attempts: 2, timeoutMs: 20 });
     let calls = 0;
@@ -361,6 +376,41 @@ describe("fetchEvidenceText", () => {
 });
 
 describe("reserveSlot", () => {
+  test("refuses a slot it cannot use before the deadline and leaves the queue untouched", async () => {
+    const one = fakeHttp({ intervalMs: 1_100 });
+    const two = fakeHttp({ intervalMs: 1_100 }, { cacheDir: one.cacheDir });
+    two.clock.now = one.clock.now;
+    two.deadline = two.clock.now + 2_000;
+
+    await reserveSlot(one, "musicbrainz");
+    await reserveSlot(one, "musicbrainz");
+
+    const refusal = await reserveSlot(two, "musicbrainz").catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(EvidenceFetchError);
+    expect((refusal as EvidenceFetchError).kind).toBe("timeout");
+    expect((refusal as EvidenceFetchError).message).toBe(
+      "musicbrainz queue is 3 s long, past the deadline 2 s away; fetched responses are cached, so a later run resumes",
+    );
+    expect(two.sleeps).toEqual([]);
+
+    await reserveSlot(one, "musicbrainz");
+
+    expect(one.sleeps).toEqual([1_100, 1_100]);
+  });
+
+  test("names the slot wait in the progress note so a deadline report says what it waited on", async () => {
+    const notes: string[] = [];
+    const one = fakeHttp({ intervalMs: 1_100 }, { progress: (note) => notes.push(note) });
+
+    await reserveSlot(one, "musicbrainz");
+    await reserveSlot(one, "musicbrainz");
+
+    expect(notes).toEqual([
+      "waiting 2 s for a musicbrainz slot behind other callers on this machine (0 requests sent so far; fetched responses are cached, so a later run resumes)",
+    ]);
+  });
+
   test("spaces requests by the source interval across callers sharing a cache dir", async () => {
     const one = fakeHttp({ intervalMs: 1_100 });
     const two = fakeHttp({ intervalMs: 1_100 }, { cacheDir: one.cacheDir });

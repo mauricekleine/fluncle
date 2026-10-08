@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { type LabelAdminItem } from "@fluncle/contracts";
+import { deadlineAt } from "../deadline";
 import {
   createEvidenceHttp,
   EvidenceFetchError,
@@ -1220,7 +1221,7 @@ export async function labelEvidenceCommand(
     import("../env"),
     import("./admin-labels"),
   ]);
-  const http = createEvidenceHttp({ refresh: options.refresh });
+  const http = createEvidenceHttp({ deadline: deadlineAt(), refresh: options.refresh });
   const discogsToken = readOptionalEnv("DISCOGS_USER_TOKEN");
 
   if (discogsToken) {

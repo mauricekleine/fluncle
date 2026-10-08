@@ -90,7 +90,7 @@ Fluncle has two environment surfaces:
 - Operator machines: optional `~/.config/fluncle/.env.production` for production CLI admin commands and `~/.config/fluncle/.env.local` for local development.
 - Web/API: Wrangler secrets in production, and a local `apps/web/.dev.vars` rendered from `apps/web/.dev.vars.tpl` with 1Password for local Worker previews.
 
-The public CLI defaults to `https://www.fluncle.com` and the `production` profile. Admin CLI commands need `FLUNCLE_API_TOKEN`. Set `FLUNCLE_API_BASE_URL` only when pointing the CLI at a non-production API.
+The public CLI defaults to `https://www.fluncle.com` and the `production` profile. Admin CLI commands need `FLUNCLE_API_TOKEN`. Set `FLUNCLE_API_BASE_URL` only when pointing the CLI at a non-production API. When stdout is not a terminal the CLI stops any command after 240 s with exit code 124 and a message naming what it was waiting on; `--timeout <seconds>` or `FLUNCLE_TIMEOUT` changes that, and `0` disables it. Evidence commands refuse a rate-limit slot they could not reach before the deadline instead of queueing for it.
 
 ## CLI
 

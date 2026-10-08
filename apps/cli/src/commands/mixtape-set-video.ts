@@ -12,6 +12,7 @@ import { existsSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { adminApiPost } from "../api";
+import { deadlineSignal } from "../deadline";
 import { CliError } from "../output";
 
 const FOUND_BASE = "https://found.fluncle.com";
@@ -134,7 +135,7 @@ export async function putPart(
     try {
       return await putPartOnce(url, body, part);
     } catch (error) {
-      if (error instanceof CliError) {
+      if (error instanceof CliError || deadlineSignal().aborted) {
         throw error;
       }
 
@@ -159,7 +160,7 @@ async function putPartOnce(
   body: ArrayBuffer,
   part: MultipartPlanPart,
 ): Promise<string> {
-  const response = await fetch(url, { body, method: "PUT" });
+  const response = await fetch(url, { body, method: "PUT", signal: deadlineSignal() });
 
   if (!response.ok) {
     const detail = (await response.text().catch(() => "")).slice(0, 300);
@@ -190,6 +191,7 @@ async function completeUpload(url: string, parts: CompletedPart[]): Promise<void
     body: buildCompleteXml(parts),
     headers: { "content-type": "application/xml" },
     method: "POST",
+    signal: deadlineSignal(),
   });
 
   const text = await response.text().catch(() => "");
@@ -202,8 +204,10 @@ async function completeUpload(url: string, parts: CompletedPart[]): Promise<void
   }
 }
 
+const UPLOAD_ABORT_TIMEOUT_MS = 5_000;
+
 async function abortUpload(url: string): Promise<void> {
-  await fetch(url, { method: "DELETE" });
+  await fetch(url, { method: "DELETE", signal: AbortSignal.timeout(UPLOAD_ABORT_TIMEOUT_MS) });
 }
 
 async function assertFfmpeg(): Promise<void> {

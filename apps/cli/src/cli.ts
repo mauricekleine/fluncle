@@ -7,6 +7,14 @@ import { Command, CommanderError, Option } from "commander";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
 import { type TelemetryMissingField } from "./commands/admin-telemetry";
 import { type FreshView } from "./commands/fresh";
+import {
+  armDeadline,
+  deadlineFired,
+  disarmDeadline,
+  resolveTimeoutSeconds,
+  TIMEOUT_ENV,
+  TIMEOUT_EXIT_CODE,
+} from "./deadline";
 import { setEnvProfile } from "./env";
 import { spotifyPlaylistUrl, telegramUrl } from "./links";
 import { maybePrintLiveCallout } from "./live";
@@ -15,6 +23,7 @@ import { formatError } from "./retry";
 
 type GlobalOptions = {
   env?: string;
+  timeout?: string;
 };
 
 type AddOptions = {
@@ -541,11 +550,26 @@ export function createProgram(): Command {
     .name("fluncle")
     .description(fluncleTagline)
     .option("--env <local|production>", "Config profile to load (default: production)")
+    .option(
+      "--timeout <seconds>",
+      `Stop the command after this many seconds with exit code 124 (0 disables; default 240 when stdout is not a terminal, or ${TIMEOUT_ENV})`,
+    )
     .showSuggestionAfterError(false)
     .addHelpCommand("help [command]", "Display help for command")
     .hook("preAction", (_thisCommand, actionCommand) => {
       const options = actionCommand.optsWithGlobals() as GlobalOptions;
       setEnvProfile(options.env);
+      armDeadline(
+        resolveTimeoutSeconds({
+          env: process.env[TIMEOUT_ENV],
+          flag: options.timeout,
+          interactive: Boolean(process.stdout.isTTY),
+        }),
+        {
+          command: commandPath(actionCommand),
+          json: process.argv.includes("--json"),
+        },
+      );
     })
     .addHelpText("before", `\n${fluncleAsciiLogo}\n`)
     .addHelpText("after", rootHelpSections);
@@ -579,6 +603,10 @@ async function main(args = process.argv.slice(2)): Promise<void> {
       return;
     }
 
+    if (deadlineFired()) {
+      process.exit(TIMEOUT_EXIT_CODE);
+    }
+
     const normalized = normalizeCommanderError(error);
 
     if (process.argv.includes("--json") || args.includes("--json")) {
@@ -590,8 +618,24 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     process.exit(1);
   }
 
+  disarmDeadline();
+
+  if (deadlineFired()) {
+    process.exit(TIMEOUT_EXIT_CODE);
+  }
+
   const { notifyIfUpdateAvailable } = await import("./update-notifier");
   await notifyIfUpdateAvailable(args);
+}
+
+function commandPath(command: Command): string {
+  const names: string[] = [];
+
+  for (let current: Command | null = command; current?.parent; current = current.parent) {
+    names.unshift(current.name());
+  }
+
+  return [...names, ...command.args.slice(0, 1)].join(" ");
 }
 
 function configureCommand(command: Command): Command {
@@ -8569,6 +8613,11 @@ function topLevelCommand(args: string[]): string | undefined {
       continue;
     }
 
+    if (stringOptions.has(arg)) {
+      index += 1;
+      continue;
+    }
+
     if (!arg.startsWith("-")) {
       return arg;
     }
@@ -8599,6 +8648,7 @@ function normalizeCommanderError(error: unknown): unknown {
 }
 
 const stringOptions = new Set([
+  "--timeout",
   "--isrc-refresh-limit",
   "--action",
   "--against",

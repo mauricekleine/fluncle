@@ -56,7 +56,7 @@ const pooled = async (thunks) => {
   return out;
 };
 
-const EVIDENCE_PATIENCE = `The command waits its turn on a MusicBrainz rate limit shared by every worker, so one call can take minutes while other workers are busy. Run it with the Bash tool's \`timeout\` at 600000. A call that times out is a queue, not evidence: re-run it, and every source it already fetched comes back from cache. Never rule a label \`unclear\` because the command had not returned.`;
+const EVIDENCE_PATIENCE = `The command waits its turn on MusicBrainz, Discogs and Apple rate limits shared by every worker on this machine, so one call can take a minute or two while other workers are busy. Run the calls one after another, never several at once: parallel calls only lengthen the shared queue. Outside a terminal the command stops itself after 240 s with exit code 124 and a message naming the queue it was waiting on; set the Bash tool's \`timeout\` to 300000 so that message, not the tool, ends the call. A call that stops at its deadline is a queue, not evidence: re-run it, and every source it already fetched comes back from cache. Never rule a label \`unclear\` because the command had not returned.`;
 
 const brief = (
   start,

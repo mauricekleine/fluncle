@@ -1,4 +1,7 @@
 import { describe, expect, test as bunTest } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
 import {
   ARTIST_RULE_BOUNDARY,
@@ -31,6 +34,99 @@ describe("fluncle CLI parsing and JSON output", () => {
   "message": "fluncle 0.1.0"
 }
 `);
+  });
+
+  testCli("rejects a --timeout that is not a number of seconds", async () => {
+    const result = await runCli(["--timeout", "4m", "version", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe(`{
+  "code": "invalid_timeout",
+  "message": "--timeout must be a number of seconds (0 disables the deadline), not \\"4m\\"",
+  "ok": false
+}
+`);
+  });
+
+  testCli(
+    "stops a call that is still waiting on the API at the deadline, with exit 124 and the wait named",
+    async () => {
+      const server = Bun.serve({
+        fetch: () => new Promise<Response>(() => {}),
+        hostname: "127.0.0.1",
+        port: 0,
+      });
+
+      try {
+        const result = await runCli(["tracks", "get", "trk_1234", "--json", "--timeout", "0.5"], {
+          FLUNCLE_API_BASE_URL: `http://127.0.0.1:${server.port}`,
+        });
+
+        expect(result.exitCode).toBe(124);
+        expect(result.stderr).toBe("");
+        expect(JSON.parse(result.stdout)).toEqual({
+          code: "timeout",
+          message:
+            "fluncle tracks get trk_1234 stopped after 0.5 s: waiting for the Fluncle API: GET /api/v1/tracks/trk_1234. Set --timeout or FLUNCLE_TIMEOUT in seconds (0 disables the deadline).",
+          ok: false,
+        });
+      } finally {
+        await server.stop(true);
+      }
+    },
+  );
+
+  testCli(
+    "a token lookup that outlives the deadline still exits 124 with the timeout code",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "fluncle-cli-op-"));
+
+      try {
+        const op = join(dir, "op");
+        writeFileSync(op, "#!/bin/sh\nsleep 0.4\nprintf tok\n");
+        chmodSync(op, 0o755);
+
+        const result = await runCli(["--timeout", "0.1", "admin", "labels", "list", "--json"], {
+          FLUNCLE_API_TOKEN_REF: "op://$FLUNCLE_1PASSWORD_ENV_ITEM/token",
+          HOME: dir,
+          NODE_ENV: "development",
+          PATH: `${dir}:${process.env.PATH ?? ""}`,
+        });
+
+        expect(result.exitCode).toBe(124);
+        expect(JSON.parse(result.stdout)).toEqual({
+          code: "timeout",
+          message:
+            "fluncle admin labels list stopped after 0.1 s. Set --timeout or FLUNCLE_TIMEOUT in seconds (0 disables the deadline).",
+          ok: false,
+        });
+      } finally {
+        rmSync(dir, { force: true, recursive: true });
+      }
+    },
+  );
+
+  testCli("FLUNCLE_TIMEOUT applies when no --timeout is given", async () => {
+    const server = Bun.serve({
+      fetch: () => new Promise<Response>(() => {}),
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+
+    try {
+      const result = await runCli(["tracks", "get", "trk_1234"], {
+        FLUNCLE_API_BASE_URL: `http://127.0.0.1:${server.port}`,
+        FLUNCLE_TIMEOUT: "0.5",
+      });
+
+      expect(result.exitCode).toBe(124);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        "fluncle tracks get trk_1234 stopped after 0.5 s: waiting for the Fluncle API",
+      );
+    } finally {
+      await server.stop(true);
+    }
   });
 
   testCli("keeps validation failures as JSON when --json is present", async () => {

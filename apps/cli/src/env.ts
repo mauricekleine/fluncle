@@ -1,5 +1,6 @@
 import { config } from "dotenv";
 import { execFileSync } from "node:child_process";
+import { assertBeforeDeadline, remainingDeadlineMs } from "./deadline";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +8,7 @@ const envProfiles = ["local", "production"] as const;
 const defaultEnvProfile = "production";
 
 const optionalKeys = ["FLUNCLE_API_BASE_URL", "FLUNCLE_API_TOKEN"] as const;
+const OP_READ_TIMEOUT_MS = 20_000;
 
 type EnvProfile = (typeof envProfiles)[number];
 export type EnvKey = (typeof optionalKeys)[number];
@@ -74,16 +76,31 @@ function resolveTokenRef(): void {
     return;
   }
 
+  assertBeforeDeadline("reading FLUNCLE_API_TOKEN_REF with op");
+  const remaining = remainingDeadlineMs();
+  const timeout =
+    remaining === null ? OP_READ_TIMEOUT_MS : Math.max(1, Math.min(OP_READ_TIMEOUT_MS, remaining));
+
   try {
     const secretRef = ref.startsWith("op://") ? ref : `op://${ref}`;
 
     process.env.FLUNCLE_API_TOKEN = execFileSync("op", ["read", "--no-newline", secretRef], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout,
     });
-  } catch {
-    throw new Error(`Could not read FLUNCLE_API_TOKEN_REF (${ref}) with op.`);
+  } catch (error) {
+    assertBeforeDeadline("reading FLUNCLE_API_TOKEN_REF with op");
+    const timedOut = (error as NodeJS.ErrnoException).code === "ETIMEDOUT";
+
+    throw new Error(
+      timedOut
+        ? `op did not return FLUNCLE_API_TOKEN_REF (${ref}) within ${Math.ceil(timeout / 1000)} s; unlock 1Password or set FLUNCLE_API_TOKEN.`
+        : `Could not read FLUNCLE_API_TOKEN_REF (${ref}) with op.`,
+    );
   }
+
+  assertBeforeDeadline("reading FLUNCLE_API_TOKEN_REF with op");
 }
 
 function loadConfig(): void {
