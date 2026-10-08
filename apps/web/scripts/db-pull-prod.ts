@@ -5,6 +5,7 @@ import { createClient } from "@libsql/client/web";
 import { parseArgs } from "node:util";
 
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
+import { resolveProductionCredentials } from "./lib/prod-credentials";
 import {
   devSnapshotPath,
   formatSnapshotReport,
@@ -12,16 +13,14 @@ import {
   SNAPSHOT_PAGE_ROWS,
 } from "./lib/db-snapshot";
 
-async function readSecret(item: string, field: string): Promise<string> {
-  try {
-    const value = await $`op read ${`${item}/${field}`}`.text();
+async function runForStdout(command: string[]): Promise<string> {
+  const result = await $`${command}`.quiet().nothrow();
 
-    return value.trim();
-  } catch {
-    throw new Error(
-      `Could not read ${field} from 1Password (${item}). Unlock 1Password and enable its CLI integration, then retry.`,
-    );
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.toString().trim() || `exit code ${result.exitCode}`);
   }
+
+  return result.stdout.toString();
 }
 
 function pageRowsFrom(raw: string | undefined): number {
@@ -44,16 +43,13 @@ async function main(): Promise<void> {
     strict: true,
   });
   const pageRows = pageRowsFrom(values["page-rows"]);
-  const item = process.env.FLUNCLE_TURSO_OP_ITEM;
+  const { authToken, describe, url } = await resolveProductionCredentials(
+    process.env,
+    runForStdout,
+  );
 
-  if (!item) {
-    throw new Error(
-      "Set FLUNCLE_TURSO_OP_ITEM to the 1Password item holding the production Turso credentials — see the ops runbook note.",
-    );
-  }
+  console.log(`Production credentials: ${describe}.`);
 
-  const url = await readSecret(item, "TURSO_DATABASE_URL");
-  const authToken = await readSecret(item, "TURSO_AUTH_TOKEN");
   const client = createClient({
     authToken,
     concurrency: REMOTE_DB_CONCURRENCY,
