@@ -6,7 +6,7 @@ How Fluncle does databases across prod, dev, and parallel worktrees. The app sta
 
 - **Prod** is the remote `fluncle` Turso database. The deployed Worker reads `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` from Cloudflare secrets and talks to it over HTTPS via `@libsql/client/web`.
 - **Local dev** talks to a **per-worktree private libSQL server** (`turso dev`) backed by a plain SQLite file at `apps/web/.dev/local.db`. The app code is unchanged — `db.ts` still uses `@libsql/client/web`; it just points at `http://127.0.0.1:<port>` instead of a remote URL. The rest of the local Worker secrets are rendered from `apps/web/.dev.vars.tpl` with 1Password.
-- **The snapshot is pulled from production** (`fluncle`), read-only, via `db:pull-prod`, into `~/.local/share/fluncle/seed.sql` (`$XDG_DATA_HOME/fluncle/seed.sql` when that is set): outside every checkout, so any worktree pulls it and every worktree adopts it. Prod credentials are never in `.dev.vars` — they live only in 1Password and are read at run time, so pulling prod data is a deliberate, human-in-the-loop step.
+- **The snapshot is pulled from production** (`fluncle`), read-only, via `db:pull-prod`, into `~/.local/share/fluncle/seed.sql` (`$XDG_DATA_HOME/fluncle/seed.sql` when that is set): outside every checkout, so any worktree pulls it and every worktree adopts it. Prod credentials are never in `.dev.vars` — they are resolved at run time (see [Production credentials for the pull](#production-credentials-for-the-pull)), so pulling prod data is a deliberate, human-in-the-loop step.
 
 Why a local server and not a bare `file:./local.db`? The dev server runs the app inside **workerd** (via `@cloudflare/vite-plugin`), which has no filesystem, and `@libsql/client/web` does not support `file:` URLs. A local libSQL server over HTTP is the one form both the Worker runtime and the dev tooling can share, and it mirrors how prod connects.
 
@@ -24,9 +24,9 @@ bun run --cwd apps/web dev
 # Refresh local dev data from the latest snapshot (rebuilds local.db).
 bun run --cwd apps/web db:refresh-dev
 
-# Refresh the snapshot itself from production (read-only). Needs 1Password
-# unlocked. Run it from any worktree when you want newer data; every worktree
-# adopts it with db:refresh-dev.
+# Refresh the snapshot itself from production (read-only). Needs the turso CLI
+# logged in, or FLUNCLE_TURSO_OP_ITEM with 1Password unlocked. Run it from any
+# worktree when you want newer data; every worktree adopts it with db:refresh-dev.
 bun run --cwd apps/web db:pull-prod
 ```
 
@@ -66,7 +66,17 @@ To preview a worktree's DB-backed route in a browser without provisioning anythi
 
 ## Keeping dev in sync with prod
 
-The snapshot comes straight from production, so it is as fresh as the last `db:pull-prod`. Everyday local work needs no credentials at all — it only reads the already-dumped `seed.sql`. When you want newer data, unlock 1Password and run `db:pull-prod` from any worktree, then `db:refresh-dev` in each worktree to adopt it. The pull is read-only (`SELECT`s); production credentials are read at run time from the 1Password item that `FLUNCLE_TURSO_OP_ITEM` points at (`db-pull-prod.ts` reads that env var; the concrete item lives in the ops runbook note) and never touch `.dev.vars`.
+The snapshot comes straight from production, so it is as fresh as the last `db:pull-prod`. Everyday local work needs no credentials at all — it only reads the already-dumped `seed.sql`. When you want newer data, run `db:pull-prod` from any worktree, then `db:refresh-dev` in each worktree to adopt it. The pull is read-only (`SELECT`s); production credentials are resolved at run time and never touch `.dev.vars`.
+
+### Production credentials for the pull
+
+`db-pull-prod.ts` resolves the production URL and token through `apps/web/scripts/lib/prod-credentials.ts`, in this order:
+
+1. `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`, when both are set in the environment. One without the other is an error, not a silent fall-through.
+2. `FLUNCLE_TURSO_OP_ITEM`, the 1Password item holding fields named `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`, read with `op read`. The variable holds the item path without the `op://` scheme (the script adds it, so either form works), and `op read` gets `--account "$FLUNCLE_1PASSWORD_ACCOUNT"` when that is set, so a global `OP_ACCOUNT` for another account does not misroute the read. This is the path agent sessions use; the concrete item lives in the private operator documentation.
+3. Otherwise the `turso` CLI, logged in as the operator: `turso db show <db> --url` for the URL and `turso db tokens create <db> --read-only --expiration 1h` for a short-lived read-only token. `<db>` is `FLUNCLE_TURSO_DB`, default `fluncle`. This is the operator's everyday path and needs no 1Password item.
+
+The script prints which path it used and never prints, logs or writes the token. A failure names the path and the tool's own error without values.
 
 ### How the pull scales
 
