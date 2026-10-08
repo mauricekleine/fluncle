@@ -87,7 +87,7 @@ describe("fluncle CLI parsing and JSON output", () => {
         chmodSync(op, 0o755);
 
         const result = await runCli(["--timeout", "0.1", "admin", "labels", "list", "--json"], {
-          FLUNCLE_API_TOKEN_REF: "op://vault/item/field",
+          FLUNCLE_API_TOKEN_REF: "op://$FLUNCLE_1PASSWORD_ENV_ITEM/token",
           HOME: dir,
           NODE_ENV: "development",
           PATH: `${dir}:${process.env.PATH ?? ""}`,
