@@ -87,8 +87,10 @@ describe("worker briefs", () => {
       expect(brief).toContain(SKILL_PATH);
       expect(brief).toContain("fluncle admin labels evidence <mb_label_id>");
       expect(brief).toContain("Do not write fetchers.");
-      expect(brief).toContain("A call that times out is a queue, not evidence");
-      expect(brief).toContain("`timeout` at 600000");
+      expect(brief).toContain("A call that stops at its deadline is a queue, not evidence");
+      expect(brief).toContain("`timeout` to 300000");
+      expect(brief).toContain("one after another, never several at once");
+      expect(brief).toContain("stops itself after 240 s with exit code 124");
       expect(brief).toContain("Never rule a label `unclear` because the command had not returned.");
       expect(brief).not.toContain("ws/2/release?label=");
     }
@@ -102,8 +104,10 @@ describe("worker briefs", () => {
     for (const brief of briefs) {
       expect(brief).toContain(SKILL_PATH);
       expect(brief).toContain("fluncle admin labels evidence <mb_label_id> --census --json");
-      expect(brief).toContain("A call that times out is a queue, not evidence");
-      expect(brief).toContain("`timeout` at 600000");
+      expect(brief).toContain("A call that stops at its deadline is a queue, not evidence");
+      expect(brief).toContain("`timeout` to 300000");
+      expect(brief).toContain("one after another, never several at once");
+      expect(brief).toContain("stops itself after 240 s with exit code 124");
       expect(brief).toContain("Never rule a label `unclear` because the command had not returned.");
       expect(brief).not.toContain("ws/2/release?label=");
     }

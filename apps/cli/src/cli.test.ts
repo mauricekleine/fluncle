@@ -33,6 +33,69 @@ describe("fluncle CLI parsing and JSON output", () => {
 `);
   });
 
+  testCli("rejects a --timeout that is not a number of seconds", async () => {
+    const result = await runCli(["--timeout", "4m", "version", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe(`{
+  "code": "invalid_timeout",
+  "message": "--timeout must be a number of seconds (0 disables the deadline), not \\"4m\\"",
+  "ok": false
+}
+`);
+  });
+
+  testCli(
+    "stops a call that is still waiting on the API at the deadline, with exit 124 and the wait named",
+    async () => {
+      const server = Bun.serve({
+        fetch: () => new Promise<Response>(() => {}),
+        hostname: "127.0.0.1",
+        port: 0,
+      });
+
+      try {
+        const result = await runCli(["tracks", "get", "trk_1234", "--json", "--timeout", "0.5"], {
+          FLUNCLE_API_BASE_URL: `http://127.0.0.1:${server.port}`,
+        });
+
+        expect(result.exitCode).toBe(124);
+        expect(result.stderr).toBe("");
+        expect(JSON.parse(result.stdout)).toEqual({
+          code: "timeout",
+          message:
+            "fluncle tracks get trk_1234 stopped after 0.5 s: waiting for the Fluncle API: GET /api/v1/tracks/trk_1234. Set --timeout or FLUNCLE_TIMEOUT in seconds (0 disables the deadline).",
+          ok: false,
+        });
+      } finally {
+        await server.stop(true);
+      }
+    },
+  );
+
+  testCli("FLUNCLE_TIMEOUT applies when no --timeout is given", async () => {
+    const server = Bun.serve({
+      fetch: () => new Promise<Response>(() => {}),
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+
+    try {
+      const result = await runCli(["tracks", "get", "trk_1234"], {
+        FLUNCLE_API_BASE_URL: `http://127.0.0.1:${server.port}`,
+        FLUNCLE_TIMEOUT: "0.5",
+      });
+
+      expect(result.exitCode).toBe(124);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        "fluncle tracks get trk_1234 stopped after 0.5 s: waiting for the Fluncle API",
+      );
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   testCli("keeps validation failures as JSON when --json is present", async () => {
     const result = await runCli(["tracks", "get", "--json"]);
 

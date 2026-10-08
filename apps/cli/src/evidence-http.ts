@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Data, Effect, Schedule } from "effect";
+import { noteProgress } from "./deadline";
 
 export type EvidenceSource = "apple" | "beatport" | "discogs" | "musicbrainz";
 
@@ -64,9 +65,11 @@ export type Perform = (signal: AbortSignal) => Promise<RawResponse>;
 export type EvidenceHttp = {
   cacheDir: string;
   cacheTtlMs: number;
+  deadline: null | number;
   fetch: EvidenceFetch;
   now: () => number;
   policies: Record<EvidenceSource, SourcePolicy>;
+  progress: (note: string) => void;
   random: () => number;
   refresh: boolean;
   sleep: (ms: number) => Promise<void>;
@@ -83,9 +86,11 @@ export function createEvidenceHttp(overrides: Partial<EvidenceHttp> = {}): Evide
   return {
     cacheDir: defaultCacheDir(),
     cacheTtlMs: 7 * 24 * 60 * 60 * 1000,
+    deadline: null,
     fetch: (url, init) => globalThis.fetch(url, init),
     now: () => Date.now(),
     policies: SOURCE_POLICIES,
+    progress: noteProgress,
     random: Math.random,
     refresh: false,
     sleep: (ms) => Effect.runPromise(Effect.sleep(ms)),
@@ -198,18 +203,39 @@ async function readNextSlot(slotFile: string): Promise<number> {
   return Number.isFinite(value) ? value : 0;
 }
 
+function seconds(ms: number): number {
+  return Math.ceil(ms / 1000);
+}
+
 export async function reserveSlot(http: EvidenceHttp, source: EvidenceSource): Promise<void> {
   const interval = http.policies[source].intervalMs;
   const slotAt = await withSlotLock(http, source, async (slotFile) => {
     const now = http.now();
     const slot = Math.max(now, await readNextSlot(slotFile));
+
+    if (http.deadline !== null && slot >= http.deadline) {
+      return new EvidenceFetchError(
+        "timeout",
+        `${source} queue is ${seconds(slot - now)} s long, past the deadline ${seconds(http.deadline - now)} s away; fetched responses are cached, so a later run resumes`,
+        0,
+      );
+    }
+
     await writeFile(slotFile, String(slot + interval));
 
     return slot;
   });
+
+  if (slotAt instanceof EvidenceFetchError) {
+    throw slotAt;
+  }
+
   const wait = slotAt - http.now();
 
   if (wait > 0) {
+    http.progress(
+      `waiting ${seconds(wait)} s for a ${source} slot behind other callers on this machine (${http.stats.requests} requests sent so far; fetched responses are cached, so a later run resumes)`,
+    );
     await http.sleep(wait);
   }
 }
@@ -275,8 +301,13 @@ export async function fetchEvidenceText(
   let attempt = 0;
   const request = Effect.gen(function* () {
     attempt += 1;
-    yield* Effect.promise(() => reserveSlot(http, source));
+    yield* Effect.tryPromise({
+      catch: (error) =>
+        error instanceof EvidenceFetchError ? error : new EvidencePerformError({ cause: error }),
+      try: () => reserveSlot(http, source),
+    });
     http.stats.requests += 1;
+    http.progress(`${source} request ${http.stats.requests} in flight`);
     let returned = false;
     const response = yield* Effect.tryPromise({
       catch: (error) => {

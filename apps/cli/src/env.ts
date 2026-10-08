@@ -7,6 +7,7 @@ const envProfiles = ["local", "production"] as const;
 const defaultEnvProfile = "production";
 
 const optionalKeys = ["FLUNCLE_API_BASE_URL", "FLUNCLE_API_TOKEN"] as const;
+const OP_READ_TIMEOUT_MS = 20_000;
 
 type EnvProfile = (typeof envProfiles)[number];
 export type EnvKey = (typeof optionalKeys)[number];
@@ -80,9 +81,16 @@ function resolveTokenRef(): void {
     process.env.FLUNCLE_API_TOKEN = execFileSync("op", ["read", "--no-newline", secretRef], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: OP_READ_TIMEOUT_MS,
     });
-  } catch {
-    throw new Error(`Could not read FLUNCLE_API_TOKEN_REF (${ref}) with op.`);
+  } catch (error) {
+    const timedOut = (error as NodeJS.ErrnoException).code === "ETIMEDOUT";
+
+    throw new Error(
+      timedOut
+        ? `op did not return FLUNCLE_API_TOKEN_REF (${ref}) within ${OP_READ_TIMEOUT_MS / 1000} s; unlock 1Password or set FLUNCLE_API_TOKEN.`
+        : `Could not read FLUNCLE_API_TOKEN_REF (${ref}) with op.`,
+    );
   }
 }
 
