@@ -135,12 +135,24 @@ export async function loadLocalEnv(options: { force?: boolean } = {}): Promise<v
   didLoadLocalEnv = true;
 }
 
+function disabledEnv(key: EnvKey, value: string | undefined): boolean {
+  return (
+    value?.trim() === "disabled-for-agents" ||
+    ((key === "DISCORD_WEBHOOK_URL" || key === "DISCORD_ALERT_WEBHOOK") &&
+      /^https?:\/\/discord\.invalid(?:[/:]|$)/i.test(value?.trim() ?? ""))
+  );
+}
+
 export async function readEnv(key: EnvKey): Promise<string> {
   await loadLocalEnv();
 
   const value = process.env[key];
 
-  if (!value) {
+  if (disabledEnv(key, value)) {
+    throw new Error(`Disabled ${key}: this integration is off in the current environment`);
+  }
+
+  if (!value?.trim()) {
     throw new Error(`Missing ${key}`);
   }
 
@@ -152,24 +164,14 @@ export async function readOptionalEnv(key: EnvKey): Promise<string | undefined> 
 
   const value = process.env[key];
 
-  return value?.trim() ? value : undefined;
+  return value?.trim() && !disabledEnv(key, value) ? value : undefined;
 }
 
 export async function readEnvs<const T extends readonly EnvKey[]>(
   keys: T,
 ): Promise<Record<T[number], string>> {
-  await loadLocalEnv();
-
   return Object.fromEntries(
-    keys.map((key) => {
-      const value = process.env[key];
-
-      if (!value) {
-        throw new Error(`Missing ${key}`);
-      }
-
-      return [key, value];
-    }),
+    await Promise.all(keys.map(async (key) => [key, await readEnv(key)])),
   ) as Record<T[number], string>;
 }
 

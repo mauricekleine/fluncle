@@ -1,21 +1,16 @@
 #!/usr/bin/env bun
 
 import { $ } from "bun";
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+
+import { portForWorktree } from "./lib/local-db-port";
 
 import { devSnapshotPath } from "./lib/db-snapshot";
 
 const DEV_DIR = ".dev";
 const LOCAL_DB = join(DEV_DIR, "local.db");
-
-function portForWorktree(): number {
-  const hash = createHash("sha256").update(process.cwd()).digest();
-
-  return 8100 + (hash.readUInt16BE(0) % 900);
-}
 
 function upsertEnvLine(text: string, key: string, value: string): string {
   const line = new RegExp(`^${key}=.*$`, "m");
@@ -57,7 +52,7 @@ async function pointDevVarsAtLocal(port: number): Promise<void> {
   await writeFile(path, text, "utf8");
 }
 
-const port = portForWorktree();
+const port = portForWorktree(process.cwd());
 const seed = await resolveSeed();
 
 await mkdir(DEV_DIR, { recursive: true });

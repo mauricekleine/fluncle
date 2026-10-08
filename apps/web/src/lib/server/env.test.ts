@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { adminRole, constantTimeEqual } from "./env";
+import { adminRole, constantTimeEqual, readEnv, readEnvs, readOptionalEnv } from "./env";
 
 describe("constantTimeEqual — length-mismatch safety", () => {
   const expected = "the-real-operator-token";
@@ -49,6 +49,8 @@ describe("constantTimeEqual — length-mismatch safety", () => {
 describe("adminRole — an unprovisioned deployment answers unauthorized, never throws", () => {
   const guarded = [
     "ADMIN_SESSION_SECRET",
+    "DISCORD_WEBHOOK_URL",
+    "DISCORD_ALERT_WEBHOOK",
     "FLUNCLE_AGENT_TOKEN",
     "FLUNCLE_SOLITON_AGENT_TOKEN",
     "FLUNCLE_API_TOKEN",
@@ -116,6 +118,24 @@ describe("adminRole — an unprovisioned deployment answers unauthorized, never 
 
     expect(await adminRole(bearer("the-operator-token"))).toBe("operator");
     expect(await adminRole(bearer("the-operator-tokeX"))).toBeNull();
+  });
+
+  it("rejects a disabled credential even when the bearer matches it", async () => {
+    process.env["FLUNCLE_API_TOKEN"] = "disabled-for-agents";
+
+    await expect(adminRole(bearer("disabled-for-agents"))).resolves.toBeNull();
+  });
+
+  it.each([
+    ["FLUNCLE_API_TOKEN", "disabled-for-agents"],
+    ["DISCORD_WEBHOOK_URL", "https://discord.invalid/webhook"],
+    ["DISCORD_ALERT_WEBHOOK", "https://discord.invalid/alert"],
+  ] as const)("treats a disabled %s as unprovisioned", async (key, value) => {
+    process.env[key] = value;
+
+    await expect(readOptionalEnv(key)).resolves.toBeUndefined();
+    await expect(readEnv(key)).rejects.toThrow(`Disabled ${key}`);
+    await expect(readEnvs([key])).rejects.toThrow(`Disabled ${key}`);
   });
 
   it("returns null for a request carrying no Authorization header at all", async () => {
