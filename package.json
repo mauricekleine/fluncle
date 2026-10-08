@@ -54,7 +54,7 @@
   "type": "module",
   "scripts": {
     "audit": "bun audit --audit-level=high --ignore=GHSA-w3rx-r6r6-pgpr --ignore=GHSA-5p2g-fcmc-qvqq --ignore=GHSA-86w9-cpqp-85rv --ignore=GHSA-vfj7-8cjw-p6xm",
-    "build": "TURBO_CACHE_DIR=\"${TURBO_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/turbo/fluncle}\" turbo run build",
+    "build": "WORKERS_CI_COMMIT_SHA=\"${WORKERS_CI_COMMIT_SHA:-$(git rev-parse HEAD 2>/dev/null || true)}\" TURBO_CACHE_DIR=\"${TURBO_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/turbo/fluncle}\" turbo run build",
     "check": "bun run lint && bun run format:check && bun run go:check && bun run typecheck && bun run test && bun run test:scripts && bun run test:label-triage:python && bun run build",
     "check:fix": "bun run lint:fix && bun run format",
     "deploy:gate": "bun run format:check && bun run lint && bun run go:check && bun run typecheck && bun run test && bun run test:scripts:worker",
