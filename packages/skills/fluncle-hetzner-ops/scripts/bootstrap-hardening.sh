@@ -60,6 +60,11 @@ public-ssh | rave)
 	;;
 esac
 
+if [[ "${PROFILE}" != private && -z "${REBOOT_STATUS_PORT:-}" ]]; then
+	printf 'REBOOT_STATUS_PORT is required for the public profile\n' >&2
+	exit 1
+fi
+
 if [[ -z "${TS_AUTHKEY:-}" ]]; then
 	printf 'TS_AUTHKEY is missing in environment or %s. Add a fresh Tailscale auth key before running bootstrap.\n' "${ENV_FILE}" >&2
 	exit 1
@@ -85,11 +90,28 @@ printf 'Streaming %s hardening script to root@%s\n' "${PROFILE}" "${SERVER_IPV4}
 	printf 'export TS_AUTHKEY=%q\n' "${TS_AUTHKEY}"
 	printf 'export TS_HOSTNAME=%q\n' "${TS_HOSTNAME}"
 
-	for forwarded in TS_TAGS ADMIN_SSH_PORT INSTALL_OP; do
+	for forwarded in TS_TAGS ADMIN_SSH_PORT INSTALL_OP REBOOT_STATUS_PORT; do
 		if [[ -n "${!forwarded:-}" ]]; then
 			printf 'export %s=%q\n' "${forwarded}" "${!forwarded}"
 		fi
 	done
+	if [[ "${PROFILE}" != private ]]; then
+		cat <<'BUNDLE_SETUP'
+reboot_bundle="$(mktemp -d)"
+trap 'rm -rf -- "$reboot_bundle"' EXIT
+cat >"$reboot_bundle/install-reboot-status.sh" <<'REBOOT_INSTALLER_BUNDLE'
+BUNDLE_SETUP
+		cat "${SCRIPT_DIR}/install-reboot-status.sh"
+		printf '\nREBOOT_INSTALLER_BUNDLE\n'
+		cat <<'BUNDLE_SERVER'
+cat >"$reboot_bundle/reboot-status.py" <<'REBOOT_SERVER_BUNDLE'
+BUNDLE_SERVER
+		cat "${SCRIPT_DIR}/reboot-status.py"
+		printf '\nREBOOT_SERVER_BUNDLE\n'
+		cat <<'BUNDLE_INSTALLER'
+export REBOOT_STATUS_INSTALLER="$reboot_bundle/install-reboot-status.sh"
+BUNDLE_INSTALLER
+	fi
 	cat "${BOOTSTRAP_SCRIPT}"
 } | ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 "root@${SERVER_IPV4}" 'bash -s'
 

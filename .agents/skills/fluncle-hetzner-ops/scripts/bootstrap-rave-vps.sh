@@ -8,6 +8,13 @@ APP_GROUP="${APP_GROUP:-${APP_USER}}"
 APP_HOME="${APP_HOME:-/var/lib/fluncle-ssh}"
 APP_DIR="${APP_DIR:-/opt/fluncle-ssh}"
 ADMIN_SSH_PORT="${ADMIN_SSH_PORT:-2222}"
+REBOOT_STATUS_INSTALLER="${REBOOT_STATUS_INSTALLER:-$(dirname -- "${BASH_SOURCE[0]}")/install-reboot-status.sh}"
+
+if [[ -z "${REBOOT_STATUS_PORT:-}" || ! -f "${REBOOT_STATUS_INSTALLER}" ]]; then
+	printf 'REBOOT_STATUS_PORT and the adjacent reboot status installer are required\n' >&2
+	exit 1
+fi
+export REBOOT_STATUS_PORT
 
 if [[ "${EUID}" -ne 0 ]]; then
 	printf 'bootstrap-rave-vps.sh must run as root\n' >&2
@@ -27,7 +34,7 @@ log "Installing base public SSH app packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-	ca-certificates curl gnupg sudo ufw openssh-server fail2ban unattended-upgrades
+	ca-certificates curl gnupg sudo ufw openssh-server fail2ban unattended-upgrades python3
 
 log "Scheduling overnight security reboots"
 timedatectl set-timezone Europe/Amsterdam
@@ -68,6 +75,9 @@ tailscale up \
 	--hostname="${TS_HOSTNAME}" \
 	--ssh \
 	--accept-dns=true
+
+log "Installing read-only reboot status"
+bash "${REBOOT_STATUS_INSTALLER}"
 
 log "Creating locked app user ${APP_USER}"
 if ! getent group "${APP_GROUP}" >/dev/null 2>&1; then
