@@ -5,6 +5,7 @@ How Fluncle does databases across prod, dev, and parallel worktrees. The app sta
 ## The shape of it
 
 - **Prod** is the remote `fluncle` Turso database. The deployed Worker reads `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` from Cloudflare secrets and talks to it over HTTPS via `@libsql/client/web`.
+- **No Turso login.** Agents and local dev never need `turso auth login`: `turso dev` runs the local server without an account, and anything that reads production uses the read-only database credential from the secret manager. The Turso CLI login is an operator step for one-time token mints only.
 - **Local dev** talks to a **per-worktree private libSQL server** (`turso dev`) backed by a plain SQLite file at `apps/web/.dev/local.db`. The app code is unchanged — `db.ts` still uses `@libsql/client/web`; it just points at `http://127.0.0.1:<port>` instead of a remote URL. The rest of the local Worker secrets are rendered from `apps/web/.dev.vars.tpl` with 1Password.
 - **The snapshot is pulled from production** (`fluncle`), read-only, via `db:pull-prod`, into `~/.local/share/fluncle/seed.sql` (`$XDG_DATA_HOME/fluncle/seed.sql` when that is set): outside every checkout, so any worktree pulls it and every worktree adopts it. Prod credentials are never in `.dev.vars` — they live only in 1Password and are read at run time, so pulling prod data is a deliberate, human-in-the-loop step.
 
