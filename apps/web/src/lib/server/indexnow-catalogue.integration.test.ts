@@ -357,7 +357,7 @@ describe("observed catalogue versions", () => {
         args: statement.args,
         sql: `explain query plan ${statement.sql}`,
       });
-      const details = plan.rows.map((row) => String(row.detail));
+      const details = plan.rows.map((row) => (typeof row.detail === "string" ? row.detail : ""));
       expect(details).toContain("MATERIALIZE finding_lastmod");
       expect(details.filter((detail) => /\bf USING/.test(detail))).toHaveLength(1);
     }
@@ -706,7 +706,7 @@ describe("catalogue claims and acknowledgements", () => {
       const plan = await execute({ ...statement, sql: `explain query plan ${statement.sql}` });
       const outer = plan.rows
         .filter((row) => Number(row.parent) === 0)
-        .map((row) => String(row.detail));
+        .map((row) => (typeof row.detail === "string" ? row.detail : ""));
       expect(outer[0]).toMatch(
         /^SEARCH search_page_versions USING INDEX search_page_versions_due_idx \(<expr>=\?/,
       );

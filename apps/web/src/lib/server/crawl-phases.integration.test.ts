@@ -860,7 +860,12 @@ describe("crawl admission phases", () => {
       "select external_id, state from crawl_frontier where kind = 'release' order by external_id",
     );
     expect(
-      Object.fromEntries(states.rows.map((row) => [String(row.external_id), String(row.state)])),
+      Object.fromEntries(
+        states.rows.map((row) => [
+          typeof row.external_id === "string" ? row.external_id : "",
+          typeof row.state === "string" ? row.state : "",
+        ]),
+      ),
     ).toStrictEqual({
       "alias-allowed": "pending",
       "alias-off": "skipped",
@@ -876,7 +881,7 @@ describe("crawl admission phases", () => {
       args: [10],
       sql: `explain query plan ${executed[0] ?? ""}`,
     });
-    const details = plan.rows.map((row) => String(row.detail));
+    const details = plan.rows.map((row) => (typeof row.detail === "string" ? row.detail : ""));
     expect(details.filter((detail) => /^SCAN label\b/.test(detail))).toStrictEqual([]);
     expect(details.filter((detail) => detail.startsWith("SEARCH alias "))).toStrictEqual([
       "SEARCH alias USING INDEX label_aliases_label_slug_source_idx (label_id=?)",

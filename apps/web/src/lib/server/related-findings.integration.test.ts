@@ -263,7 +263,7 @@ describe("the related findings statement at catalogue scale", () => {
         sql: `explain query plan ${statement.sql}`,
       });
       const edgeSeeks = plan.rows
-        .map((row) => String(row.detail))
+        .map((row) => (typeof row.detail === "string" ? row.detail : ""))
         .filter((detail) => detail.startsWith("SEARCH fa "));
       expect(edgeSeeks.length).toBeGreaterThan(0);
       for (const detail of edgeSeeks) {
@@ -333,7 +333,7 @@ describe("an entity page's findings and artist chips", () => {
       });
       const outer = plan.rows
         .filter((row) => Number(row.parent) === 0)
-        .map((row) => String(row.detail));
+        .map((row) => (typeof row.detail === "string" ? row.detail : ""));
       expect(outer[0]).toMatch(/^SCAN findings\b/);
       expect(outer.filter((detail) => detail.startsWith("SCAN "))).toHaveLength(1);
     }
