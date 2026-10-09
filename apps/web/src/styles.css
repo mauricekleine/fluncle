@@ -4838,7 +4838,13 @@ a.catalogue-letter:focus-visible {
 .nav-item:focus-visible {
   background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
   color: var(--eclipse-glow);
-  outline: none;
+}
+
+/* The wash is the hover heat; the keyboard still gets the Eclipse Gold focus ring on top of it
+   (DESIGN.md, the Unlit Rule), so focus never reads as a pointer resting on the link. */
+.nav-item:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .nav-item[data-status="active"] {
@@ -5671,7 +5677,8 @@ a.catalogue-letter:focus-visible {
 }
 
 /* The focus affordance surrounds the whole control a reader sees, rather than a rectangle inside
-   it: the input's own ring is suppressed below and the wrapper wears the canon Eclipse-Gold one. */
+   it: the Shadcn Input's own ring (outline and box-shadow) is suppressed below and the wrapper wears
+   the canon Eclipse-Gold one. */
 .search-page-field:focus-within {
   border-color: color-mix(in oklch, var(--primary) 45%, transparent);
   outline: 2px solid var(--ring);
@@ -5699,7 +5706,9 @@ a.catalogue-letter:focus-visible {
   color: var(--muted-foreground);
 }
 
-.search-page-input:focus {
+.search-page-input:focus,
+.search-page-input:focus-visible {
+  box-shadow: none;
   outline: none;
 }
 
@@ -5987,7 +5996,11 @@ a.catalogue-letter:focus-visible {
 .nav-footer-link:focus-visible {
   background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
   color: var(--eclipse-glow);
-  outline: none;
+}
+
+.nav-footer-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .nav-footer-link[data-status="active"] {
@@ -6048,7 +6061,11 @@ a.catalogue-letter:focus-visible {
 .nav-footer-legal-link:focus-visible {
   background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
   color: var(--eclipse-glow);
-  outline: none;
+}
+
+.nav-footer-legal-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 /* The sibling of .nav-footer-heading ("Follow Fluncle", "For the nerds") — same register,
@@ -6083,7 +6100,11 @@ a.catalogue-letter:focus-visible {
 .nav-follow-link:focus-visible {
   background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
   color: var(--eclipse-glow);
-  outline: none;
+}
+
+.nav-follow-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .nav-nerds {
@@ -6108,7 +6129,11 @@ a.catalogue-letter:focus-visible {
 .nav-nerd-link:focus-visible {
   background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
   color: var(--eclipse-glow);
-  outline: none;
+}
+
+.nav-nerd-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 /* The plate grammar: crop marks + register cross, as on every Fluncle plate. */

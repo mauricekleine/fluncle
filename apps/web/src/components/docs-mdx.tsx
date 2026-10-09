@@ -1,7 +1,7 @@
 import { buttonVariants } from "fumadocs-ui/components/ui/button";
+import { CheckIcon, LinkSimpleIcon } from "@phosphor-icons/react";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import { useCopyButton } from "fumadocs-ui/utils/use-copy-button";
-import { CopyCheckIcon, LinkIcon } from "lucide-react";
 import { type ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
@@ -38,7 +38,7 @@ function DocsHeading({ as: As, ...props }: ComponentProps<HeadingLevel> & { as: 
         )}
         onClick={onCopy}
       >
-        {isChecked ? <CopyCheckIcon aria-hidden="true" /> : <LinkIcon aria-hidden="true" />}
+        {isChecked ? <CheckIcon aria-hidden="true" /> : <LinkSimpleIcon aria-hidden="true" />}
       </button>
     </div>
   );

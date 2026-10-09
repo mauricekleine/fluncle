@@ -347,6 +347,15 @@ describe("the field", () => {
     expect(html).toContain('for="search-page-q"');
     expect(html).toContain("Search the archive");
   });
+
+  it("draws the field from the design system's Input, not a hand-rolled control", async () => {
+    const html = await renderPage({ status: "blank" });
+
+    const field = html.match(/<input\b[^>]*id="search-page-q"[^>]*>/)?.[0];
+
+    expect(field).toContain('data-slot="input"');
+    expect(field).toMatch(/class="[^"]*\bsearch-page-input\b/);
+  });
 });
 
 describe("a spent search budget", () => {
