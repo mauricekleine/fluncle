@@ -625,15 +625,19 @@ async function rearmSkippedDisabledReleases(maxHop: number): Promise<number> {
                 : `and node.release_label_slug in (
                     select label.slug from labels as label
                     where label.seed_state = 'enabled'
-                      or exists (select 1 from artist_rules as rule
-                        where rule.label_id = label.id and rule.verdict = 'allow')
                     union
-                    select alias.alias_slug from label_aliases as alias
-                    join labels as label on label.id = alias.label_id
-                    where alias.status = 'confirmed'
-                      and (label.seed_state = 'enabled'
-                        or exists (select 1 from artist_rules as rule
-                          where rule.label_id = label.id and rule.verdict = 'allow'))
+                    select label.slug from artist_rules as rule
+                    cross join labels as label on label.id = rule.label_id
+                    where rule.verdict = 'allow'
+                    union
+                    select alias.alias_slug from labels as label
+                    cross join label_aliases as alias on alias.label_id = label.id
+                    where label.seed_state = 'enabled' and +alias.status = 'confirmed'
+                    union
+                    select alias.alias_slug from artist_rules as rule
+                    cross join labels as label on label.id = rule.label_id
+                    cross join label_aliases as alias on alias.label_id = label.id
+                    where rule.verdict = 'allow' and +alias.status = 'confirmed'
                   )`
             }
           order by node.release_label_slug, node.id limit ?`,

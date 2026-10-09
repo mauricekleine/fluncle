@@ -25,6 +25,13 @@ const MIXTAPE_LASTMOD = "max(coalesce(m.set_video_at, ''), coalesce(m.updated_at
 const DUE_WHERE = "submitted_at is null or submitted_at < changed_at";
 const PRIORITY =
   "case kind when 'log' then 0 when 'artist' then 1 when 'label' then 2 when 'album' then 3 else 4 end";
+const KIND_PRIORITY: Record<IndexNowKind, number> = {
+  album: 3,
+  artist: 1,
+  label: 2,
+  log: 0,
+  track: 4,
+};
 const LIVE_WHERE = `(
   (kind = 'log' and (
     exists (select 1 from findings f join tracks t on t.track_id = f.track_id where f.log_id = subject_id)
@@ -181,17 +188,21 @@ function pageWindowStatement(cursor: IndexNowCursor): InStatement {
         order by tracks.track_id`,
     };
   }
-  const relation =
-    cursor.kind === "artist"
-      ? "cross join track_artists ta on ta.track_id = t.track_id where ta.artist_id = entity.id"
-      : `where t.${cursor.kind}_id = entity.id`;
+  const owner = cursor.kind === "artist" ? "ta.artist_id" : `t.${cursor.kind}_id`;
+  const edges =
+    cursor.kind === "artist" ? "cross join track_artists ta on ta.track_id = t.track_id" : "";
   return {
     args: window.args,
-    sql: `with window as materialized (${window.sql})
-      select entity.slug as subject_id,
-        (select max(f.added_at) from findings f cross join tracks t on t.track_id = f.track_id ${relation}) as lastmod,
+    sql: `with window as materialized (${window.sql}),
+      finding_lastmod as materialized (
+        select ${owner} as entity_id, max(f.added_at) as lastmod
+        from findings f cross join tracks t on t.track_id = f.track_id ${edges}
+        where ${owner} is not null group by ${owner}
+      )
+      select entity.slug as subject_id, finding_lastmod.lastmod as lastmod,
         ${entityMaterial(cursor.kind)} as material
       from window cross join ${plural} entity on entity.slug = window.slug
+      left join finding_lastmod on finding_lastmod.entity_id = entity.id
       order by entity.slug`,
   };
 }
@@ -303,13 +314,14 @@ function backfillStatement(
   boundary: string | null,
   limit: number,
 ): InStatement {
-  const where = `kind = ? and (${DUE_WHERE}) and (? is null or changed_at <= ?)`;
+  const where = `${PRIORITY} = ${KIND_PRIORITY[kind]} and kind = ? and (${DUE_WHERE}) and (? is null or changed_at <= ?)`;
   const args = [kind, boundary, boundary];
   const columns = "kind, subject_id, fingerprint, changed_at";
+  const due = "search_page_versions indexed by search_page_versions_due_idx";
   if (kind === "log") {
     return {
       args: [...args, limit],
-      sql: `select ${columns} from search_page_versions
+      sql: `select ${columns} from ${due}
         where ${where} and ${LIVE_WHERE}
         order by changed_at desc, subject_id limit ?`,
     };
@@ -317,8 +329,8 @@ function backfillStatement(
   if (kind === "track") {
     return {
       args: [...args, limit],
-      sql: `select ${columns} from search_page_versions
-        join tracks on tracks.track_id = subject_id
+      sql: `select ${columns} from ${due}
+        cross join tracks on tracks.track_id = subject_id
         where ${where} and ${TRACK_PAGE_INDEXABLE_WHERE}
         order by exists (select 1 from findings where findings.track_id = tracks.track_id) desc,
           tracks.release_date desc nulls last, subject_id limit ?`,
@@ -334,8 +346,8 @@ function backfillStatement(
   const listed = kind === "artist" ? `and ${listedArtistWhere(table)}` : "";
   return {
     args: [...args, minimum, limit],
-    sql: `select ${columns} from search_page_versions
-      join ${table} on ${table}.slug = subject_id
+    sql: `select ${columns} from ${due}
+      cross join ${table} on ${table}.slug = subject_id
       where ${where} and ${table}.renderable_track_count >= ? ${listed}
       order by ${table}.certified_finding_count desc, ${table}.renderable_track_count desc,
         ${table}.latest_release_date desc nulls last, subject_id limit ?`,

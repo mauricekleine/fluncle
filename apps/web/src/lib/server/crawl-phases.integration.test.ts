@@ -1,4 +1,4 @@
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -780,6 +780,113 @@ describe("crawl admission phases", () => {
       (await db.execute("select state from crawl_frontier where external_id = 'release-phase'"))
         .rows[0]?.state,
     ).toBe("pending");
+  });
+
+  it("re-arms exactly the releases whose own label or confirmed alias is enabled or carries an allow", async () => {
+    await db.execute("delete from crawl_due_work");
+    await db.execute("delete from crawl_frontier");
+    await db.execute("update labels set seed_state = 'disabled' where id = 'label-phase'");
+    const labels = [
+      ["label-on", "enabled"],
+      ["label-allowed", "disabled"],
+      ["label-blocked", "disabled"],
+      ["label-off", "disabled"],
+    ] as const;
+    for (const [id, seedState] of labels) {
+      await db.execute({
+        args: [id, id, id, seedState, timestamp, timestamp],
+        sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?)`,
+      });
+    }
+    for (const [id, labelId, verdict] of [
+      ["rule-allow", "label-allowed", "allow"],
+      ["rule-block", "label-blocked", "block"],
+    ] as const) {
+      await db.execute({
+        args: [id, verdict, labelId, timestamp, timestamp],
+        sql: `insert into artist_rules
+          (id, artist_mbid, artist_name, verdict, label_id, source, created_at, updated_at)
+          values (?, 'artist-scope', 'Scope Artist', ?, ?, 'operator', ?, ?)`,
+      });
+    }
+    for (const [id, labelId, aliasSlug, status] of [
+      ["alias-on", "label-on", "alias-on", "confirmed"],
+      ["alias-allowed", "label-allowed", "alias-allowed", "confirmed"],
+      ["alias-on-candidate", "label-on", "alias-on-candidate", "candidate"],
+      ["alias-off", "label-off", "alias-off", "confirmed"],
+    ] as const) {
+      await db.execute({
+        args: [id, aliasSlug, aliasSlug, labelId, status, timestamp],
+        sql: `insert into label_aliases (id, alias, alias_slug, label_id, kind, source, status, created_at)
+          values (?, ?, ?, ?, 'name', 'operator', ?, ?)`,
+      });
+    }
+    const slugs = [
+      "label-on",
+      "label-allowed",
+      "alias-on",
+      "alias-allowed",
+      "label-blocked",
+      "label-off",
+      "alias-on-candidate",
+      "alias-off",
+    ];
+    for (const slug of slugs) {
+      await db.execute({
+        args: [`musicbrainz:release:${slug}`, slug, slug, slug, timestamp, timestamp],
+        sql: `insert into crawl_frontier
+          (id, kind, source, external_id, hop, label_slug, release_label_slug, state, note,
+           created_at, updated_at)
+          values (?, 'release', 'musicbrainz', ?, 2, ?, ?, 'skipped',
+            'disabled own label at terminal hop', ?, ?)`,
+      });
+    }
+    const executed: string[] = [];
+    const execute = db.execute.bind(db);
+    vi.spyOn(db, "execute").mockImplementation((statement: InStatement) => {
+      if (
+        typeof statement !== "string" &&
+        statement.sql.includes("crawl_frontier_disabled_skip_idx")
+      ) {
+        executed.push(statement.sql);
+      }
+      return execute(statement);
+    });
+
+    await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+
+    const states = await execute(
+      "select external_id, state from crawl_frontier where kind = 'release' order by external_id",
+    );
+    expect(
+      Object.fromEntries(
+        states.rows.map((row) => [
+          typeof row.external_id === "string" ? row.external_id : "",
+          typeof row.state === "string" ? row.state : "",
+        ]),
+      ),
+    ).toStrictEqual({
+      "alias-allowed": "pending",
+      "alias-off": "skipped",
+      "alias-on": "pending",
+      "alias-on-candidate": "skipped",
+      "label-allowed": "pending",
+      "label-blocked": "skipped",
+      "label-off": "skipped",
+      "label-on": "pending",
+    });
+    expect(executed).toHaveLength(1);
+    const plan = await execute({
+      args: [10],
+      sql: `explain query plan ${executed[0] ?? ""}`,
+    });
+    const details = plan.rows.map((row) => (typeof row.detail === "string" ? row.detail : ""));
+    expect(details.filter((detail) => /^SCAN label\b/.test(detail))).toStrictEqual([]);
+    expect(details.filter((detail) => detail.startsWith("SEARCH alias "))).toStrictEqual([
+      "SEARCH alias USING INDEX label_aliases_label_slug_source_idx (label_id=?)",
+      "SEARCH alias USING INDEX label_aliases_label_slug_source_idx (label_id=?)",
+    ]);
   });
 
   it("re-arms a disabled terminal release when the hop limit widens", async () => {
