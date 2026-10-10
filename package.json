@@ -120,7 +120,7 @@
   "engines": {
     "bun": ">=1.4.0"
   },
-  "packageManager": "bun@1.4.2",
+  "packageManager": "bun@1.4.3",
   "// overrides": {
     "@modelcontextprotocol/sdk": "Drop when shadcn requires SDK 1.31.0 or newer; keep the root-export patch keyed to the resolved SDK version until upstream #2273 is fixed.",
     "compression": "Drop when Expo and React Native tooling require compression 1.8.2 or newer.",
