@@ -1584,7 +1584,7 @@ function probeHealthcheck(): Check {
   };
 }
 
-const STATE_VERSION = 5;
+const STATE_VERSION = 6;
 
 function isStatus(value: unknown): value is Status {
   return value === "ok" || value === "degraded" || value === "down";
@@ -1647,7 +1647,7 @@ export function normalizeStrain(parsed: unknown): StrainMap {
     return {};
   }
 
-  const resetsOldScoring = record.version === 3 || record.version === 4;
+  const resetsOldScoring = typeof record.version === "number" && [3, 4, 5].includes(record.version);
 
   if (record.version !== STATE_VERSION && !resetsOldScoring) {
     return {};
@@ -1701,7 +1701,12 @@ export function normalizeStrain(parsed: unknown): StrainMap {
       buckets,
       ...(entry.stalled === true ? { stalled: true } : {}),
       strained: entry.strained === true,
-      watermarkMs: asCount(entry.watermarkMs),
+      watermarkMs:
+        typeof entry.watermarkMs === "number" &&
+        Number.isFinite(entry.watermarkMs) &&
+        entry.watermarkMs >= 0
+          ? entry.watermarkMs
+          : 0,
     };
   }
 

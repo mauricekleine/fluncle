@@ -1464,6 +1464,27 @@ describe("the rolling window", () => {
     expect(strainTotals(state, now)).toEqual({ points: 0, ticks: 0 });
   });
 
+  test("a fractional marker timestamp is counted once across persisted probe runs", () => {
+    const now = Date.now();
+    const dir = markerDir([{ ageMs: 1000, body: strainMarker('{"errors":1,"ok":false}', []) }]);
+    const path = join(dir, readdirSync(dir)[0] ?? "missing");
+    const when = (now - 1000 + 0.75) / 1000;
+    utimesSync(path, when, when);
+    const claimed = new Map([[CRON.service, dir]]);
+    const first = probeSweepStrain(claimed, {});
+    let next = first.next;
+
+    for (let tick = 0; tick < 4; tick += 1) {
+      next = probeSweepStrain(claimed, normalizeStrain(JSON.parse(serializeState({}, next)))).next;
+    }
+
+    expect(strainTotals(next[CRON.service], now, strainWindowMs(CRON.cadenceMs))).toEqual({
+      points: 1,
+      ticks: 1,
+    });
+    expect(next[CRON.service]?.watermarkMs).toBe(first.next[CRON.service]?.watermarkMs);
+  });
+
   test("a daily cron can be judged across three scheduled ticks", () => {
     const failedTick = strainMarker('{"checked":2,"failed":1,"ok":true}', []);
     const dir = markerDir([
@@ -1546,7 +1567,7 @@ describe("the sweep-errors row + the strain alert", () => {
   });
 });
 
-describe("normalizeStrain — the v5 state section", () => {
+describe("normalizeStrain — persisted state", () => {
   test("a v1/v2 file with no strain section loads empty, never throws", () => {
     expect(normalizeStrain({ web: "ok" })).toEqual({});
     expect(normalizeStrain({ services: {}, version: 2 })).toEqual({});
@@ -1568,7 +1589,7 @@ describe("normalizeStrain — the v5 state section", () => {
             watermarkMs: -1,
           },
         },
-        version: 5,
+        version: 6,
       }),
     ).toEqual({
       "cron.capture": {
@@ -1582,33 +1603,38 @@ describe("normalizeStrain — the v5 state section", () => {
     });
   });
 
-  test("v4 points are discarded while the prior strained flag survives for a clear alert", () => {
-    expect(
-      normalizeStrain({
-        strain: {
-          "cron.capture": {
-            buckets: { "7200000": { points: 400, ticks: 12 } },
-            strained: true,
-            watermarkMs: 7_260_000,
+  test.each([3, 4, 5])(
+    "old scoring v%s is recomputed while prior alert flags survive",
+    (version) => {
+      expect(
+        normalizeStrain({
+          strain: {
+            "cron.capture": {
+              buckets: { "7200000": { points: 400, ticks: 12 } },
+              stalled: true,
+              strained: true,
+              watermarkMs: 7_260_000.75,
+            },
           },
+          version,
+        }),
+      ).toEqual({
+        "cron.capture": {
+          buckets: {},
+          stalled: true,
+          strained: true,
+          watermarkMs: 0,
         },
-        version: 4,
-      }),
-    ).toEqual({
-      "cron.capture": {
-        buckets: {},
-        strained: true,
-        watermarkMs: 0,
-      },
-    });
-  });
+      });
+    },
+  );
 
-  test("a real v5 file round-trips through serialize → parse → normalize", () => {
+  test("fractional timestamps round-trip through serialize → parse → normalize", () => {
     const strain: Record<string, StrainState> = {
       "cron.capture": {
         buckets: { "7200000": { backpressure: 2, points: 40, ticks: 12 } },
         strained: true,
-        watermarkMs: 7_260_000,
+        watermarkMs: 7_260_000.75,
       },
     };
     const parsed: unknown = JSON.parse(serializeState({}, strain));

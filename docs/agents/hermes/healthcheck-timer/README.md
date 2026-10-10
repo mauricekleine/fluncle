@@ -47,6 +47,8 @@ One yielded tick is the design working. A standing run of them is a sweep that i
 
 The reason is the paused summary's own `reason`, qualified by the runner's finer word when there is one: a database-admission yield names `queue`, `public-latency`, `database-health`, `write-latency` or `breaker-open` in `admissionYieldReason`, and the row prints `database_admission:<word>`. A phase-scoped yield exits before the runner writes a summary, so that word is carried across the boundary by the phase module rather than being lost; an unrecognised word is dropped rather than mapped onto a neighbour, so "we could not tell" stays distinct from "the queue was long".
 
+The persisted marker watermark retains sub-millisecond precision, matching the filesystem timestamp used to select unread markers. State version 6 recomputes counts from retained markers written under older scoring versions while preserving prior alert flags for recovery notifications.
+
 Three properties worth knowing before touching it:
 
 - **It never edits a sweep's own verdict.** `cron.capture` still reports exactly what capture said about itself. Strain is a SEPARATE signal on its own `sweep-errors` row — one aggregate row rather than ~35, because `service_status` rows are upserted and never deleted, so a row minted for a one-afternoon condition would sit on the public board forever.
