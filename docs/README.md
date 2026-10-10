@@ -49,7 +49,7 @@ Read the entry matching the area you are changing before editing it. [AGENTS.md]
 - [docs/agents/triage-agent.md](../docs/agents/triage-agent.md) - read when changing submission triage verdicts.
 - [docs/agents/logbook-agent.md](../docs/agents/logbook-agent.md) - read when changing the Logbook or its `[[<logId>]]` token contract.
 - [docs/agents/cluster-engine.md](../docs/agents/cluster-engine.md) - read when changing sonic-galaxy clustering or its cron.
-- [docs/agents/smoke-routine.md](../docs/agents/smoke-routine.md) - read when changing or diagnosing the nightly admin-smoke routine.
+- [docs/agents/admin-smokes.md](../docs/agents/admin-smokes.md) - read when running or diagnosing the admin browser smokes.
 - [docs/socials/](../docs/socials/) - the social accounts, profile assets, and bio conventions.
 - [packages/skills/fluncle-mixtapes](../packages/skills/fluncle-mixtapes) - read when publishing a mixtape or changing the mixtape model.
 - [docs/naming-conventions.md](../docs/naming-conventions.md) - read before naming a new CLI / API / MCP / SSH operation.
