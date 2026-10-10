@@ -451,8 +451,8 @@ export function SettingsDoor({
           status={emailMessage ? <span aria-live="polite">{emailMessage}</span> : undefined}
         >
           <p className="account-muted">
-            {user.email} · not verified yet. Nothing is locked without it. Verifying just keeps the
-            door yours.
+            {user.email} · not verified yet. Verify it and I&rsquo;ll open up ChatDnB and your
+            recommendations.
           </p>
         </AccountSection>
       )}

@@ -10,6 +10,7 @@ import {
 import { z } from "zod";
 import { onionUrl, siteUrl, twitchUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
+import { artistTitleLine } from "../log-prose";
 import { type FeedItem, mixtapeDisplayTitle } from "../mixtapes";
 import { getLiveState, type LiveState } from "./live";
 import { ApiError } from "./api-error";
@@ -88,9 +89,9 @@ function resourceDescriptor(item: FeedItem): {
     throw new Error("resourceDescriptor called with an uncoordinated item");
   }
 
-  const name = isMixtape
-    ? `Fluncle — ${mixtapeDisplayTitle(item.title)}`
-    : `${item.artists.join(", ")} — ${item.title}`;
+  const name = artistTitleLine(
+    isMixtape ? { artists: ["Fluncle"], title: mixtapeDisplayTitle(item.title) } : item,
+  );
   const description = firstLine(item.note);
 
   return { mimeType: "application/json", name, uri, ...(description ? { description } : {}) };
@@ -479,7 +480,12 @@ function corsHeaders(request: Request): Record<string, string> {
     return { Vary: "Origin" };
   }
   return {
-    "Access-Control-Allow-Headers": "Content-Type, MCP-Protocol-Version, Mcp-Method, Mcp-Name",
+    "Access-Control-Allow-Headers": [
+      "Content-Type",
+      "MCP-Protocol-Version",
+      "Mcp-Method",
+      "Mcp-Name",
+    ].join(", "),
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Expose-Headers": "MCP-Protocol-Version",

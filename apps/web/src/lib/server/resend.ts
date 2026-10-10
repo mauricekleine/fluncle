@@ -335,7 +335,7 @@ export async function sendVerificationEmail(params: { to: string; url: string })
     "",
     params.url,
     "",
-    "You are already signed in and nothing is locked behind this. Verifying just keeps the door yours. If you didn't create a Fluncle account, ignore this and nothing happens.",
+    "You're already signed in. Verify and I'll open up ChatDnB and your recommendations. If you didn't create a Fluncle account, ignore this and nothing happens.",
     "",
     "Fluncle",
   ].join("\n");
@@ -343,7 +343,7 @@ export async function sendVerificationEmail(params: { to: string; url: string })
   const html = [
     "<p>Welcome aboard. Confirm this is your email so I can keep your Fluncle account yours. Open this link:</p>",
     `<p><a href="${escapeHtmlAttribute(params.url)}">Verify your email</a></p>`,
-    "<p>You are already signed in and nothing is locked behind this. Verifying just keeps the door yours. If you didn&rsquo;t create a Fluncle account, ignore this and nothing happens.</p>",
+    "<p>You&rsquo;re already signed in. Verify and I&rsquo;ll open up ChatDnB and your recommendations. If you didn&rsquo;t create a Fluncle account, ignore this and nothing happens.</p>",
     "<p>Fluncle</p>",
   ].join("\n");
 
