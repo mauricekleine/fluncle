@@ -18,6 +18,7 @@ import {
   writeAttemptLedger,
 } from "./attempt-ledger";
 import { resolveSweepPrompt } from "./prompt-fetch";
+import acceptedGaps from "./logbook-accepted-gaps.json";
 
 const BATCH_CAP = 4;
 const GAP_LIMIT = 10;
@@ -84,6 +85,7 @@ export function logbookKey(gap: Gap): string | null {
 }
 
 export type LogbookSummary = {
+  acceptedGaps: number;
   alreadyAuthored: number;
   authored: number;
   checked: number;
@@ -98,6 +100,7 @@ export type LogbookSummary = {
 
 export function createLogbookSummary(gapsRemaining: number): LogbookSummary {
   return {
+    acceptedGaps: 0,
     alreadyAuthored: 0,
     authored: 0,
     checked: 0,
@@ -656,18 +659,21 @@ function pingClaudeAuthFailure(detail: string): void {
 }
 
 async function main(): Promise<void> {
+  const acceptedSectors = new Set(acceptedGaps.map((gap) => gap.sector));
   const response = fluncleJson<{ gaps?: Gap[]; spent?: Spent[] }>([
     "admin",
     "logbook",
     "gaps",
     "--limit",
-    String(GAP_LIMIT),
+    String(GAP_LIMIT + acceptedSectors.size),
   ]);
-  const gaps = response.gaps ?? [];
+  const allGaps = response.gaps ?? [];
+  const gaps = allGaps.filter((gap) => !acceptedSectors.has(gap.sector ?? -1));
 
   const spent = response.spent ?? [];
 
   const summary = createLogbookSummary(gaps.length);
+  summary.acceptedGaps = allGaps.length - gaps.length;
 
   if (gaps.length === 0) {
     console.log(JSON.stringify({ ok: true, ...summary }));

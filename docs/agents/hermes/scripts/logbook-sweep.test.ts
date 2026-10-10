@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readAttemptLedger, selectWork } from "./attempt-ledger";
+import { cronCheck, judgeCron } from "./fluncle-healthcheck";
 
 const RIG = mkdtempSync(join(tmpdir(), "logbook-sweep-test-"));
 const STATE_DIR = join(RIG, "state");
@@ -33,6 +34,10 @@ writeFileSync(
   `#!/usr/bin/env bash
 set -euo pipefail
 if [ "\${1:-}" = "admin" ] && [ "\${2:-}" = "logbook" ] && [ "\${3:-}" = "gaps" ]; then
+  if [ -f "${CONTROL}/gaps.json" ]; then
+    "${process.execPath}" -e 'const response = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); response.gaps = response.gaps.slice(0, Number(process.argv[2])); console.log(JSON.stringify(response));' "${CONTROL}/gaps.json" "\${5}"
+    exit 0
+  fi
   if [ "$(cat "${CONTROL}/queue-mode" 2>/dev/null || printf 'empty')" = "work" ]; then
     printf '{"gaps":[{"date":"2026-07-05","findings":[{"artists":["Future Signal"],"logId":"036.7.2I","posterUrl":"x","title":"Fractals"}],"sector":36}],"spent":[]}'
   else
@@ -174,6 +179,91 @@ describe("readEchoedMove", () => {
 });
 
 describe("run-ledger summary counters", () => {
+  test.each([
+    { acceptedGaps: 4, exhausted: 0, health: "ok", sectors: [86, 107, 109, 122], spent: 3 },
+    { acceptedGaps: 4, exhausted: 0, health: "ok", sectors: [86, 107, 109, 122], spent: 0 },
+    { acceptedGaps: 0, exhausted: 1, health: "degraded", sectors: [36], spent: 3 },
+    {
+      acceptedGaps: 4,
+      exhausted: 1,
+      health: "degraded",
+      sectors: [86, 107, 109, 122, 36],
+      spent: 3,
+    },
+  ])(
+    "accepted gaps and new exhaustion yield $health ($sectors)",
+    ({ sectors, acceptedGaps, exhausted, health, spent }) => {
+      rmSync(CONTROL, { force: true, recursive: true });
+      rmSync(STATE_DIR, { force: true, recursive: true });
+      mkdirSync(CONTROL, { recursive: true });
+      mkdirSync(STATE_DIR, { recursive: true });
+      writeFileSync(
+        join(CONTROL, "gaps.json"),
+        JSON.stringify({ gaps: sectors.map(gapFor), spent: [] }),
+      );
+      const attempts =
+        spent === 0 ? "" : sectors.map((sector) => `${sector}\t${spent}\t1`).join("\n") + "\n";
+      writeFileSync(ledgerPath(), attempts);
+
+      const result = spawnSync(process.execPath, [join(import.meta.dir, "logbook-sweep.ts")], {
+        encoding: "utf8",
+        env: { ...process.env, FLUNCLE_API_TOKEN: "" },
+      });
+      expect(result.status).toBe(0);
+      const summary = JSON.parse(result.stdout.trim());
+      expect(summary).toMatchObject({
+        acceptedGaps,
+        checked: 0,
+        exhausted,
+        gapsRemaining: exhausted,
+        ok: true,
+        produced: 0,
+      });
+      expect(authorings()).toBe(0);
+      expect(stores()).toEqual([]);
+      expect(readFileSync(ledgerPath(), "utf8")).toBe(attempts);
+
+      const markers = join(RIG, "markers");
+      mkdirSync(markers, { recursive: true });
+      writeFileSync(join(markers, "run.md"), `# Cron Job: fluncle-logbook\n\n${result.stdout}`);
+      const cron = { cadenceMs: 24 * 60 * 60_000, match: "logbook", service: "cron.logbook" };
+      expect(cronCheck(cron, judgeCron(cron, markers)).status).toBe(health);
+    },
+  );
+
+  test("accepted gaps leave room in the read window for outstanding days", () => {
+    rmSync(CONTROL, { force: true, recursive: true });
+    rmSync(STATE_DIR, { force: true, recursive: true });
+    mkdirSync(CONTROL, { recursive: true });
+    mkdirSync(STATE_DIR, { recursive: true });
+    const accepted = [86, 107, 109, 122];
+    const exhausted = [123, 124, 125, 126, 127, 128];
+    const ready = [129, 130, 131, 132];
+    writeFileSync(
+      join(CONTROL, "gaps.json"),
+      JSON.stringify({ gaps: [...accepted, ...exhausted, ...ready].map(gapFor), spent: [] }),
+    );
+    writeFileSync(
+      ledgerPath(),
+      [...accepted, ...exhausted].map((sector) => `${sector}\t3\t1`).join("\n"),
+    );
+    verdict("pass");
+    claudeVerdict("up");
+    const result = spawnSync(process.execPath, [join(import.meta.dir, "logbook-sweep.ts")], {
+      encoding: "utf8",
+      env: { ...process.env, FLUNCLE_API_TOKEN: "" },
+    });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({
+      acceptedGaps: 4,
+      checked: 4,
+      exhausted: 6,
+      gapsRemaining: 6,
+      produced: 4,
+    });
+    expect(stores()).toEqual(ready.map(String));
+  });
+
   test("the real tick counts one attempted day and one authored entry", () => {
     rmSync(CONTROL, { force: true, recursive: true });
     rmSync(STATE_DIR, { force: true, recursive: true });
