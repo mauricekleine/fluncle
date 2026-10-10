@@ -57,7 +57,7 @@ function writeRunner(
       "#!/usr/bin/env bash",
 
       "set -euo pipefail",
-      "unset FLUNCLE_API_TOKEN FLUNCLE_API_BASE_URL",
+      "unset FLUNCLE_API_TOKEN FLUNCLE_API_BASE_URL OTEL_RESOURCE_ATTRIBUTES",
       `export HEALTHCHECK_CRON_OUTPUT_DIR=${JSON.stringify(outputDir)}`,
 
       `export HOME=${JSON.stringify(join(root, "home"))}`,
@@ -112,6 +112,43 @@ async function emitAsync(
 const REAL_ERROR_LINE =
   "[entity-bio-sweep] future-signal: the voice gate / length rejected the bio — skipping (stays queued)";
 const REAL_BENIGN_LINE = "[embed-sweep] mb_<id>: embedded + written";
+
+describe("emit_cron_output — telemetry role", () => {
+  test("tags the sweep's Claude telemetry with its job when the box exports resource attributes", () => {
+    const { marker } = emit("audit", `printf '%s\\n' "$OTEL_RESOURCE_ATTRIBUTES"`, {
+      env: { OTEL_RESOURCE_ATTRIBUTES: "service.namespace=fluncle" },
+    });
+
+    expect(marker).toBe(
+      "# Cron Job: fluncle-audit\n\nservice.namespace=fluncle,agent.role=audit\n",
+    );
+  });
+
+  test("leaves resource attributes unset when the box exports none", () => {
+    const { marker } = emit("audit", `printf '%s\\n' "\${OTEL_RESOURCE_ATTRIBUTES-unset}"`, {
+      env: {},
+    });
+
+    expect(marker).toBe("# Cron Job: fluncle-audit\n\nunset\n");
+  });
+
+  test("the role stays inside the sweep and does not leak into the caller", () => {
+    const root = mkdtempSync(join(tmpdir(), "fluncle-cron-role-"));
+    temporaryDirectories.push(root);
+    const after = join(root, "after");
+    const { script } = writeRunner("audit", "true", {
+      env: { OTEL_RESOURCE_ATTRIBUTES: "service.namespace=fluncle" },
+      sharedRoot: root,
+    });
+    writeFileSync(
+      script,
+      `${readFileSync(script, "utf8")}\nprintf '%s' "$OTEL_RESOURCE_ATTRIBUTES" > ${JSON.stringify(after)}\n`,
+    );
+
+    expect(spawnSync("bash", [script], { encoding: "utf8" }).status).toBe(0);
+    expect(readFileSync(after, "utf8")).toBe("service.namespace=fluncle");
+  });
+});
 
 describe("emit_cron_output — the marker's shape", () => {
   test("a live rebake still skips an ordinary payload before it can write a marker", () => {

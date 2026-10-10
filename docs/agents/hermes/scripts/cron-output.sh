@@ -127,6 +127,9 @@ emit_cron_output() {
 	else
 		{
 			set +e
+			if [ -n "${OTEL_RESOURCE_ATTRIBUTES:-}" ]; then
+				export OTEL_RESOURCE_ATTRIBUTES="${OTEL_RESOURCE_ATTRIBUTES},agent.role=${job}"
+			fi
 			"$@" >"$tmp"
 			printf '%s' "$?" >"$tmp_rc"
 		} 2>&1 | tee "$tmp_err" >&2

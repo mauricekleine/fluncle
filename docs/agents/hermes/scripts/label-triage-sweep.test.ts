@@ -204,6 +204,33 @@ describe("the research process", () => {
     expect(env).not.toHaveProperty("TURSO_AUTH_TOKEN");
   });
 
+  test("passes the box's Claude telemetry settings through, but no content gate", () => {
+    const telemetry = {
+      CLAUDE_CODE_ENABLE_TELEMETRY: "1",
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4318",
+      OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf",
+      OTEL_LOGS_EXPORTER: "otlp",
+      OTEL_METRICS_EXPORTER: "otlp",
+      OTEL_METRIC_EXPORT_INTERVAL: "10000",
+      OTEL_RESOURCE_ATTRIBUTES: "service.namespace=fluncle,agent.role=label-triage",
+    };
+    const env = researchEnv(
+      { ...telemetry, HOME: "/opt/data/home", OTEL_LOG_USER_PROMPTS: "1" },
+      "/tmp/batch",
+    );
+
+    expect(env).toMatchObject(telemetry);
+    expect(env).not.toHaveProperty("OTEL_LOG_USER_PROMPTS");
+  });
+
+  test("exports no telemetry settings when the box sets none", () => {
+    const env = researchEnv({ HOME: "/opt/data/home" }, "/tmp/batch");
+
+    expect(
+      Object.keys(env).filter((key) => key.includes("OTEL") || key.includes("TELEMETRY")),
+    ).toEqual([]);
+  });
+
   test("gets its own HOME, so the sweep secrets file is not under its home directory", () => {
     const env = researchEnv({ HOME: "/opt/data/home" }, "/tmp/batch");
 
