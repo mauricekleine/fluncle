@@ -54,6 +54,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/
 import { albumCoverAtSize } from "@/lib/media";
 import { findingsCount, formatDate } from "@/lib/format";
 import { isMbid } from "@/lib/identity-key";
+import { buildLabelFacts } from "@/lib/label-facts";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listCrawlHolds } from "@/lib/server/crawl-plausibility";
 import {
@@ -721,12 +722,7 @@ function LabelRow({
 }
 
 function labelIdentity(label: LabelAdminItem, queued: number): ReactNode | undefined {
-  const foundingYear = label.foundingDate?.slice(0, 4);
-  const facts = [
-    label.disambiguation,
-    foundingYear ? `Founded ${foundingYear}` : undefined,
-    label.foundedLocation,
-  ].filter((fact): fact is string => typeof fact === "string" && fact.trim().length > 0);
+  const facts = buildLabelFacts(label);
 
   if (facts.length === 0 && !label.mbLabelId && queued === 0) {
     return undefined;
@@ -737,9 +733,9 @@ function labelIdentity(label: LabelAdminItem, queued: number): ReactNode | undef
   return (
     <>
       {facts.map((fact, index) => (
-        <Fragment key={fact}>
+        <Fragment key={fact.kind}>
           {index > 0 ? <span aria-hidden="true">·</span> : null}
-          <span className="truncate">{fact}</span>
+          <span className="truncate">{fact.text}</span>
         </Fragment>
       ))}
       {label.mbLabelId ? (
