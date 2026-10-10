@@ -45,7 +45,7 @@ bun run render:socials     # renders the claimed social banners/covers into docs
 bun run render:mixtape-bg     # bakes the shared mixtape cover background at three sizes into out/mixtape-bg/ (gitignored; uploaded to R2 once)
 bun run render:frontier-cover # renders ONE "Fluncle's Frontier" playlist cover (640² JPEG) — takes --crew <n> --out <path>
 bun run studio      # Remotion Studio — live scrub the asset while editing
-bun run typecheck   # tsc --noEmit, the quality check for any change here
+bun run typecheck   # bun --check, the quality check for any change here
 ```
 
 Stills render headless through a Chromium that Remotion downloads on first run; `render:og` needs that browser available (the same toolchain `@fluncle/video` uses).

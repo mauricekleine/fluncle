@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit --project ../../scripts/tsconfig.json && tsc --noEmit --project ../../docs/agents/hermes/scripts/tsconfig.json && tsc --noEmit --project ../skills/tsconfig.json && node ../../scripts/quality/typecheck-coverage.mjs"
+    "typecheck": "bun --cwd ../../scripts --check && bun --cwd ../../docs/agents/hermes/scripts --check && bun --cwd ../skills --check && node ../../scripts/quality/typecheck-coverage.mjs"
   },
   "devDependencies": {
     "@fluncle/contracts": "workspace:*",

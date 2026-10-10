@@ -12,9 +12,55 @@ afterEach(() => {
   }
 });
 
-test.each([true, false])(
-  "only files in executed compiler programs count as covered: gate=%s",
-  (gate) => {
+test.each([
+  { checked: true, config: "tsconfig.json", cwd: ".", script: "bun --check" },
+  {
+    checked: true,
+    config: "tsconfig.json",
+    cwd: "tooling project",
+    script: 'bun --cwd "tooling project" --check',
+  },
+  {
+    checked: true,
+    config: "tsconfig.tooling.json",
+    cwd: ".",
+    script: "bun --check --tsconfig-override tsconfig.tooling.json",
+  },
+  {
+    checked: true,
+    config: "tsconfig.tooling.json",
+    cwd: "tooling project",
+    script: 'bun --cwd "tooling project" --check --tsconfig-override tsconfig.tooling.json',
+  },
+  {
+    checked: true,
+    config: "tsconfig.json",
+    cwd: "tooling",
+    script: "bun --cwd=tooling --check",
+  },
+  {
+    checked: true,
+    config: "tsconfig.json",
+    cwd: "tooling project",
+    script: 'bun --cwd="tooling project" --check',
+  },
+  {
+    checked: true,
+    config: "tsconfig.tooling.json",
+    cwd: ".",
+    script: "bun --check --tsconfig-override=tsconfig.tooling.json",
+  },
+  {
+    checked: true,
+    config: "tsconfig tooling.json",
+    cwd: "tooling project",
+    script: "bun --cwd='tooling project' --check --tsconfig-override='tsconfig tooling.json'",
+  },
+  { checked: false, config: "tsconfig.json", cwd: ".", script: "bun check" },
+  { checked: false, config: "tsconfig.json", cwd: ".", script: null },
+])(
+  "only files in executed compiler programs count as covered: $script",
+  ({ script, cwd, config, checked }) => {
     const root = mkdtempSync(join(tmpdir(), "fluncle-typecheck-coverage-"));
     roots.push(root);
     const quality = join(root, "scripts/quality");
@@ -30,14 +76,23 @@ test.each([true, false])(
       join(workspace, "package.json"),
       JSON.stringify({
         name: "example",
-        scripts: gate ? { typecheck: "tsc --noEmit" } : {},
+        scripts: script ? { typecheck: script } : {},
       }),
     );
     writeFileSync(
       join(workspace, "tsconfig.json"),
       JSON.stringify({
         compilerOptions: { noEmit: true, types: [] },
-        include: ["included.ts"],
+        include: [cwd === "." && config === "tsconfig.json" ? "included.ts" : "unchecked.ts"],
+      }),
+    );
+    const programDirectory = join(workspace, cwd);
+    mkdirSync(programDirectory, { recursive: true });
+    writeFileSync(
+      join(programDirectory, config),
+      JSON.stringify({
+        compilerOptions: { noEmit: true, types: [] },
+        include: [cwd === "." ? "included.ts" : "../included.ts"],
       }),
     );
     writeFileSync(join(workspace, "included.ts"), "export const included = 1;\n");
@@ -56,7 +111,7 @@ test.each([true, false])(
     });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("packages/example/unchecked.ts");
-    if (gate) {
+    if (checked) {
       expect(result.stdout).toContain("1/2 covered");
       expect(result.stderr).not.toContain("packages/example/included.ts");
     } else {

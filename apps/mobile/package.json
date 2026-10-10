@@ -10,7 +10,7 @@
     "android": "expo run:android",
     "prebuild": "expo prebuild",
     "test": "bun test",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "bun --check",
     "lint": "expo lint"
   },
   "dependencies": {

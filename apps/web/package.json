@@ -48,7 +48,7 @@
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium",
     "test:e2e:report": "playwright show-report",
-    "typecheck": "cf workers types && tsc --noEmit && effect-tsgo diagnostics --project tsconfig.json --strict",
+    "typecheck": "cf workers types && bun --check && effect-tsgo diagnostics --project tsconfig.json --strict",
     "test": "bun run scripts/test.ts"
   },
   "dependencies": {

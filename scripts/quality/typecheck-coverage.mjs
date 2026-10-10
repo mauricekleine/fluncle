@@ -71,11 +71,23 @@ function measureCoverage(root = repositoryRoot()) {
     );
     const script = manifest.scripts?.typecheck ?? "";
     for (const command of script.split("&&")) {
-      if (!/^\s*tsc\b/.test(command)) {
+      const args = Array.from(command.matchAll(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g), (match) =>
+        match[0].replace(/"([^"]*)"|'([^']*)'/g, "$1$2"),
+      ).flatMap((argument) => {
+        const option = argument.match(/^(--cwd|--tsconfig-override)=(.*)$/);
+        return option ? [option[1], option[2]] : [argument];
+      });
+      if (args[0] !== "bun" || !args.includes("--check")) {
         continue;
       }
-      const project = command.match(/(?:--project|-p)\s+(\S+)/)?.[1] ?? "tsconfig.json";
-      const config = resolve(root, workspace.path, project);
+      const cwdIndex = args.indexOf("--cwd");
+      const configIndex = args.indexOf("--tsconfig-override");
+      const cwd = cwdIndex < 0 ? "." : args[cwdIndex + 1];
+      const project = configIndex < 0 ? "tsconfig.json" : args[configIndex + 1];
+      if (!cwd || !project) {
+        throw new Error(`Missing project path in typecheck command: ${command.trim()}`);
+      }
+      const config = resolve(root, workspace.path, cwd, project);
       const configPath = relative(root, config).replaceAll("\\", "/");
       if (programs[configPath]) {
         continue;

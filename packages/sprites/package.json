@@ -9,7 +9,7 @@
     "./assets/*": "./assets/*"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "bun --check"
   },
   "devDependencies": {
     "typescript": "catalog:"

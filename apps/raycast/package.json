@@ -8,7 +8,7 @@
     "dev": "ray develop",
     "lint": "ray lint",
     "test": "bun test",
-    "typecheck": "tsc --noEmit && tsc --noEmit --project tsconfig.tooling.json"
+    "typecheck": "bun --check && bun --check --tsconfig-override tsconfig.tooling.json"
   },
   "dependencies": {
     "@fluncle/contracts": "workspace:*",
