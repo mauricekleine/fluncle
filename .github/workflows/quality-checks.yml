@@ -79,6 +79,10 @@ jobs:
             turbo-v2-${{ runner.os }}-
 
       - name: Run static policy
+        env:
+          GOMAXPROCS: "1"
+          GOMEMLIMIT: 3GiB
+          OXLINT_THREADS: "2"
         run: node scripts/quality/measure.mjs --lane static --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane static
 
       - name: Migrations are append-only
