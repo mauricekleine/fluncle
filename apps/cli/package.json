@@ -20,7 +20,7 @@
     "dev": "bun run ./src/cli.ts",
     "fluncle": "bun run ./src/cli.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "bun --check"
   },
   "dependencies": {
     "@fluncle/contracts": "workspace:*",

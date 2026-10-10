@@ -22,7 +22,7 @@
     "./lib/*": "./src/lib/*.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "bun --check"
   },
   "dependencies": {
     "@base-ui/react": "catalog:",

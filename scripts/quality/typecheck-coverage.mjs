@@ -71,11 +71,21 @@ function measureCoverage(root = repositoryRoot()) {
     );
     const script = manifest.scripts?.typecheck ?? "";
     for (const command of script.split("&&")) {
-      if (!/^\s*tsc\b/.test(command)) {
+      const args = Array.from(
+        command.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g),
+        (match) => match[1] ?? match[2] ?? match[3],
+      );
+      if (args[0] !== "bun" || !args.includes("--check")) {
         continue;
       }
-      const project = command.match(/(?:--project|-p)\s+(\S+)/)?.[1] ?? "tsconfig.json";
-      const config = resolve(root, workspace.path, project);
+      const cwdIndex = args.indexOf("--cwd");
+      const configIndex = args.indexOf("--tsconfig-override");
+      const cwd = cwdIndex < 0 ? "." : args[cwdIndex + 1];
+      const project = configIndex < 0 ? "tsconfig.json" : args[configIndex + 1];
+      if (!cwd || !project) {
+        throw new Error(`Missing project path in typecheck command: ${command.trim()}`);
+      }
+      const config = resolve(root, workspace.path, cwd, project);
       const configPath = relative(root, config).replaceAll("\\", "/");
       if (programs[configPath]) {
         continue;

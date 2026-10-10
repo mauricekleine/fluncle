@@ -10,7 +10,7 @@
     "show": "bun src/show.ts",
     "test": "bun test",
     "test:matcher-accuracy": "bun src/bridge/accuracy.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "bun --check"
   },
   "dependencies": {
     "@fluncle/video": "workspace:*"

@@ -11,7 +11,7 @@
     "dev": "bun run ./scripts/build.ts --watch",
     "icons": "bash ./scripts/make-icons.sh",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "bun --check"
   },
   "devDependencies": {
     "@fluncle/contracts": "workspace:*",
