@@ -266,7 +266,7 @@ async function markdownHomeResponse(): Promise<Response> {
 
   const galaxiesLive = await isGalaxyMapFullyNamed();
   const galaxiesLine = galaxiesLive
-    ? `\n- [Galaxies API](${siteUrl}/api/v1/galaxies): the archive grouped into operator-named sonic galaxies (clusters over the audio-embedding space), each with its member count, as JSON; /api/v1/galaxies/{slug} for one galaxy's findings core-first. Browse them at ${siteUrl}/galaxies`
+    ? `\n- [Galaxies API](${siteUrl}/api/v1/galaxies): the archive grouped into named sonic galaxies (clusters over the audio-embedding space), each with its member count, as JSON; /api/v1/galaxies/{slug} for one galaxy's findings core-first. Browse them at ${siteUrl}/galaxies`
     : "";
   const tracks = page.tracks.map((track) => {
     if (track.type === "mixtape") {

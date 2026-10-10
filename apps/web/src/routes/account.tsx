@@ -211,7 +211,7 @@ function AccountPage() {
 function LoadFailed({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="account-section">
-      <p className="account-muted">Could not load that door. Check your connection.</p>
+      <p className="account-muted">Could not load this page. Check your connection.</p>
       <Button onClick={onRetry} type="button" variant="outline">
         Try again
       </Button>

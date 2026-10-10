@@ -28,6 +28,17 @@ const SCAN_ROOTS = [
   "apps/web/src/lib/identity.ts",
 
   "apps/web/src/lib/log-prose.ts",
+  "apps/web/src/lib/graph-prose.ts",
+  "apps/web/src/lib/page-meta.ts",
+  "apps/web/src/lib/meta-description.ts",
+  "apps/web/src/lib/cover-meta.ts",
+  "apps/web/src/lib/json-ld.ts",
+  "apps/web/src/lib/log-schema.ts",
+  "apps/web/src/lib/feed-xml.ts",
+  "apps/web/src/lib/findings-feed.ts",
+  "apps/web/src/lib/fresh-feed-item.ts",
+  "apps/web/src/lib/fresh-feed-rss.ts",
+  "apps/web/src/lib/story-feed.ts",
 
   "apps/web/src/lib/server/telegram.ts",
   "apps/web/src/lib/server/bluesky.ts",
@@ -37,6 +48,11 @@ const SCAN_ROOTS = [
   "apps/web/src/lib/server/follow-digest-copy.ts",
   "apps/web/src/lib/server/follow-digest-email.ts",
   "apps/web/src/lib/server/resend.ts",
+  "apps/web/src/lib/server/newsletter.ts",
+  "apps/web/src/lib/server/follow-digest.ts",
+  "apps/web/src/lib/server/frontier-cover-html.ts",
+  "apps/web/src/lib/server/mixtape-cover.ts",
+  "apps/web/src/lib/server/mcp.ts",
 ];
 
 const SKIPPED_DIRECTORIES = [
@@ -318,6 +334,11 @@ describe("voice lint", () => {
     expect(scanned.has("apps/web/src/lib/server/agent-discovery.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/identity.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/log-prose.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/page-meta.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/json-ld.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/log-schema.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/fresh-feed-rss.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/server/mcp.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/telegram.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/bluesky.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/push.ts")).toBe(true);
