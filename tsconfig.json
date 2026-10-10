@@ -14,5 +14,15 @@
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2022"
-  }
+  },
+  "include": [
+    "taze.config.ts",
+    "apps/mobile/taze.config.ts",
+    "apps/raycast/doctor.config.ts",
+    "apps/raycast/test-preload.ts",
+    "tools/oxlint/no-comments/index.ts",
+    "tools/oxlint/no-comments/rules/no-comments.ts",
+    "node_modules/@types/bun/index.d.ts",
+    "node_modules/@types/node/index.d.ts"
+  ]
 }
