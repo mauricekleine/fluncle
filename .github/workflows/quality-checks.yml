@@ -189,10 +189,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      SQLD_SHA256: edc6e17188d7f2e7c6a76eb7ea21f57f4f90fd49578f16a3884fe433e9ecbd84
-      SQLD_VERSION: v0.24.31
-      TURSO_CLI_SHA256: 0ddecc55970fa9c7a237555095ca069fb9b0deec5ab82fe2ec5726f684e65e6d
-      TURSO_CLI_VERSION: v1.0.30
+      SQLD_SHA256: 71720fc8648c19efef416efebd47145ef59b62e198770533530a858e1336879f
+      SQLD_VERSION: v0.24.32
+      TURSO_CLI_SHA256: f3595d4af3385e691f68152ae24b1ffa3768413fa007c3cccfb3681937f52502
+      TURSO_CLI_VERSION: v1.0.33
     steps:
       - name: Checkout code and history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
