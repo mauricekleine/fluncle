@@ -1,25 +1,50 @@
 import { writeSync } from "node:fs";
+import { format } from "node:util";
 
 import { type ApiFailure } from "@fluncle/contracts";
 
 const EAGAIN_WAIT = new Int32Array(new SharedArrayBuffer(4));
 
-export function writeStdoutSync(text: string): void {
+let stopWaitingForReader = (): boolean => false;
+
+function writeFdSync(fd: 1 | 2, text: string): void {
   const buf = Buffer.from(text, "utf8");
   let offset = 0;
 
   while (offset < buf.length) {
     try {
-      offset += writeSync(1, buf, offset);
+      offset += writeSync(fd, buf, offset);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EAGAIN") {
+      const code = (error as NodeJS.ErrnoException).code;
+
+      if (code === "EAGAIN") {
+        if (stopWaitingForReader()) {
+          return;
+        }
+
         Atomics.wait(EAGAIN_WAIT, 0, 0, 1);
         continue;
+      }
+
+      if (code === "EPIPE") {
+        return;
       }
 
       throw error;
     }
   }
+}
+
+export function routeConsoleThroughBlockingWrites(pastDeadline: () => boolean): void {
+  stopWaitingForReader = pastDeadline;
+  const toStdout = (...args: unknown[]): void => writeFdSync(1, `${format(...args)}\n`);
+  const toStderr = (...args: unknown[]): void => writeFdSync(2, `${format(...args)}\n`);
+
+  console.debug = toStdout;
+  console.error = toStderr;
+  console.info = toStdout;
+  console.log = toStdout;
+  console.warn = toStderr;
 }
 
 export function isJsonFailure(value: unknown): value is ApiFailure {
@@ -42,7 +67,7 @@ export class CliError extends Error {
 }
 
 export function printJson(value: unknown): void {
-  writeStdoutSync(JSON.stringify(value, null, 2) + "\n");
+  writeFdSync(1, JSON.stringify(value, null, 2) + "\n");
 }
 
 export function toJsonFailure(error: unknown): ApiFailure {

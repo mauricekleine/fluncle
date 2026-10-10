@@ -162,6 +162,19 @@ export function assertBeforeDeadline(doing: string): void {
   }
 }
 
+export function fireIfPastDeadline(waitingOn: string): boolean {
+  const remaining = remainingDeadlineMs();
+
+  if (remaining === null || remaining > 0) {
+    return false;
+  }
+
+  noteProgress(waitingOn);
+  fireDeadlineNow();
+
+  return true;
+}
+
 export function noteProgress(note: string): void {
   state.note = note;
 }
