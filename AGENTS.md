@@ -35,7 +35,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 ## External Effects
 
 - A reviewed PR that the `hyperspeed-ci` App merges is the approved deploy path. A direct push to `main` or a manual deploy still needs Maurice's approval.
-- MUST: Ask before destructive operations, paid infrastructure changes, bulk sends, credential rotations, or changes that publish to Spotify, Telegram, or Discord.
+- MUST: Ask before destructive operations, paid infrastructure changes, bulk sends, credential rotations, changes that publish to Spotify, Telegram, or Discord, and Cloudflare publishing outside the approved deploy path.
 - MUST: Report when required validation depends on external services and could not be run locally.
 - NEVER: Invent secrets, credentials, listener data, analytics data, or production state.
 - After a merge, run `bun run deploy:verify <merged-sha>` and resolve failed checks. Before changing deployment or diagnosing a missing build, read [docs/quality-system.md#deploy-completion-and-fallback](./docs/quality-system.md#deploy-completion-and-fallback) for watch paths, build gates, coalescing, and recovery.
