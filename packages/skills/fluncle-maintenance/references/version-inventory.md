@@ -4,7 +4,7 @@ Every pinned/baked version in Fluncle's runtime supply chain, with where it live
 
 All commands assume the repo root as the working directory. The "check latest" one-liners are read-only (npm/curl) — safe to run on any tick.
 
-**Automation covers most of this.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps item **1** (the `oven/bun` base = bun), items **3–4** (the `fluncle` CLI, the Claude Code CLI), and item **7** (yt-dlp) on every `fluncle` release + hourly, and opens a PR for a safe bump (a major is reported); the nightly `mk-dependency-upgrades` routine owns item **6** (the Actions digests); items **2**, **5**, **8**, and **9** (node, boat.dev, uv, gh) are pinned but manual-watch. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
+**Automation covers most of this.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps item **1** (the `oven/bun` base = bun), item **3** (the `fluncle` CLI), and item **7** (yt-dlp) on every `fluncle` release + hourly, and opens a PR for a safe bump (a major is reported); the nightly `mk-dependency-upgrades` routine owns item **6** (the Actions digests); the operator's agent layer owns item **4** (Claude Code) through a sync PR; items **2**, **5**, **8**, and **9** (node, boat.dev, uv, gh) are pinned but manual-watch. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
 
 **A pin absent from this inventory is a pin nobody watches.** Every baked binary needs a row here. Item-level failures (e.g. `ytDlpFailures`) do not flip a run's verdict, so an unlisted pin that falls behind fails silently while each tick reports healthy.
 
@@ -88,8 +88,8 @@ The image is built `FROM oven/bun:<ver>-debian@sha256:<digest>` (Debian trixie),
   npm view @anthropic-ai/claude-code version
   ```
 
-- **How to bump:** edit `@anthropic-ai/claude-code@<version>` → open a PR → merge when CI green. The on-box `fluncle-pin-watch` timer then rebuilds, pre-smokes (including an agent-tier `{ok:true}` check), and auto-rolls-back on any failure. This is the `claude -p` binary the observation cron's one agentic step shells out to (subscription auth at run time; zero OpenRouter tokens). Never float `latest` — the box toolchain is pinned whole.
-- **Safety:** a **patch/minor** is safe to ship (it is the agent CLI, not the model or the auth; a patch rarely changes the `claude -p` contract). The deploy-gate can't validate a baked pin; the pin-watch pre-smoke validates it on the box before the live container is touched. A **major** = brake (the `-p` / skills-discovery contract could change). Anything touching the **auth token shape** = brake regardless of version.
+- **How to bump:** never by hand or by this routine. The operator's agent layer opens a sync PR that sets this version line together with the managed settings in `docs/agents/hermes/claude-managed-settings.d`; on merge the on-box `fluncle-pin-watch` timer rebuilds, pre-smokes (`claude --version` == the pin, an agent-tier `{ok:true}` check), and auto-rolls-back on any failure. This is the `claude -p` binary the box sweeps shell out to (subscription auth at run time; zero OpenRouter tokens). Never float `latest`.
+- **Safety:** report drift only. The sync PR keeps the CLI and its managed settings in step, so a routine bump of the version line alone would split them.
 
 ---
 
@@ -160,14 +160,14 @@ Every action stays pinned to an immutable commit. The nightly `mk-dependency-upg
 
 ## Quick reference table
 
-| #   | Item                | File (marker)                                                                       | Current pin (read)             | Check latest                                 | Ship end-to-end?                  |
-| --- | ------------------- | ----------------------------------------------------------------------------------- | ------------------------------ | -------------------------------------------- | --------------------------------- |
-| 1   | bun base image      | `Dockerfile` `FROM oven/bun:<ver>-debian@sha256:` + `package.json` `packageManager` | `grep '^FROM oven/bun'`        | bun GH `releases/latest` + Docker Hub tag    | patch/minor yes, major brake      |
-| 2   | node + npm          | `Dockerfile` `COPY --from=node:<ver>-trixie-slim@sha256:`                           | `grep 'COPY --from=node:'`     | nodejs.org dist index + Docker Hub tag       | **Never** (manual watch)          |
-| 3   | `fluncle` CLI       | `Dockerfile` `releases/download/v<ver>/fluncle-linux-` (standalone binary)          | `grep 'download/v.*/fluncle-'` | `npm view fluncle version`                   | patch/minor yes, major brake      |
-| 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                           | `grep 'claude-code@'`          | `npm view @anthropic-ai/claude-code version` | patch/minor yes, major/auth brake |
-| 5   | boat.dev CLI        | `Dockerfile` `releases/download/boat-cli-v<ver>/boat-linux-`                        | `grep 'boat-cli-v'`            | vendor release list (`boat-cli-v*` tags)     | **Never** (manual watch)          |
-| 6   | GitHub Actions pins | `.github/workflows/*.yml` `uses: …@<sha> # vN`                                      | `grep 'uses:.*@'`              | Root taze inventory                          | **Nightly dependency routine**    |
-| 7   | yt-dlp              | `Dockerfile` `yt-dlp/releases/download/<ver>/yt-dlp_linux`                          | `grep 'yt-dlp/releases/down'`  | yt-dlp GH `releases/latest`                  | **Always** (staleness = outage)   |
-| 8   | uv                  | `Dockerfile` `COPY --from=ghcr.io/astral-sh/uv:<ver>@sha256:`                       | `grep 'astral-sh/uv:'`         | uv GH `releases/latest`                      | **Never** (manual watch)          |
-| 9   | gh                  | `Dockerfile` `cli/cli/releases/download/v<ver>/gh_`                                 | `grep 'cli/cli/releases'`      | gh GH `releases/latest`                      | **Never** (manual watch)          |
+| #   | Item                | File (marker)                                                                       | Current pin (read)             | Check latest                                 | Ship end-to-end?                |
+| --- | ------------------- | ----------------------------------------------------------------------------------- | ------------------------------ | -------------------------------------------- | ------------------------------- |
+| 1   | bun base image      | `Dockerfile` `FROM oven/bun:<ver>-debian@sha256:` + `package.json` `packageManager` | `grep '^FROM oven/bun'`        | bun GH `releases/latest` + Docker Hub tag    | patch/minor yes, major brake    |
+| 2   | node + npm          | `Dockerfile` `COPY --from=node:<ver>-trixie-slim@sha256:`                           | `grep 'COPY --from=node:'`     | nodejs.org dist index + Docker Hub tag       | **Never** (manual watch)        |
+| 3   | `fluncle` CLI       | `Dockerfile` `releases/download/v<ver>/fluncle-linux-` (standalone binary)          | `grep 'download/v.*/fluncle-'` | `npm view fluncle version`                   | patch/minor yes, major brake    |
+| 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                           | `grep 'claude-code@'`          | `npm view @anthropic-ai/claude-code version` | **Never** (agent-layer sync PR) |
+| 5   | boat.dev CLI        | `Dockerfile` `releases/download/boat-cli-v<ver>/boat-linux-`                        | `grep 'boat-cli-v'`            | vendor release list (`boat-cli-v*` tags)     | **Never** (manual watch)        |
+| 6   | GitHub Actions pins | `.github/workflows/*.yml` `uses: …@<sha> # vN`                                      | `grep 'uses:.*@'`              | Root taze inventory                          | **Nightly dependency routine**  |
+| 7   | yt-dlp              | `Dockerfile` `yt-dlp/releases/download/<ver>/yt-dlp_linux`                          | `grep 'yt-dlp/releases/down'`  | yt-dlp GH `releases/latest`                  | **Always** (staleness = outage) |
+| 8   | uv                  | `Dockerfile` `COPY --from=ghcr.io/astral-sh/uv:<ver>@sha256:`                       | `grep 'astral-sh/uv:'`         | uv GH `releases/latest`                      | **Never** (manual watch)        |
+| 9   | gh                  | `Dockerfile` `cli/cli/releases/download/v<ver>/gh_`                                 | `grep 'cli/cli/releases'`      | gh GH `releases/latest`                      | **Never** (manual watch)        |

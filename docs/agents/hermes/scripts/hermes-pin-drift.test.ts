@@ -26,7 +26,6 @@ function resolvePin(variable: string): string {
 describe("hermes-pin-drift parses every pin it claims to watch", () => {
   const PINS: readonly { pattern: RegExp; variable: string }[] = [
     { pattern: /^\d+\.\d+\.\d+$/, variable: "CUR_FLUNCLE" },
-    { pattern: /^\d+\.\d+\.\d+$/, variable: "CUR_CLAUDE" },
     { pattern: /^\d+\.\d+\.\d+$/, variable: "CUR_BUN" },
     { pattern: /^\d{4}\.\d{2}\.\d{2}$/, variable: "CUR_YTDLP" },
     { pattern: /^sha256:[0-9a-f]{64}$/, variable: "CUR_BUN_DIGEST" },
@@ -47,6 +46,34 @@ describe("hermes-pin-drift parses every pin it claims to watch", () => {
     for (const { variable } of PINS) {
       expect(guard).toContain(`$${variable}`);
     }
+  });
+});
+
+describe("the Claude Code pin belongs to the agent-layer sync PR", () => {
+  it("pin-watch reads a well-formed version off the Dockerfile's claude-code line", () => {
+    const pinWatch = readFileSync(
+      join(REPO_ROOT, "docs", "agents", "hermes", "pin-watch", "rebuild-hermes.sh"),
+      "utf8",
+    );
+    const reader = /^pin_from_dockerfile\(\) \{.+\}$/m.exec(pinWatch)?.[0] ?? "";
+
+    expect(reader).not.toBe("");
+
+    const version = execFileSync(
+      "bash",
+      ["-c", `${reader}\npin_from_dockerfile '@anthropic-ai\\/claude-code'`],
+      {
+        encoding: "utf8",
+        env: { ...process.env, DOCKERFILE: "docs/agents/hermes/Dockerfile", REPO_DIR: REPO_ROOT },
+      },
+    ).trim();
+
+    expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(dockerfile).toContain(`RUN npm install -g @anthropic-ai/claude-code@${version}\n`);
+  });
+
+  it("hermes-pin-drift never rewrites it", () => {
+    expect(script).not.toContain("claude-code");
   });
 });
 

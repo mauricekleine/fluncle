@@ -28,18 +28,16 @@ brake_signature() {
 inplace() { SRCH="$2" REPL="$3" perl -i -pe 's/\Q$ENV{SRCH}\E/$ENV{REPL}/g' "$1"; }
 
 CUR_FLUNCLE="$(sed -n 's#.*releases/download/v\([0-9][0-9.]*\)/fluncle-.*#\1#p' "$DOCKERFILE" | head -1)"
-CUR_CLAUDE="$(sed -n 's#.*@anthropic-ai/claude-code@\([0-9][0-9.]*\).*#\1#p' "$DOCKERFILE" | head -1)"
 CUR_BUN="$(sed -n 's#^FROM oven/bun:\([0-9][0-9.]*\)-debian@sha256:.*#\1#p' "$DOCKERFILE" | head -1)"
 CUR_BUN_DIGEST="$(sed -n 's#^FROM oven/bun:[0-9][0-9.]*-debian@\(sha256:[0-9a-f]*\).*#\1#p' "$DOCKERFILE" | head -1)"
 CUR_YTDLP="$(sed -n 's#.*yt-dlp/releases/download/\([0-9][0-9.]*\)/yt-dlp_linux.*#\1#p' "$DOCKERFILE" | head -1)"
-[ -n "$CUR_FLUNCLE" ] && [ -n "$CUR_CLAUDE" ] && [ -n "$CUR_BUN" ] && [ -n "$CUR_BUN_DIGEST" ] && [ -n "$CUR_YTDLP" ] ||
+[ -n "$CUR_FLUNCLE" ] && [ -n "$CUR_BUN" ] && [ -n "$CUR_BUN_DIGEST" ] && [ -n "$CUR_YTDLP" ] ||
 	{
-		log "FATAL: could not parse one of the Dockerfile pins (fluncle='$CUR_FLUNCLE' claude='$CUR_CLAUDE' bun='$CUR_BUN' bun-digest='$CUR_BUN_DIGEST' yt-dlp='$CUR_YTDLP')"
+		log "FATAL: could not parse one of the Dockerfile pins (fluncle='$CUR_FLUNCLE' bun='$CUR_BUN' bun-digest='$CUR_BUN_DIGEST' yt-dlp='$CUR_YTDLP')"
 		exit 1
 	}
 
 LATEST_FLUNCLE="$(npm view fluncle version 2>/dev/null || true)"
-LATEST_CLAUDE="$(npm view @anthropic-ai/claude-code version 2>/dev/null || true)"
 LATEST_BUN="$(curl -fsSL https://api.github.com/repos/oven-sh/bun/releases/latest 2>/dev/null |
 	python3 -c 'import sys,json; print(json.load(sys.stdin)["tag_name"].replace("bun-v","",1))' 2>/dev/null || true)"
 LATEST_YTDLP="$(curl -fsSL https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest 2>/dev/null |
@@ -49,7 +47,6 @@ declare -a TABLE=("| pin | current | latest | verdict |" "| --- | --- | --- | --
 declare -a BRAKE_LINES=()
 declare -a SHORT=()
 APPLY_FLUNCLE=""
-APPLY_CLAUDE=""
 APPLY_BUN=""
 APPLY_YTDLP=""
 
@@ -65,7 +62,6 @@ assess() {
 			SHORT+=("${name} ${latest}")
 			case "$name" in
 			fluncle) APPLY_FLUNCLE="$latest" ;;
-			claude-code) APPLY_CLAUDE="$latest" ;;
 			bun) APPLY_BUN="$latest" ;;
 			yt-dlp) APPLY_YTDLP="$latest" ;;
 			esac
@@ -80,7 +76,6 @@ assess() {
 }
 
 assess fluncle "$CUR_FLUNCLE" "$LATEST_FLUNCLE"
-assess claude-code "$CUR_CLAUDE" "$LATEST_CLAUDE"
 assess bun "$CUR_BUN" "$LATEST_BUN"
 assess yt-dlp "$CUR_YTDLP" "$LATEST_YTDLP" calendar
 
@@ -108,10 +103,6 @@ declare -a CHANGES=()
 if [ -n "$APPLY_FLUNCLE" ]; then
 	inplace "$DOCKERFILE" "releases/download/v$CUR_FLUNCLE/fluncle-" "releases/download/v$APPLY_FLUNCLE/fluncle-"
 	CHANGES+=("\`fluncle\` \`$CUR_FLUNCLE\` → \`$APPLY_FLUNCLE\` (Dockerfile)")
-fi
-if [ -n "$APPLY_CLAUDE" ]; then
-	inplace "$DOCKERFILE" "@anthropic-ai/claude-code@$CUR_CLAUDE" "@anthropic-ai/claude-code@$APPLY_CLAUDE"
-	CHANGES+=("\`@anthropic-ai/claude-code\` \`$CUR_CLAUDE\` → \`$APPLY_CLAUDE\` (Dockerfile)")
 fi
 if [ -n "$APPLY_YTDLP" ]; then
 	inplace "$DOCKERFILE" "yt-dlp/releases/download/$CUR_YTDLP/yt-dlp_linux" "yt-dlp/releases/download/$APPLY_YTDLP/yt-dlp_linux"
