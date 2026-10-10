@@ -8,7 +8,7 @@ This is the entire task. Do not chase the whole dependency tree. Do not "catch u
 
 ## What you own (and what you don't)
 
-You own the **runtime pins** in `@fluncle-maintenance`'s inventory (`references/version-inventory.md`): the `oven/bun` base image = bun (the `FROM` tag + digest and `package.json` `packageManager`), node + uv (digest-pinned, manual-watch), the `fluncle` CLI, the Claude Code CLI, the boat.dev CLI (pinned, manual-watch), the GitHub Actions SHA-pins, and yt-dlp. You do **not** own the workspace dependency catalog (the `bunfig.toml` `minimumReleaseAge` flow) or the agent's model/voice/permissions — if you notice drift there, mention it as "out of scope" and leave it.
+You own the **runtime pins** in `@fluncle-maintenance`'s inventory (`references/version-inventory.md`): the `oven/bun` base image = bun (the `FROM` tag + digest and `package.json` `packageManager`), node + uv (digest-pinned, manual-watch), the `fluncle` CLI, the Claude Code CLI (report-only: the operator's agent layer opens a sync PR that sets the pin together with the managed settings in `docs/agents/hermes/claude-managed-settings.d`), the boat.dev CLI (pinned, manual-watch), the GitHub Actions SHA-pins, and yt-dlp. You do **not** own the workspace dependency catalog (the `bunfig.toml` `minimumReleaseAge` flow) or the agent's model/voice/permissions — if you notice drift there, mention it as "out of scope" and leave it.
 
 Load the `@fluncle-maintenance` skill and follow it. `references/version-inventory.md` is the drift surface; `references/safety-doctrine.md` is the SHIP-vs-BRAKE decision; `references/bump-procedure.md` is the edit-PR-merge procedure. After a baked-pin merge you are DONE — the box self-deploys via the on-box `fluncle-pin-watch` timer (rebuild → pre-smoke → swap → auto-rollback; see `docs/agents/hermes/pin-watch/`). You never SSH to the box, never run `docker`, never touch `op`.
 
@@ -35,8 +35,8 @@ Run each inventory "check latest" one-liner. Compute the **drift class**: none /
 
 Apply `references/safety-doctrine.md`. Classify each drifted item as **SHIP** or **BRAKE**:
 
-- **SHIP** (clearly safe, take end-to-end): a patch/minor `fluncle` or Claude Code CLI bump; a patch/minor bun bump (the `FROM` tag + digest and `packageManager` together); SHA-pinning a GitHub Action **at its current major**.
-- **BRAKE** (report, never ship): any MAJOR bump anywhere (a bun major is a new base image); node/uv/gh (manual-watch — report only); boat.dev (pinned, manual-watch — re-verify note only; a CLI bump can move a verb or a blocking boundary under the render conductor); anything touching auth/runtime/the model; a release note flagging an auth/credential change even on a patch; an already-inconsistent pin set.
+- **SHIP** (clearly safe, take end-to-end): a patch/minor `fluncle` CLI bump; a patch/minor bun bump (the `FROM` tag + digest and `packageManager` together); SHA-pinning a GitHub Action **at its current major**.
+- **BRAKE** (report, never ship): any MAJOR bump anywhere (a bun major is a new base image); node/uv/gh (manual-watch — report only); Claude Code (the agent-layer sync PR owns it — report only); boat.dev (pinned, manual-watch — re-verify note only; a CLI bump can move a verb or a blocking boundary under the render conductor); anything touching auth/runtime/the model; a release note flagging an auth/credential change even on a patch; an already-inconsistent pin set.
 - **When in doubt → BRAKE.**
 
 ### 4a. If there are SHIP items — carry them all the way
@@ -48,7 +48,7 @@ Apply `references/safety-doctrine.md`. Classify each drifted item as **SHIP** or
 5. **Open the PR** with `gh pr create`. Body: the drift table (item · old pin · new pin · drift class · ship/brake), the safety call per item, and — for any Dockerfile edit — a note that the on-box `fluncle-pin-watch` timer will rebuild + smoke-test + self-roll-back after merge.
 6. **Wait for the PR's CI to go GREEN** — poll `gh pr checks <#>` until the deploy-gate (Quality Checks), gitleaks, and the Cloudflare Workers build all pass. If any check is **red**, do **NOT** merge: report the failure, leave the PR open for a human, and skip to step 5.
 7. **Queue the merge** on the green PR: `gh pr merge <#> --squash --auto --delete-branch`. The `hyperspeed-ci` reviewer approves it and auto-merge lands it; never pass `--admin`.
-8. **That's the whole job — the box self-deploys.** If the merged change includes a baked Dockerfile pin (a `fluncle` / Claude Code CLI bump), you do **nothing** further: within the hour the on-box `fluncle-pin-watch` timer (rave-02) detects the new pin on `main`, rebuilds the image, pre-smokes it (versions, an agent-tier read returns `{ok:true}`, a publish-class command refused 403) BEFORE touching the live container, swaps, post-smokes, and **auto-rolls-back on any failure**, Discord-alerting on deploy or rollback. You never SSH, rebuild, or touch the box. (`docs/agents/hermes/pin-watch/`.)
+8. **That's the whole job — the box self-deploys.** If the merged change includes a baked Dockerfile pin (a `fluncle` bump, or a merged Claude Code sync PR), you do **nothing** further: within the hour the on-box `fluncle-pin-watch` timer (rave-02) detects the new pin on `main`, rebuilds the image, pre-smokes it (versions, an agent-tier read returns `{ok:true}`, a publish-class command refused 403) BEFORE touching the live container, swaps, post-smokes, and **auto-rolls-back on any failure**, Discord-alerting on deploy or rollback. You never SSH, rebuild, or touch the box. (`docs/agents/hermes/pin-watch/`.)
 
 ### 4b. Report the BRAKE items
 

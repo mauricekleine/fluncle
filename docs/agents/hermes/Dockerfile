@@ -308,12 +308,22 @@ RUN chmod -R a+rX /opt/fonts
 # out to `claude -p` to author the recovered-audio observation script in Fluncle's
 # voice (subscription auth via CLAUDE_CODE_OAUTH_TOKEN at run time; zero OpenRouter
 # tokens). Pinned for reproducible rebuilds (the version line busts the layer cache on
-# a bump) — matches the box's proven spike version. Bump deliberately, never float
-# `latest`. `npm -g` lands in
+# a bump); never float `latest`. `npm -g` lands in
 # /usr/local/lib + a /usr/local/bin/claude symlink, both world-accessible, so the
 # NON-root cron user can exec it (same world-readable property the `fluncle` CLI relies
-# on). Bump lever: this version line.
+# on).
+#
+# The operator's agent layer owns the shared Claude Code config: a sync PR from it sets
+# this version line AND rewrites claude-managed-settings.d (the rendered managed
+# settings: model + effort defaults, the auto-compact window, auto memory and the
+# autoupdater off, the OTEL content gates). hermes-pin-drift does not bump Claude Code,
+# and nobody hand-edits those files. /etc/claude-code/managed-settings.d is Claude Code's
+# Linux managed-settings path, read whatever CLAUDE_CONFIG_DIR is, so every sweep's
+# `claude -p` gets the same settings; root-owned + world-readable so the NON-root cron
+# user reads them but cannot change them.
 RUN npm install -g @anthropic-ai/claude-code@2.1.296
+COPY docs/agents/hermes/claude-managed-settings.d /etc/claude-code/managed-settings.d
+RUN chmod -R a+rX /etc/claude-code
 
 # The committed npx-installed skill snapshot, baked for Claude Code so every
 # box `claude -p` discovers local and upstream skills: the voice crons load `copywriting-fluncle`
