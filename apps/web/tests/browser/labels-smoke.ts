@@ -4,6 +4,7 @@ import { type Client, createClient } from "@libsql/client";
 import { type Page } from "playwright-core";
 import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import { launchBrowser, loadDevVars, newAdminPage } from "./admin";
+import { loadRowsUntil } from "./labels-smoke-pagination";
 
 const BASE_URL = process.env.BASE_URL ?? "http://127.0.0.1:3000";
 const OUT_DIR = process.env.OUT_DIR ?? "/tmp/admin-labels-smoke";
@@ -35,6 +36,23 @@ const QA = {
   waiting: "qa-labels-waiting",
 } as const;
 
+const QA_PAGE_FILLER_PREFIX = "qa-labels-smoke-pagination";
+const QA_PAGE_FILLERS = (["waiting", "partial"] as const).flatMap((section) =>
+  Array.from({ length: 51 }, (_, index) => {
+    const suffix = String(index + 1).padStart(3, "0");
+    const id = `${QA_PAGE_FILLER_PREFIX}-${section}-${suffix}`;
+
+    return {
+      artistMbid: `qa-label-smoke-${section}-${suffix}`,
+      id,
+      name: `aa QA ${section} Pagination Filler ${suffix}`,
+      ruleId: `${QA_PAGE_FILLER_PREFIX}-rule-${section}-${suffix}`,
+      section,
+      slug: id,
+    };
+  }),
+);
+
 const QA_NAMES = {
   ruled: "zz QA Partial Label",
   waiting: "zz QA Waiting Label",
@@ -59,7 +77,29 @@ function seedClient(): Client {
 }
 
 async function seedLabels(db: Client): Promise<void> {
+  await cleanupLabels(db);
   const now = new Date().toISOString();
+
+  await db.batch(
+    QA_PAGE_FILLERS.flatMap((filler) => [
+      {
+        args: [filler.id, filler.name, filler.slug, now, now],
+        sql: `insert or replace into labels (id, name, slug, seed_state, created_at, updated_at)
+              values (?, ?, ?, 'undecided', ?, ?)`,
+      },
+      ...(filler.section === "partial"
+        ? [
+            {
+              args: [filler.ruleId, filler.id, filler.artistMbid, filler.name, now, now],
+              sql: `insert or replace into artist_rules
+                      (id, label_id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+                    values (?, ?, ?, ?, 'allow', 'operator', ?, ?)`,
+            },
+          ]
+        : []),
+    ]),
+    "write",
+  );
 
   for (const [id, name, slug] of [
     [QA.waiting, QA_NAMES.waiting, "qa-labels-waiting"],
@@ -100,10 +140,23 @@ async function seedLabels(db: Client): Promise<void> {
 }
 
 async function cleanupLabels(db: Client): Promise<void> {
-  await db.execute(`delete from label_triage_rule_proposals where id = '${QA.proposalRuleId}'`);
-  await db.execute(`delete from label_triage_proposals where id = '${QA.proposalId}'`);
-  await db.execute(`delete from artist_rules where id = '${QA.ruleId}'`);
-  await db.execute(`delete from labels where id in ('${QA.waiting}', '${QA.ruled}')`);
+  await db.batch(
+    [
+      { args: [QA.proposalRuleId], sql: "delete from label_triage_rule_proposals where id = ?" },
+      { args: [QA.proposalId], sql: "delete from label_triage_proposals where id = ?" },
+      { args: [QA.ruleId], sql: "delete from artist_rules where id = ?" },
+      {
+        args: [`${QA_PAGE_FILLER_PREFIX}-rule-%`],
+        sql: "delete from artist_rules where id like ?",
+      },
+      { args: [QA.waiting, QA.ruled], sql: "delete from labels where id in (?, ?)" },
+      {
+        args: [`${QA_PAGE_FILLER_PREFIX}-%`],
+        sql: "delete from labels where id like ?",
+      },
+    ],
+    "write",
+  );
 }
 
 async function sectionHeading(page: Page, title: string): Promise<string> {
@@ -118,12 +171,40 @@ function headingCount(heading: string): number | undefined {
   return match?.[1] === undefined ? undefined : Number(match[1]);
 }
 
-function sectionRows(page: Page, title: string) {
+function labelSection(page: Page, title: string) {
   return page
     .locator("section")
     .filter({ has: page.getByRole("heading", { level: 2, name: new RegExp(title) }) })
-    .first()
-    .locator("ul > li");
+    .first();
+}
+
+async function sectionRowsThroughFixture(
+  page: Page,
+  title: string,
+  fixtureName: string,
+): Promise<string[]> {
+  const section = labelSection(page, title);
+  const rows = section.locator("ul > li");
+  const firstPage = await rows.allTextContents();
+
+  return loadRowsUntil(
+    firstPage,
+    async () => {
+      const loadMore = section.getByRole("button", { exact: true, name: "Load more" });
+
+      if ((await loadMore.count()) === 0) {
+        return undefined;
+      }
+
+      const previousCount = await rows.count();
+
+      await loadMore.click();
+      await rows.nth(previousCount).waitFor({ state: "attached" });
+
+      return (await rows.allTextContents()).slice(previousCount);
+    },
+    (row) => row.includes(fixtureName),
+  );
 }
 
 async function waitForHydration(page: Page): Promise<void> {
@@ -194,8 +275,16 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
   );
 
   if (SEED) {
-    const waitingRows = await sectionRows(page, "Waiting on a ruling").allTextContents();
-    const partialRows = await sectionRows(page, "Seeding named artists").allTextContents();
+    const waitingRows = await sectionRowsThroughFixture(
+      page,
+      "Waiting on a ruling",
+      QA_NAMES.waiting,
+    );
+    const partialRows = await sectionRowsThroughFixture(
+      page,
+      "Seeding named artists",
+      QA_NAMES.ruled,
+    );
 
     expect(
       waitingRows.some((row) => row.includes(QA_NAMES.waiting)),
