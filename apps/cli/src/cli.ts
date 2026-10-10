@@ -18,7 +18,7 @@ import {
 import { setEnvProfile } from "./env";
 import { spotifyPlaylistUrl, telegramUrl } from "./links";
 import { maybePrintLiveCallout } from "./live";
-import { printJson, toJsonFailure } from "./output";
+import { printJson, routeConsoleThroughBlockingWrites, toJsonFailure } from "./output";
 import { formatError } from "./retry";
 
 type GlobalOptions = {
@@ -585,6 +585,7 @@ export function createProgram(): Command {
 }
 
 async function main(args = process.argv.slice(2)): Promise<void> {
+  routeConsoleThroughBlockingWrites();
   const program = createProgram();
 
   if (args.length === 0) {

@@ -191,6 +191,32 @@ describe("fluncle CLI parsing and JSON output", () => {
     },
   );
 
+  testCli(
+    "delivers output larger than the 64 KiB pipe buffer to a piped stdout in full",
+    async () => {
+      const labels = Array.from({ length: 400 }, (_, index) => ({
+        name: `Pipe Label ${index}`,
+        seedState: "undecided",
+        slug: `pipe-label-${index}`,
+        sourceNote: "n".repeat(400),
+      }));
+
+      await withStubApi(
+        () => Response.json({ labels, ok: true }),
+        async (baseUrl) => {
+          const result = await runCli(
+            ["admin", "labels", "list", "--seed-state", "undecided", "--json"],
+            { FLUNCLE_API_BASE_URL: baseUrl, FLUNCLE_API_TOKEN: "test-token" },
+            { throughKernelPipe: true },
+          );
+
+          expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(64 * 1024);
+          expect(JSON.parse(result.stdout)).toEqual({ labels });
+        },
+      );
+    },
+  );
+
   testCli("admin labels update requires a ruling or a scoped re-walk before fetching", async () => {
     const result = await runCli(["admin", "labels", "update", "test-label", "--json"]);
 
@@ -2118,12 +2144,15 @@ async function withStubApi(
 async function runCli(
   args: string[],
   env?: Record<string, string>,
+  options: { throughKernelPipe?: boolean } = {},
 ): Promise<{
   exitCode: number;
   stderr: string;
   stdout: string;
 }> {
-  const proc = Bun.spawn([process.execPath, cliPath, ...args], {
+  const argv = [process.execPath, cliPath, ...args];
+  const command = options.throughKernelPipe ? ["sh", "-c", '"$@" | cat', "sh", ...argv] : argv;
+  const proc = Bun.spawn(command, {
     env: {
       ...process.env,
       FLUNCLE_API_BASE_URL: "http://127.0.0.1:1",
