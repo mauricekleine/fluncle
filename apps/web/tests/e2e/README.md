@@ -12,7 +12,13 @@ bun run --cwd apps/web test:e2e:report    # open the HTML report from the last r
 
 It is deliberately NOT wired into `bun run test` — `turbo run test` runs inside the Cloudflare deploy gate, where no browser exists.
 
-Needs the `turso` CLI **and** `sqld` on PATH: `turso dev` is only a launcher and execs `sqld` separately, so a machine with just the CLI fails at boot with _"Could not start libsql-server … make sure sqld is on your PATH"_. A dev Mac gets both from Homebrew (`turso`, `sqld`); CI installs both from pinned release tarballs.
+Needs the `turso` CLI **and** `sqld` on PATH: `turso dev` is only a launcher and execs `sqld` separately, so a machine with just the CLI fails at boot with _"Could not start libsql-server … make sure sqld is on your PATH"_. Install both at the pinned versions with [mise](https://mise.jdx.dev):
+
+```bash
+mise use -g aqua:tursodatabase/turso-cli@1.0.33 'github:tursodatabase/libsql[version_prefix=libsql-server-v]@0.24.32'
+```
+
+CI's `e2e` job installs the same versions from checksum-verified release tarballs (`TURSO_CLI_VERSION` and `SQLD_VERSION` in `.github/workflows/quality-checks.yml`); bump them together with this command.
 
 ## What the stack is
 
