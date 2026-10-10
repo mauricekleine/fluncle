@@ -4838,7 +4838,13 @@ a.catalogue-letter:focus-visible {
 .nav-item:focus-visible {
   background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
   color: var(--eclipse-glow);
-  outline: none;
+}
+
+/* The wash is the hover heat; the keyboard still gets the Eclipse Gold focus ring on top of it
+   (DESIGN.md, the Unlit Rule), so focus never reads as a pointer resting on the link. */
+.nav-item:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .nav-item[data-status="active"] {
@@ -5987,7 +5993,11 @@ a.catalogue-letter:focus-visible {
 .nav-footer-link:focus-visible {
   background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
   color: var(--eclipse-glow);
-  outline: none;
+}
+
+.nav-footer-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .nav-footer-link[data-status="active"] {
@@ -6048,7 +6058,11 @@ a.catalogue-letter:focus-visible {
 .nav-footer-legal-link:focus-visible {
   background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
   color: var(--eclipse-glow);
-  outline: none;
+}
+
+.nav-footer-legal-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 /* The sibling of .nav-footer-heading ("Follow Fluncle", "For the nerds") — same register,
@@ -6083,7 +6097,11 @@ a.catalogue-letter:focus-visible {
 .nav-follow-link:focus-visible {
   background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
   color: var(--eclipse-glow);
-  outline: none;
+}
+
+.nav-follow-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .nav-nerds {
@@ -6108,7 +6126,11 @@ a.catalogue-letter:focus-visible {
 .nav-nerd-link:focus-visible {
   background: var(--gold-veil, color-mix(in oklch, var(--eclipse-gold) 10%, transparent));
   color: var(--eclipse-glow);
-  outline: none;
+}
+
+.nav-nerd-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 /* The plate grammar: crop marks + register cross, as on every Fluncle plate. */
