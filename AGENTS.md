@@ -24,6 +24,22 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - The `mk-repos` skill maps how this repo relates to the others.
 - A session never reads secrets through the sweep host's service account; when the Mac's 1Password is locked, use the M5 service account or wait.
 
+## Git
+
+- MUST: Keep the main checkout read-only apart from `git pull`, and do every change in a Worktrunk worktree (`wt switch -c <branch>`, or `EnterWorktree` in Claude Code) branched from a freshly pulled `main`. Deliver it as a PR and use `mk-pr-shepherd` through review, merge, and the completion check under External Effects. Delegated sub-agents follow the same path; see the `mk-agent-orchestration` skill.
+- For draft-guarded CI, keep the PR draft through edits, local checks, and local review; mark it ready once for protected contexts, then follow the normal reviewed PR path after they succeed on that head.
+- MUST: If `git commit` fails because Git cannot write commit metadata or access signing helpers, retry the commit with elevated permissions before changing Git config.
+- On headless/automation runs the 1Password SSH agent can be unavailable — signing and SSH push fail even with the sandbox off; fetch/push over HTTPS with `git -c credential.helper='!gh auth git-credential'` instead (`gh` itself is keyring-backed, so it also needs the sandbox off).
+- NEVER: Disable commit signing with `commit.gpgsign=false` unless the user explicitly asks for an unsigned commit.
+
+## External Effects
+
+- A reviewed PR that the `hyperspeed-ci` App merges is the approved deploy path. A direct push to `main` or a manual deploy still needs Maurice's approval.
+- MUST: Ask before destructive operations, paid infrastructure changes, bulk sends, credential rotations, or changes that publish to Spotify, Telegram, or Discord.
+- MUST: Report when required validation depends on external services and could not be run locally.
+- NEVER: Invent secrets, credentials, listener data, analytics data, or production state.
+- After a merge, run `bun run deploy:verify <merged-sha>` and resolve failed checks. Before changing deployment or diagnosing a missing build, read [docs/quality-system.md#deploy-completion-and-fallback](./docs/quality-system.md#deploy-completion-and-fallback) for watch paths, build gates, coalescing, and recovery.
+
 ## Which machine am I on?
 
 - This repo is worked from two Macs; the machine determines what is SAFE, so detect it before large uploads or commits. Detect with `sysctl -n machdep.cpu.brand_string` and match loosely on the chip generation (the string is like `Apple M5 Pro` / `Apple M2` — key off `M5` / `M2`). The physical rig behind this split is [docs/live-show-setup.md](./docs/live-show-setup.md).
@@ -66,16 +82,6 @@ Use the globally installed `mk-agent-orchestration` skill for provider, model, e
 - Read [docs/development.md#quality-checks](./docs/development.md#quality-checks) for package-specific commands; read [docs/quality-system.md](./docs/quality-system.md) before changing CI, the classifier, or deploy verification.
 - Use guards, early returns, `??`, or `?.` instead of TypeScript non-null assertions, enforced by oxlint.
 - For browser inspection use the global `agent-browser` skill; use Chrome DevTools MCP for performance traces.
-
-## External Effects
-
-- MUST: Ask before destructive operations, production deploys, paid infrastructure changes, bulk sends, credential rotations, or changes that publish to Spotify, Telegram, Discord, or Cloudflare.
-- MUST: Report when required validation depends on external services and could not be run locally.
-- NEVER: Invent secrets, credentials, listener data, analytics data, or production state.
-- MUST: Treat a push to `main` as a production deploy. `scripts/quality/deploy-watch-paths.json` is the exact Cloudflare Workers Builds exclusion contract; `bun run quality:classify` and `node scripts/quality/deploy-watch.mjs verify <live-export>` fail closed around it and keep the post-deploy decision synchronized. Quality Checks always reports its stable protected context; public-web E2E runs only for its web/shared/migration closure and the full backstop. Space deploy-triggering merges and verify the Workers Build for the final commit. If the check is absent, classify the diff: an excluded-only change is an expected skip; any deployable path requires an operator-triggered rebuild. Compare `/api/v1/health` with the latest commit that touches a deployable path. The bounded polling probe is specified in [docs/quality-system.md](./docs/quality-system.md).
-- After a merge, run `bun run deploy:verify <merged-sha>` to wait for the live Worker SHA or confirm an excluded-path skip.
-- The prod deploy is gated by `bun run deploy:gate` (repository format check + the Go apps' `gofmt` and `go vet` checks + type-aware lint + typecheck + every package's tests, the Go apps' `go test` included) in the Cloudflare Build command — a failing gate aborts the build before `cf deploy`. Outside it, caught by the `quality-checks` GitHub Action on the PR but never by the deploy gate: `apps/sonar` entirely (no `package.json`, so turbo cannot see its Rust `cargo fmt`/`clippy`/`test`), and the Hermes box-script suite (`test:scripts:box`, the `docs/agents/hermes/scripts` tests): those scripts are baked into the rave-02 image by the pin-watch pipeline, not shipped by the Workers Build, and their process-level tests take minutes of real time, so they gate the PR through `check`, never the Worker deploy.
-- MUST: After pushing to `main`, monitor GitHub Actions and Cloudflare Workers Build through completion and resolve any failed check. Extend `deploy:gate` in `package.json` (not the dashboard) to add checks to the deploy boundary.
 
 ## Library and API Docs
 
@@ -125,14 +131,6 @@ Use the globally installed `mk-agent-orchestration` skill for provider, model, e
 
 - Keep lockfile changes with their dependency change; follow the workspace catalog and range style. Prefer existing packages or platform APIs.
 - Use `mk-dependency-upgrades` for upgrades and read [docs/development.md#dependencies](./docs/development.md#dependencies) for coupled groups, holds, and smoke checks. Sweep-host pins and `.deepsec/pnpm-lock.yaml` follow `fluncle-maintenance`.
-
-## Git
-
-- MUST: Keep the main checkout read-only apart from `git pull`, and do every change in a Worktrunk worktree (`wt switch -c <branch>`, or `EnterWorktree` in Claude Code) branched from a freshly pulled `main`. Deliver it as a PR: the `hyperspeed-ci` reviewer approves and auto-merges it, and the `mk-pr-shepherd` skill carries it through merge and `deploy:verify`. A merge to `main` auto-deploys (mind the coalescing note under External Effects). Delegated sub-agents follow the same path; see the `mk-agent-orchestration` skill.
-- For draft-guarded CI, keep the PR draft through edits, local checks, and local review; mark it ready once for protected contexts, then follow the normal reviewed PR path after they succeed on that head.
-- MUST: If `git commit` fails because Git cannot write commit metadata or access signing helpers, retry the commit with elevated permissions before changing Git config.
-- On headless/automation runs the 1Password SSH agent can be unavailable — signing and SSH push fail even with the sandbox off; fetch/push over HTTPS with `git -c credential.helper='!gh auth git-credential'` instead (`gh` itself is keyring-backed, so it also needs the sandbox off).
-- NEVER: Disable commit signing with `commit.gpgsign=false` unless the user explicitly asks for an unsigned commit.
 
 ## Agent Skills
 
