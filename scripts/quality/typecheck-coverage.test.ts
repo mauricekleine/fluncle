@@ -32,6 +32,30 @@ test.each([
     cwd: "tooling project",
     script: 'bun --cwd "tooling project" --check --tsconfig-override tsconfig.tooling.json',
   },
+  {
+    checked: true,
+    config: "tsconfig.json",
+    cwd: "tooling",
+    script: "bun --cwd=tooling --check",
+  },
+  {
+    checked: true,
+    config: "tsconfig.json",
+    cwd: "tooling project",
+    script: 'bun --cwd="tooling project" --check',
+  },
+  {
+    checked: true,
+    config: "tsconfig.tooling.json",
+    cwd: ".",
+    script: "bun --check --tsconfig-override=tsconfig.tooling.json",
+  },
+  {
+    checked: true,
+    config: "tsconfig tooling.json",
+    cwd: "tooling project",
+    script: "bun --cwd='tooling project' --check --tsconfig-override='tsconfig tooling.json'",
+  },
   { checked: false, config: "tsconfig.json", cwd: ".", script: "bun check" },
   { checked: false, config: "tsconfig.json", cwd: ".", script: null },
 ])(

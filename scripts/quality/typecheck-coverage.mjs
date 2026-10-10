@@ -71,10 +71,12 @@ function measureCoverage(root = repositoryRoot()) {
     );
     const script = manifest.scripts?.typecheck ?? "";
     for (const command of script.split("&&")) {
-      const args = Array.from(
-        command.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g),
-        (match) => match[1] ?? match[2] ?? match[3],
-      );
+      const args = Array.from(command.matchAll(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g), (match) =>
+        match[0].replace(/"([^"]*)"|'([^']*)'/g, "$1$2"),
+      ).flatMap((argument) => {
+        const option = argument.match(/^(--cwd|--tsconfig-override)=(.*)$/);
+        return option ? [option[1], option[2]] : [argument];
+      });
       if (args[0] !== "bun" || !args.includes("--check")) {
         continue;
       }
