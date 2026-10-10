@@ -5,6 +5,8 @@ import { type ApiFailure } from "@fluncle/contracts";
 
 const EAGAIN_WAIT = new Int32Array(new SharedArrayBuffer(4));
 
+let stopWaitingForReader = (): boolean => false;
+
 function writeFdSync(fd: 1 | 2, text: string): void {
   const buf = Buffer.from(text, "utf8");
   let offset = 0;
@@ -16,6 +18,10 @@ function writeFdSync(fd: 1 | 2, text: string): void {
       const code = (error as NodeJS.ErrnoException).code;
 
       if (code === "EAGAIN") {
+        if (stopWaitingForReader()) {
+          return;
+        }
+
         Atomics.wait(EAGAIN_WAIT, 0, 0, 1);
         continue;
       }
@@ -29,7 +35,8 @@ function writeFdSync(fd: 1 | 2, text: string): void {
   }
 }
 
-export function routeConsoleThroughBlockingWrites(): void {
+export function routeConsoleThroughBlockingWrites(pastDeadline: () => boolean): void {
+  stopWaitingForReader = pastDeadline;
   const toStdout = (...args: unknown[]): void => writeFdSync(1, `${format(...args)}\n`);
   const toStderr = (...args: unknown[]): void => writeFdSync(2, `${format(...args)}\n`);
 

@@ -11,6 +11,7 @@ import {
   armDeadline,
   deadlineFired,
   disarmDeadline,
+  fireIfPastDeadline,
   resolveTimeoutSeconds,
   TIMEOUT_ENV,
   TIMEOUT_EXIT_CODE,
@@ -585,7 +586,9 @@ export function createProgram(): Command {
 }
 
 async function main(args = process.argv.slice(2)): Promise<void> {
-  routeConsoleThroughBlockingWrites();
+  routeConsoleThroughBlockingWrites(() =>
+    fireIfPastDeadline("waiting for the stdout reader to take the output"),
+  );
   const program = createProgram();
 
   if (args.length === 0) {
