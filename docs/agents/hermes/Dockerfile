@@ -16,7 +16,7 @@
 # THE BASE: oven/bun on Debian trixie, DIGEST-PINNED so a cached layer can never sit on a
 # silently-drifted base. hermes-pin-drift.sh reads the bun pin from the tag on the FROM line
 # and, on a safe same-major bump, rewrites the tag together with its re-resolved digest.
-FROM oven/bun:1.4.2-debian@sha256:4f6e31d1a54d6a3dd312daef655fc998101b5043d52e12592ac293ef04b9bc73
+FROM oven/bun:1.4.3-debian@sha256:923bedb355f7746666659f71e724998159a5c8c54bd1cb1030e1975a0698415b
 
 # Node + npm — Claude Code installs through npm and runs on node, and the audit agent drives
 # the repo's node tooling. Copied from the matching Debian-trixie node image so the binary
