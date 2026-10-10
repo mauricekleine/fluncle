@@ -1243,6 +1243,7 @@ export function foldStrain(
     backpressure?: number;
     backpressureReason?: string | null;
     points: number;
+    working?: boolean;
   }[],
   now: number,
   windowMs: number = STRAIN_WINDOW_FLOOR_MS,
@@ -1254,7 +1255,14 @@ export function foldStrain(
   for (const sample of [...samples].sort((left, right) => left.atMs - right.atMs)) {
     watermarkMs = Math.max(watermarkMs, sample.atMs);
 
-    if ((sample.backpressure ?? 0) > 0 && sample.backpressureReason) {
+    if (sample.working) {
+      for (const [key, bucket] of Object.entries(buckets)) {
+        buckets[key] = { points: bucket.points, ticks: bucket.ticks };
+      }
+      backpressureReason = undefined;
+    }
+
+    if (!sample.working && (sample.backpressure ?? 0) > 0 && sample.backpressureReason) {
       backpressureReason = sample.backpressureReason;
     }
 
@@ -1264,7 +1272,8 @@ export function foldStrain(
 
     const key = String(Math.floor(sample.atMs / STRAIN_BUCKET_MS) * STRAIN_BUCKET_MS);
     const bucket = buckets[key] ?? { points: 0, ticks: 0 };
-    const backpressure = (bucket.backpressure ?? 0) + (sample.backpressure ?? 0);
+    const backpressure =
+      (bucket.backpressure ?? 0) + (sample.working ? 0 : (sample.backpressure ?? 0));
 
     buckets[key] = {
       ...(backpressure > 0 ? { backpressure } : {}),
@@ -1380,7 +1389,13 @@ export function sweepStrainCheck(
 function readStrainSamples(
   dir: string | undefined,
   watermarkMs: number,
-): { atMs: number; backpressure: number; backpressureReason: string | null; points: number }[] {
+): {
+  atMs: number;
+  backpressure: number;
+  backpressureReason: string | null;
+  points: number;
+  working: boolean;
+}[] {
   if (!dir) {
     return [];
   }
@@ -1392,13 +1407,23 @@ function readStrainSamples(
       .map((path) => ({ mtimeMs: statSync(path).mtimeMs, path }))
       .filter((file) => file.mtimeMs > watermarkMs)
       .map((file) => {
-        const signals = markerSignals(readFileSync(file.path, "utf8"));
+        const body = readFileSync(file.path, "utf8");
+        const signals = markerSignals(body);
+        const summary = findJsonSummary(body);
+        const working =
+          summary !== null &&
+          summary.ok !== false &&
+          !isAdmissionSkip(summary) &&
+          !isReconcilePrePayloadYield(summary) &&
+          (summaryCount(summary.produced) > 0 ||
+            (summary.ok === true && signals.backpressure === 0));
 
         return {
           atMs: file.mtimeMs,
           backpressure: signals.backpressure,
           backpressureReason: signals.backpressureReason,
           points: signals.strain,
+          working,
         };
       });
   } catch {

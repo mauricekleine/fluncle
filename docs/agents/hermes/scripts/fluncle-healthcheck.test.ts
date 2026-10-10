@@ -1753,25 +1753,73 @@ describe("the stall bar", () => {
     expect(buildStrainAlert([], [], result.newlyStalled, [])).toContain("due_work_repair_pending");
   });
 
-  test("a sweep that starts working again says so once, and only once", () => {
+  test.each([
+    '{"checked":1,"errors":0,"ok":true,"produced":1}',
+    '{"checked":5,"errors":0,"ok":true,"produced":2,"reason":"phase_budget","throttled":true}',
+    '{"checked":0,"errors":0,"ok":true,"produced":0}',
+  ])("a resumed sweep clears its retained pause history once: %s", (summary) => {
+    const now = Date.now();
+    const bucket = String(Math.floor((now - 60_000) / 3_600_000) * 3_600_000);
     const stalledBefore = {
-      [CRON.service]: { buckets: {}, stalled: true, strained: false, watermarkMs: 0 },
+      [CRON.service]: {
+        buckets: { [bucket]: { backpressure: 3, points: 4, ticks: 3 } },
+        stalled: true,
+        strained: true,
+        watermarkMs: now - 60_000,
+      },
     };
-    const result = probeSweepStrain(new Map([[CRON.service, markerDir([])]]), stalledBefore);
+    const claimed = new Map([
+      [CRON.service, markerDir([{ ageMs: 1000, body: strainMarker(summary, []) }])],
+    ]);
+    const result = probeSweepStrain(claimed, stalledBefore);
 
     expect(result.stalled).toEqual([]);
+    expect(result.backpressured).toEqual([]);
     expect(result.clearedStall).toEqual([CRON.service]);
+    expect(stalledBefore[CRON.service]?.buckets[bucket]?.backpressure).toBe(3);
     expect(result.next[CRON.service]).not.toHaveProperty("stalled");
+    expect(result.strained).toEqual([CRON.service]);
+    expect(strainTotals(result.next[CRON.service], now, strainWindowMs(CRON.cadenceMs))).toEqual({
+      points: 4,
+      ticks: 3,
+    });
     expect(buildStrainAlert([], [], [], result.clearedStall)).toContain(
       `working again: ${CRON.service}`,
     );
 
-    const quiet = probeSweepStrain(new Map([[CRON.service, markerDir([])]]), result.next);
+    const quiet = probeSweepStrain(claimed, result.next);
 
     expect(quiet.clearedStall).toEqual([]);
     expect(
       buildStrainAlert(quiet.newly, quiet.cleared, quiet.newlyStalled, quiet.clearedStall),
     ).toBe(null);
+  });
+
+  test("a failed run cannot clear retained pauses without evidence of work", () => {
+    const now = Date.now();
+    const bucket = String(Math.floor((now - 60_000) / 3_600_000) * 3_600_000);
+    const stalledBefore = {
+      [CRON.service]: {
+        buckets: { [bucket]: { backpressure: 3, points: 0, ticks: 0 } },
+        stalled: true,
+        strained: false,
+        watermarkMs: now - 60_000,
+      },
+    };
+    const result = probeSweepStrain(
+      new Map([
+        [
+          CRON.service,
+          markerDir([
+            { ageMs: 1000, body: strainMarker('{"errors":1,"ok":false,"produced":0}', []) },
+          ]),
+        ],
+      ]),
+      stalledBefore,
+    );
+
+    expect(result.stalled).toEqual([{ reason: "throttled", service: CRON.service, ticks: 3 }]);
+    expect(result.clearedStall).toEqual([]);
   });
 
   test("a stalled sweep and a strained one are two claims on one row", () => {
