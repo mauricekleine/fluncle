@@ -9,7 +9,6 @@ import { createServerFn } from "@tanstack/react-start";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
-import { Input } from "@fluncle/ui/components/input";
 import { SearchExampleGlyph } from "@/components/search/search-glyph";
 import { anchorCredit, SearchResultsList } from "@/components/search/search-results-list";
 import { StyleChips } from "@/components/search/style-chips";
@@ -234,7 +233,7 @@ function SearchField({
         </label>
         <span className="search-page-field">
           <MagnifyingGlassIcon aria-hidden="true" className="search-page-field-icon" />
-          <Input
+          <input
             autoComplete="off"
             className="search-page-input"
             defaultValue={q ?? ""}

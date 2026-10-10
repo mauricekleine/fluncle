@@ -5677,8 +5677,7 @@ a.catalogue-letter:focus-visible {
 }
 
 /* The focus affordance surrounds the whole control a reader sees, rather than a rectangle inside
-   it: the Shadcn Input's own ring (outline and box-shadow) is suppressed below and the wrapper wears
-   the canon Eclipse-Gold one. */
+   it: the input's own ring is suppressed below and the wrapper wears the canon Eclipse-Gold one. */
 .search-page-field:focus-within {
   border-color: color-mix(in oklch, var(--primary) 45%, transparent);
   outline: 2px solid var(--ring);
@@ -5706,9 +5705,7 @@ a.catalogue-letter:focus-visible {
   color: var(--muted-foreground);
 }
 
-.search-page-input:focus,
-.search-page-input:focus-visible {
-  box-shadow: none;
+.search-page-input:focus {
   outline: none;
 }
 
