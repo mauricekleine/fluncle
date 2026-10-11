@@ -55,9 +55,9 @@ function estimate(plan, percentileName = "p50") {
     : 5;
   return {
     billedMinutes:
-      billedMinutes(coreSeconds) + billedMinutes(e2eSeconds) + billedMinutes(model.gateSeconds),
+      billedMinutes(coreSeconds) + billedMinutes(e2eSeconds) + billedMinutes(model.gateSeconds) + 1,
     feedbackSeconds: Math.max(coreSeconds, e2eSeconds) + model.gateSeconds,
-    jobs: 3,
+    jobs: 4,
   };
 }
 
@@ -245,7 +245,7 @@ try {
     cache: options.live ? liveCacheInventory() : null,
     cacheTrajectory: {
       former: "approximately one immutable Turbo archive per commit",
-      new: "at most one trusted-main snapshot per UTC week and dependency lineage",
+      new: "one newest trusted-main snapshot per quality cache family",
       pullRequestWrites: 0,
     },
     classification: {

@@ -26,6 +26,9 @@ env:
 jobs:
   core:
     name: Selected quality lanes
+    outputs:
+      turbo_cache_key: ${{ steps.turbo_cache.outputs.cache-primary-key }}
+      cargo_cache_key: ${{ steps.cargo_cache.outputs.cache-primary-key }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -189,6 +192,8 @@ jobs:
 
   e2e:
     name: Public flows when selected
+    outputs:
+      playwright_cache_key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -326,6 +331,34 @@ jobs:
       - name: Report E2E duration and projection
         if: always() && steps.classify.outputs.e2e == 'true'
         run: node scripts/quality/report-run.mjs --plan "$RUNNER_TEMP/quality-plan.json" --metrics "$RUNNER_TEMP/quality-metrics.jsonl" --job e2e --cache-hit "${{ steps.playwright_cache.outputs.cache-hit || 'miss' }}"
+
+  cache_cleanup:
+    name: Retain current main cache snapshots
+    continue-on-error: true
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [core, e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout cache maintenance
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Remove older quality snapshots after successful saves
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TURBO_CACHE_KEY: ${{ needs.core.outputs.turbo_cache_key }}
+          CARGO_CACHE_KEY: ${{ needs.core.outputs.cargo_cache_key }}
+          PLAYWRIGHT_CACHE_KEY: ${{ needs.e2e.outputs.playwright_cache_key }}
+        run: node scripts/quality/cache-prune.mjs
+
+      - name: Report cache maintenance failure
+        if: failure()
+        run: echo "::warning::Cache retention failed; the next successful main run will retry."
 
   gate:
     name: Lint, Format, and Typecheck
