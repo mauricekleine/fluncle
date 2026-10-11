@@ -114,6 +114,36 @@ describe("quality topology", () => {
     const coreSteps = at(quality, "jobs", "core", "steps") as Array<Record<string, unknown>>;
     const setupGo = coreSteps.find((step) => step.name === "Setup Go");
     expect(at(setupGo, "with", "cache")).toBe(false);
+    expect(at(quality, "permissions")).toEqual({ contents: "read" });
+    expect(at(quality, "jobs", "core", "permissions")).toBeUndefined();
+    expect(at(quality, "jobs", "e2e", "permissions")).toBeUndefined();
+    expect(at(quality, "jobs", "cache_cleanup", "permissions")).toEqual({
+      actions: "write",
+      contents: "read",
+    });
+    expect(at(quality, "jobs", "cache_cleanup", "if")).toBe(
+      "github.event_name == 'push' && github.ref == 'refs/heads/main'",
+    );
+    expect(at(quality, "jobs", "cache_cleanup", "needs")).toEqual(["core", "e2e"]);
+    expect(at(quality, "jobs", "cache_cleanup", "continue-on-error")).toBe(true);
+    expect(at(quality, "jobs", "core", "outputs")).toEqual({
+      cargo_cache_key: "${{ steps.cargo_cache.outputs.cache-primary-key }}",
+      turbo_cache_key: "${{ steps.turbo_cache.outputs.cache-primary-key }}",
+    });
+    expect(at(quality, "jobs", "e2e", "outputs")).toEqual({
+      playwright_cache_key: "${{ steps.playwright_cache.outputs.cache-primary-key }}",
+    });
+    const cleanupSteps = at(quality, "jobs", "cache_cleanup", "steps") as Array<
+      Record<string, unknown>
+    >;
+    expect(
+      cleanupSteps.find((step) => step.run === "node scripts/quality/cache-prune.mjs")?.env,
+    ).toEqual({
+      CARGO_CACHE_KEY: "${{ needs.core.outputs.cargo_cache_key }}",
+      GH_TOKEN: "${{ github.token }}",
+      PLAYWRIGHT_CACHE_KEY: "${{ needs.e2e.outputs.playwright_cache_key }}",
+      TURBO_CACHE_KEY: "${{ needs.core.outputs.turbo_cache_key }}",
+    });
   });
 
   test("Python setup and evidence use the classifier-selected lane", () => {
