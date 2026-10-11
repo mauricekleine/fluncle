@@ -12,15 +12,16 @@ const readSidebarState = createServerFn({ method: "GET" }).handler(
   async () => getCookie(SIDEBAR_COOKIE_NAME) !== "false",
 );
 
+// oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/admin")({
-  component: AdminLayout,
+  loader: async () => ({ sidebarOpen: await readSidebarState() }),
   head: () => ({
     links: [
       { href: stylesFullCss, rel: "stylesheet" },
       { href: adminCss, rel: "stylesheet" },
     ],
   }),
-  loader: async () => ({ sidebarOpen: await readSidebarState() }),
+  component: AdminLayout,
 });
 
 function AdminLayout() {

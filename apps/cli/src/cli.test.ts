@@ -2158,9 +2158,11 @@ async function runCli(
   stderr: string;
   stdout: string;
 }> {
+  const inherited: Record<string, string | undefined> = { ...process.env };
+  delete inherited.FLUNCLE_API_TOKEN;
   const proc = Bun.spawn([process.execPath, cliPath, ...args], {
     env: {
-      ...process.env,
+      ...inherited,
       FLUNCLE_API_BASE_URL: "http://127.0.0.1:1",
       NODE_ENV: "test",
       ...env,

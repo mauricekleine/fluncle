@@ -1,5 +1,6 @@
 import { oc } from "@orpc/contract";
 import * as z from "zod";
+import { FollowKindSchema } from "./me-follows";
 
 const TokenSchema = z.string().min(10).max(1024);
 
@@ -110,7 +111,7 @@ export const listDigestFollows = oc
       follows: z.array(
         z.object({
           id: z.string(),
-          kind: z.enum(["artist", "label"]),
+          kind: FollowKindSchema,
           name: z.string(),
           slug: z.string(),
         }),

@@ -428,7 +428,7 @@ export function stripEditorialHtml(html: string): string {
     .trim();
 }
 
-function echoTokens(text: string): string[] {
+export function echoWords(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
@@ -438,8 +438,8 @@ function echoTokens(text: string): string[] {
 }
 
 export function longestVerbatimTokenSpan(a: string, b: string): number {
-  const left = echoTokens(a);
-  const right = echoTokens(b);
+  const left = echoWords(a);
+  const right = echoWords(b);
   let best = 0;
 
   for (let i = 0; i < left.length; i += 1) {

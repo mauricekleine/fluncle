@@ -42,15 +42,7 @@ export const savePrivateFollow = oc
   .input(SaveFollowBodySchema)
   .output(
     z.object({
-      follow: z.object({
-        createdAt: z.string(),
-        entityId: z.string(),
-        id: z.string(),
-        includeSimilar: z.boolean(),
-        kind: FollowKindSchema,
-        name: z.string(),
-        slug: z.string(),
-      }),
+      follow: FollowSchema,
       followsEmail: z.boolean(),
       ok: z.literal(true),
     }),
