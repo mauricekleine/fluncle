@@ -1,16 +1,16 @@
 ---
 name: fluncle-box-restore
 description: >-
-  Rebuild or restore Fluncle's rave-02 agent box after it is lost, and prove ahead of time that it could be. USE THIS whenever the box is gone, dead, deleted, wiped, unreachable, or being replaced: "rave-02 is gone", "the box died", "rebuild the box", "restore the agent box", "the devbox is dead", "provision a replacement box", "restore the box-state backup", "the crons all stopped and the box is unreachable", "disaster recovery". USE IT EQUALLY for the preventive "could we actually restore the box if we had to?" / "drill the restore", which its read-only preflight answers in one safe command. It is the ordered runbook — provision → harden → op → bootstrap token → secret templates → host timers → image → restore box state → verify — plus the load-bearing ordering constraints. NOT for changing a live box (pins, secrets, crons): that is fluncle-hermes-operator. NOT generic Hetzner VPS profiles: that is mk-hetzner-devbox, which step 1 follows from a local dotfiles checkout. The preflight checks its availability.
+  Rebuild or restore Fluncle's rave-02 agent box after it is lost, and prove ahead of time that it could be. USE THIS whenever the box is gone, dead, deleted, wiped, unreachable, or being replaced: "rave-02 is gone", "the box died", "rebuild the box", "restore the agent box", "the devbox is dead", "provision a replacement box", "restore the box-state backup", "the crons all stopped and the box is unreachable", "disaster recovery". USE IT EQUALLY for the preventive "could we actually restore the box if we had to?" / "drill the restore", which its read-only preflight answers in one safe command. It is the ordered runbook — create the guest → join the tailnet → bootstrap token → secret templates → host timers → image → restore box state → verify — plus the load-bearing ordering constraints. NOT for changing a live box (pins, secrets, crons): that is fluncle-hermes-operator.
 ---
 
 # Fluncle box restore — putting rave-02 back
 
-rave-02 is the box every Fluncle automation runs on: the Hermes container (a long-lived runtime with no chat platform and no model) plus dozens of host systemd timers (`ls -d docs/agents/hermes/*-timer`) driving the `--no-agent` sweeps. This skill is the one entry point for **resurrecting it**, and for answering the cheaper question — _could we?_ — before you ever need to.
+rave-02 is the box every Fluncle automation runs on, a VM guest on the operator's private platform host: the Hermes container (a long-lived runtime with no chat platform and no model) plus dozens of host systemd timers (`ls -d docs/agents/hermes/*-timer`) driving the `--no-agent` sweeps. This skill is the one entry point for **resurrecting it**, and for answering the cheaper question — _could we?_ — before you ever need to.
 
 The rebuild is assembled from the linked assets across the public repository and private companion; follow them in the order below. **Do not reconstruct any of it from source.** Each step below names the asset that does the work; follow the link, run the thing, come back.
 
-**Neighbours, so the right skill wins:** [`fluncle-hermes-operator`](../fluncle-hermes-operator) changes a box that is still alive (pins, secrets, crons). The [canonical `mk-hetzner-devbox` skill](https://github.com/mauricekleine/dotfiles/blob/main/skills/mk-hetzner-devbox/SKILL.md) is the generic VPS provisioning kit; [`fluncle-hetzner-ops`](../fluncle-hetzner-ops) holds the Hermes host profile. This skill is the box being **gone**, and it drives both of those in order.
+**Neighbours, so the right skill wins:** [`fluncle-hermes-operator`](../fluncle-hermes-operator) changes a box that is still alive (pins, secrets, crons). The private platform repo creates the guest itself. This skill is the box being **gone**: it starts from that platform's guest script and carries the rebuild through to a verified box.
 
 ## Read this first — the two halves
 
@@ -18,7 +18,7 @@ The repo is canonical and the box is a deploy target, so most of rave-02 is **de
 
 The other half is **not** in this repo and cannot be: the box facts, the topology, and the two `op://` secret templates that map every environment variable to its vault item. Those live in the private companion repo `fluncle-labs`, at **`docs/rave-02/README.md`** — the required companion read for this whole procedure.
 
-> **Without labs access, stop at step 3 and ask the operator.** You can create and harden a server, but you cannot place the bootstrap token or the secret templates, and a box that boots without them goes green on `/status` while every sweep runs credential-less. Do not guess a vault path, do not reconstruct a template from the sweep sources, and do not copy anything out of labs into this repo — the boundary is deliberate.
+> **Without labs access, stop after step 2 and ask the operator.** You can create the guest and join it to the tailnet, but you cannot place the bootstrap token or the secret templates, and a box that boots without them goes green on `/status` while every sweep runs credential-less. Do not guess a vault path, do not reconstruct a template from the sweep sources, and do not copy anything out of labs into this repo — the boundary is deliberate.
 
 ## Before the fire: could we restore right now?
 
@@ -30,11 +30,9 @@ bun packages/skills/fluncle-box-restore/scripts/preflight.ts --json          # m
 bun packages/skills/fluncle-box-restore/scripts/preflight.ts --drill         # + the full restore drill
 ```
 
-It answers eight questions: are the runbook's assets still in the repo; is `mk-hetzner-devbox` available locally; does the schedule still lay down (including the secrets timer); is the box-state encryption key present and 32 bytes; is there a recent box-state artifact whose manifest parses and whose sealed object matches the recorded size; is there a recent database dump; are both secret templates present holding only `op://` pointers; and does every one of those references still resolve.
+It answers seven questions: are the runbook's assets still in the repo; does the schedule still lay down (including the secrets timer); is the box-state encryption key present and 32 bytes; is there a recent box-state artifact whose manifest parses and whose sealed object matches the recorded size; is there a recent database dump; are both secret templates present holding only `op://` pointers; and does every one of those references still resolve.
 
 **Its `unknown` is not a pass.** A check it cannot run — no bucket credentials, no `op`, no labs checkout — reports "could not verify" and the run exits **2**, distinct from a clean **0** and a failing **1**. Each non-passing check prints what to do about it. Env it reads (never prints): `FLUNCLE_BOXSTATE_KEY`, `R2_ACCOUNT_ID`, `FLUNCLE_BACKUP_R2_ACCESS_KEY_ID`, `FLUNCLE_BACKUP_R2_SECRET_ACCESS_KEY`, plus `FLUNCLE_LABS_DIR` or `--labs <dir>` for the companion checkout.
-
-For `mk-hetzner-devbox`, the preflight searches `DOTFILES_DIR`, then `~/.local/share/agent-layer/dotfiles`, a sibling `dotfiles` checkout, `~/Projects/dotfiles`, and `~/projects/dotfiles`. The skill is loaded by path and is deliberately not installed.
 
 Child diagnostics may contain concrete vault paths or URLs. The preflight redacts those before reporting errors; preserve that boundary when adding checks or surfacing stderr.
 
@@ -44,36 +42,32 @@ Child diagnostics may contain concrete vault paths or URLs. The preflight redact
 
 Do not rebuild a box that is merely unreachable — a re-provision throws away accumulated state a reboot would have kept.
 
-- **Every `/status` cron row stale but the web app fine** → the box, not Fluncle. Likely the whole host.
-- **You cannot SSH in and never could since a given date** → suspect Tailscale node-key expiry before suspecting death. There is no public inbound TCP, so an expired key locks you out completely with the box still running perfectly. Re-authenticate the node from the admin console.
-- **Provider console says the server is running** → it is a reachability problem. Fix that.
-- **The server is gone from the provider, or the disk is lost** → this runbook.
+- **Every `/status` cron row stale but the web app fine** → the box, not Fluncle. Likely the whole guest or its host.
+- **You cannot SSH in over the tailnet** → check the node in the Tailscale admin console, then try the hypervisor's own key-only path into the guest. The node is tagged, so its key does not expire; a box that answers there is a reachability problem.
+- **The hypervisor lists the guest as running** → it is a reachability problem. Fix that.
+- **The guest or its disk is gone** → this runbook. If the hypervisor host itself is gone, the platform's own restore comes first; this runbook starts once it can create guests again.
 
 ## The rebuild, in order
 
 The order is load-bearing. Each step names the asset that does the work.
 
-**1. Create the server.** Follow the canonical [`mk-hetzner-devbox` skill](https://github.com/mauricekleine/dotfiles/blob/main/skills/mk-hetzner-devbox/SKILL.md): run its `scripts/check-prereqs.sh`, then `scripts/create-server.sh`. Size, image, and firewall name are box facts — read them from the labs doc, do not re-derive them.
+**1. Create the guest.** Run the private platform repo's guest script on the hypervisor; the labs doc names it. It creates the VM with the box posture (admin user, key-only OpenSSH on 2222, UFW, Tailscale, **and `op`**), then runs this repo's [`install-toolchain.sh`](../fluncle-hetzner-ops/scripts/install-toolchain.sh) with `TOOLCHAIN_PROFILE=agent-box`: Docker and a small host floor, no workstation toolchain. Size, network, and tags are box facts — read them from the labs doc, do not re-derive them.
 
-**2. Harden the host.** [`bootstrap-hardening.sh`](../fluncle-hetzner-ops/scripts/bootstrap-hardening.sh), which streams [`bootstrap-private-vps.sh`](../fluncle-hetzner-ops/scripts/bootstrap-private-vps.sh): admin user, sshd off :22, UFW, Tailscale, **and `op`**. Then [`apply-firewall.sh`](../fluncle-hetzner-ops/scripts/apply-firewall.sh) for the provider layer.
+**2. Join the tailnet tagged.** Use the tags from the labs doc; a tagged node's key does not expire. Then open a **second** terminal and confirm you can get in over the tailnet before relying on it.
 
-**3. Disable Tailscale node-key expiry — before you trust the box.** Then open a **second** terminal and confirm you can still get in, while the first is still connected. See the gotchas.
+**3. Place the bootstrap env.** `op inject` cannot fetch its own credential, so this one file is the irreducible manual link. The recipe (reading the token with the operator's own biometric session and piping it over SSH, never typing it) and the file's contents are in the labs doc. **`op` must already be installed** — step 1 does that.
 
-**4. Install the toolchain, container-only.** [`install-toolchain.sh`](../fluncle-hetzner-ops/scripts/install-toolchain.sh) with `TOOLCHAIN_PROFILE=agent-box`. The default `devbox` profile puts a full workstation on a host whose only job is running containers — a materially wider blast radius than the architecture describes.
+**4. Place both secret templates** from the labs doc into the box's template dir. They are the box's entire secret map: which vault item feeds which variable.
 
-**5. Place the bootstrap env.** `op inject` cannot fetch its own credential, so this one file is the irreducible manual link. The recipe (reading the token with the operator's own biometric session and piping it over SSH, never typing it) and the file's contents are in the labs doc. **`op` must already be installed** — step 2 does that.
+**5. Install the host units.** From a repo checkout on the box: `sudo bash docs/agents/hermes/install-host-timers.sh`. It [derives](../../../docs/agents/hermes/install-host-timers.sh) its own work — every directory holding a unit, every host script an `ExecStart` names — and refuses to install rather than exit 0 having silently skipped something. It orders the secrets sync first and gives it one immediate run. Preview anywhere with `--dry-run`.
 
-**6. Place both secret templates** from the labs doc into the box's template dir. They are the box's entire secret map: which vault item feeds which variable.
+**6. Build and run the container.** First build is manual, from the **repo root**, `-f docs/agents/hermes/Dockerfile` — see [`hermes-agent.md` § The image / § Run](../../../docs/agents/hermes-agent.md) for the build and the canonical `docker run` flags; the concrete env-file path is in the labs doc.
 
-**7. Install the host units.** From a repo checkout on the box: `sudo bash docs/agents/hermes/install-host-timers.sh`. It [derives](../../../docs/agents/hermes/install-host-timers.sh) its own work — every directory holding a unit, every host script an `ExecStart` names — and refuses to install rather than exit 0 having silently skipped something. It orders the secrets sync first and gives it one immediate run. Preview anywhere with `--dry-run`.
+**7. Re-run the secrets sync after the container has started once so its bind mount receives the sweep environment.**
 
-**8. Build and run the container.** First build is manual, from the **repo root**, `-f docs/agents/hermes/Dockerfile` — see [`hermes-agent.md` § The image / § Run](../../../docs/agents/hermes-agent.md) for the build and the canonical `docker run` flags; the concrete env-file path is in the labs doc.
+**8. Restore the box state** into the **stopped** container, then start it. Procedure: [`backup-timer/README.md` § Restoring from leg 2](../../../docs/agents/hermes/backup-timer/README.md). Drill it first with `preflight.ts --drill` so you are unpacking something you have already proven opens.
 
-**9. Re-run the secrets sync after the container has started once so its bind mount receives the sweep environment.**
-
-**10. Restore the box state** into the **stopped** container, then start it. Procedure: [`backup-timer/README.md` § Restoring from leg 2](../../../docs/agents/hermes/backup-timer/README.md). Drill it first with `preflight.ts --drill` so you are unpacking something you have already proven opens.
-
-**11. Re-place what no backup covers** (below), then verify (below).
+**9. Re-place what no backup covers** (below), then verify (below).
 
 Self-deploy resumes on its own once the box is up: [`pin-watch`](../../../docs/agents/hermes/pin-watch) rebuilds the image from `main` hourly. It **cannot bootstrap** — see the gotchas.
 
@@ -82,14 +76,14 @@ Self-deploy resumes on its own once the box is up: [`pin-watch`](../../../docs/a
 - **Container before sweep env, then sync again.** The secrets sync writes the sweep env file _into the container's bind mount_, which does not exist until the container has started once. On a fresh box the first sync half-succeeds: the container env lands, the sweep env does not, and every sweep runs credential-less. Sequence is **bootstrap → sync → container → sync again**.
 - **The image never chowns the data mount.** Nothing runs at container start except an idle `sleep`, so the host `~/.hermes` (`/opt/data` in the container) must already be owned by uid/gid 10000 before the first `docker run`, or the `hermes` user every sweep runs as cannot write its markers or state. The secrets sync creates `home/` with that owner when it is missing; the directory above it is yours to create with that owner (`chown -R 10000:10000` it if it is ever found root-owned).
 - **Restore box state into a STOPPED container.** A sweep `docker exec`d into a running container can write into the tree mid-unpack. Untar with `tar` (not a copy tool that drops modes) — it preserves the `0600` on the restored env files, and that is load-bearing.
-- **Tailscale key expiry, before anything else.** No public inbound TCP means an expired node key is a total lockout with no fallback path. Disable expiry (or join the node tag-owned so it is exempt), then verify access from a second terminal before closing the first connection.
+- **Join the tailnet tagged.** A tagged node's key does not expire. An untagged join expires in time and closes the tailnet path, leaving only the hypervisor's own path into the guest.
 - **`op` before any secret is read.** Confirm `op --version` before placing the bootstrap environment; secret rendering depends on it.
 - **pin-watch cannot bootstrap itself.** It is steady-state only: it harvests the runtime env off the _running_ container via `docker inspect` and reads nothing from `op`. With no container there is nothing to harvest. The first image build and `docker run` are manual, every time.
 - **A green `/status` row is not proof.** Treat `/status` as valid only when the probe is configured and corroborated by a fresh real artifact.
 
 ## What is NOT in any backup
 
-The nightly [`fluncle-backup`](../../../docs/agents/hermes/backup-timer/README.md) has two legs: the production database, and the box's own state. Neither covers **hand-placed files that no sync writes**. With no attached volumes and no provider snapshots, those die with the root disk and must be re-placed by hand:
+The nightly [`fluncle-backup`](../../../docs/agents/hermes/backup-timer/README.md) has two legs: the production database, and the box's own state. Neither covers **hand-placed files that no sync writes**. The guest has no attached volumes and the host's backups skip guest disks, so those die with the guest disk and must be re-placed by hand:
 
 - the `/status` prober's target env (the `HEALTHCHECK_*` values) — hand-placed, in no sync
 - the render box's SSH key — its only other copy is on the operator's Mac
@@ -107,6 +101,6 @@ Not "it should be fine". Concretely, in this order:
 3. **One sweep, by hand, before trusting the schedule.** `sudo systemctl start fluncle-<job>.service`, then `journalctl -u fluncle-<job>.service` — expect the sweep's JSON summary line with `ok: true`, and a fresh marker under the cron-output dir.
 4. **`/status` green for the right reason.** Cross-check each green row against a fresh marker or backup object.
 5. **The role boundary intact.** An agent-token read returns `{ok:true}` and a publish-class command comes back **403**. That is [`hermes-agent.md` § Verify](../../../docs/agents/hermes-agent.md); the pre-smoke in `pin-watch` runs the same pair, so a rebuilt box that passes it is a box whose credential is correctly scoped.
-6. **The backup loop closed.** Run `preflight.ts` again against the rebuilt box. All eight checks passing is the definition of done, because it means the next rebuild is possible too.
+6. **The backup loop closed.** Run `preflight.ts` again against the rebuilt box. All seven checks passing is the definition of done, because it means the next rebuild is possible too.
 
 Two timers ship operator-gated on a genuinely new box (the embed sweep wants a peak-RAM validation, the capture sweep wants its bucket) — `install-host-timers.sh` assumes a previously-validated box and enables every timer except the DORMANT-parked ones. On a first-ever provision, read those two timer READMEs before trusting them.
