@@ -35,7 +35,13 @@ const UpdateTrackBodySchema = z.looseObject({
   sourceAudioRejected: z.unknown().optional(),
 
   sourceVerification: z.unknown().optional(),
+  videoGrain: z.unknown().optional(),
+  videoPalette: z.unknown().optional(),
+  videoPlateSubject: z.unknown().optional(),
+  videoRegister: z.unknown().optional(),
+  videoStructure: z.unknown().optional(),
   videoUrl: z.unknown().optional(),
+  videoVehicle: z.unknown().optional(),
 
   youtubeReverdict: z.unknown().optional(),
 

@@ -1,12 +1,12 @@
 import {
   contentOverlap,
   echoContentWords,
-  echoWords,
   type NoteEcho,
   type NoteEchoThresholds,
   NOTE_ECHO_DEFAULTS,
   scoreNoteEcho,
 } from "./note";
+import { echoWords } from "./observation";
 
 export const WORN_TEXTURE_WORDS = [
   "rolling",

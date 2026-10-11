@@ -1,5 +1,5 @@
 import { getDb, typedRow } from "./db";
-import { getSetting, getSettings, setSetting } from "./settings";
+import { getSettings, setSetting } from "./settings";
 
 export const CATALOGUE_CAPTURE_PAUSED_KEY = "catalogue_capture_paused";
 
@@ -76,18 +76,8 @@ export function catalogueCaptureVerdict(input: {
   };
 }
 
-export async function isCatalogueCapturePaused(): Promise<boolean> {
-  return (await getSetting(CATALOGUE_CAPTURE_PAUSED_KEY)) !== "false";
-}
-
 export async function setCatalogueCapturePaused(paused: boolean): Promise<void> {
   await setSetting(CATALOGUE_CAPTURE_PAUSED_KEY, paused ? "true" : "false");
-}
-
-export async function getCatalogueCaptureBudget(): Promise<CatalogueCaptureBudget> {
-  return captureBudgetFromSettings(
-    await getSettings([CATALOGUE_CAPTURE_DAILY_TRACKS_KEY, CATALOGUE_CAPTURE_DAILY_BYTES_KEY]),
-  );
 }
 
 function captureBudgetFromSettings(

@@ -609,7 +609,8 @@ function ledgerText(value: unknown, field: string): string {
 }
 
 export function jsonSafeLedgerText(value: string): string {
-  return value.replace(/[ -]/g, (character) => {
+  // oxlint-disable-next-line no-control-regex
+  return value.replace(/[\u0000-\u001f]/g, (character) => {
     const code = character.charCodeAt(0);
 
     return `\\u${code.toString(16).padStart(4, "0")}`;

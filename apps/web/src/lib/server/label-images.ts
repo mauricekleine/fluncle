@@ -1,5 +1,6 @@
 import { type Client } from "@libsql/client";
 import { type DiscogsLabelCandidate, type DiscogsLabelWork } from "@fluncle/contracts/orpc";
+import { labelFold } from "@fluncle/contracts/util/galaxy-slug";
 import {
   type DiscogsLabelImage,
   fetchDiscogsLabelImage,
@@ -67,13 +68,6 @@ type MbLabelSearchResponse = { labels?: { id?: string; name?: string; score?: nu
 type MbUrlRel = { type?: string; url?: { resource?: string } };
 type MbLabelDetail = { id?: string; relations?: MbUrlRel[]; error?: unknown };
 
-function fold(value: string): string {
-  return value
-    .normalize("NFKD")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "");
-}
-
 export async function searchMbLabelId(
   name: string,
 ): Promise<{ mbid: string | null; rateLimited: boolean }> {
@@ -85,9 +79,9 @@ export async function searchMbLabelId(
     return { mbid: null, rateLimited: true };
   }
 
-  const want = fold(name);
+  const want = labelFold(name);
   const match = (data?.labels ?? []).find(
-    (candidate) => candidate.id && candidate.name && fold(candidate.name) === want,
+    (candidate) => candidate.id && candidate.name && labelFold(candidate.name) === want,
   );
 
   return { mbid: match?.id ?? null, rateLimited: false };

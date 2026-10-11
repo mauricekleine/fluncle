@@ -91,7 +91,7 @@ export function probeAnswer(answer: () => string): string {
 
 export function definitionFingerprint(namespace: string, transcript: readonly string[]): string {
   const digest = createHash("sha256")
-    .update(`${namespace}${transcript.join("")}`)
+    .update(`${namespace}\u001f${transcript.join("\u001e")}`)
     .digest("hex");
   return `dv1-${digest.slice(0, 16)}`;
 }

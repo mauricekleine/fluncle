@@ -819,10 +819,10 @@ async function staleTrackRebuildDefinitions(client: ProjectionClient) {
     updated_at: string;
     work_kind: string;
   }[];
-  const byIdentity = new Map(rows.map((row) => [`${row.work_kind} ${row.subject_type}`, row]));
+  const byIdentity = new Map(rows.map((row) => [`${row.work_kind}\u0000${row.subject_type}`, row]));
   return DUE_WORK_BACKFILLS.map((definition) => ({
     definition,
-    row: byIdentity.get(`${definition.workKind} ${definition.subjectType}`),
+    row: byIdentity.get(`${definition.workKind}\u0000${definition.subjectType}`),
   }))
     .filter(({ definition, row }) => {
       if (row === undefined || row.definition_version !== definition.definitionVersion) {

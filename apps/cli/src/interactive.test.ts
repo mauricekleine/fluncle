@@ -173,7 +173,7 @@ describe("paginateWithKeyboard", () => {
     await flush();
     expect(output.text()).toContain("1–2 of 26");
 
-    input.emitData("[C");
+    input.emitData("\u001b[C");
     await flush();
     expect(output.text()).toContain("3–4 of 26");
 

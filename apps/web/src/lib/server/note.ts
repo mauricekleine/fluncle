@@ -1,5 +1,5 @@
 import { NOTE_MAX_LENGTH } from "../log-prose";
-import { maskSubjectNames, scanObservationScript } from "./observation";
+import { echoWords, maskSubjectNames, scanObservationScript } from "./observation";
 import { ApiError } from "./api-error";
 
 const NOTE_MIN_CHARS = 24;
@@ -62,15 +62,6 @@ const ECHO_STOPWORDS = new Set(
     "now s t re ve ll d m"
   ).split(" "),
 );
-
-export function echoWords(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-}
 
 export function echoContentWords(text: string): string[] {
   return echoWords(text).filter((word) => !ECHO_STOPWORDS.has(word) && word.length > 2);

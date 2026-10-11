@@ -86,22 +86,9 @@ for (let i = 0; i < ids.length; i++) {
 
 const body = `export const FACTORY_CLIPS: string[] = [\n${names.map((n) => `  "${n}",`).join("\n")}\n];\n`;
 
-const header = `// The factory beat plays real rendered track footage when it is present, and
-// falls back to the procedural shader tiles otherwise. That footage is a LOCAL,
-// export-time asset: \`packages/video/public/*.mp4\` is gitignored, so a clean
-// checkout renders the procedural stand-in (works anywhere, nothing in history).
-//
-// To wire real footage for an export, name three findings (by Log ID or Spotify
-// id) and run:
-//
-//   bun run --cwd packages/video factory:clips <id> <id> <id>
-//
-// It resolves each source (a local out/<id> render first, else the public
-// footage on found.fluncle.com), transcodes to tile size into public/, and
-// rewrites the array below. Reset with \`git checkout src/explainer/factory-clips.ts\`.
-`;
-writeFileSync(CLIPS_TS, header + body);
+writeFileSync(CLIPS_TS, body);
 console.log(
   `\nWired ${names.length} clips into src/explainer/factory-clips.ts (local, uncommitted).`,
 );
 console.log("Render with: bun run --cwd packages/video tour:studio  (or a remotion render).");
+console.log("Reset with: git checkout src/explainer/factory-clips.ts");
