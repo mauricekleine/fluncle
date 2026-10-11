@@ -31,6 +31,8 @@ jobs:
 
       - name: Detect drift + apply the safe bumps
         id: drift
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash .github/scripts/hermes-pin-drift.sh --apply
 
       - name: Open a PR for the safe bumps
