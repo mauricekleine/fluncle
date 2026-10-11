@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..");
@@ -46,6 +47,65 @@ describe("hermes-pin-drift parses every pin it claims to watch", () => {
     for (const { variable } of PINS) {
       expect(guard).toContain(`$${variable}`);
     }
+  });
+});
+
+describe("the fluncle version a run compares against", () => {
+  const current = resolvePin("CUR_FLUNCLE");
+  const [major = "", minor = ""] = current.split(".");
+  const released = `${major}.${Number(minor) + 1}.0`;
+
+  function runCheck(event: string, gh: string) {
+    const bin = mkdtempSync(join(tmpdir(), "fluncle-pin-drift-"));
+    const stubs = {
+      curl: "exit 22",
+      gh,
+      npm: `echo ${current}`,
+    };
+
+    for (const [name, body] of Object.entries(stubs)) {
+      writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
+      chmodSync(join(bin, name), 0o755);
+    }
+
+    try {
+      return spawnSync("bash", [SCRIPT, "--check"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_EVENT_NAME: event,
+          GITHUB_REPOSITORY: "owner/repo",
+          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          REPO_ROOT,
+          RUNNER_TEMP: bin,
+        },
+      });
+    } finally {
+      rmSync(bin, { force: true, recursive: true });
+    }
+  }
+
+  const releaseLookup = `[ "$1 $2" = "api repos/owner/repo/releases/latest" ] && echo v${released}`;
+
+  it("a release-triggered run bumps to the GitHub release the Dockerfile downloads while npm still serves the previous version", () => {
+    const result = runCheck("workflow_run", releaseLookup);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain(`| fluncle | ${current} | ${released} | SAFE → ${released} |`);
+  });
+
+  it("a scheduled run compares against the npm registry", () => {
+    const result = runCheck("schedule", releaseLookup);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain(`| fluncle | ${current} | ${current} | current |`);
+  });
+
+  it("a release-triggered run fails when it cannot read the GitHub release", () => {
+    const result = runCheck("workflow_run", "exit 1");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("FATAL: a release-triggered run reads fluncle");
   });
 });
 

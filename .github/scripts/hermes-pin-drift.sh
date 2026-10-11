@@ -37,7 +37,17 @@ CUR_YTDLP="$(sed -n 's#.*yt-dlp/releases/download/\([0-9][0-9.]*\)/yt-dlp_linux.
 		exit 1
 	}
 
-LATEST_FLUNCLE="$(npm view fluncle version 2>/dev/null || true)"
+if [ "${GITHUB_EVENT_NAME:-}" = "workflow_run" ]; then
+	RELEASED_FLUNCLE_TAG="$(gh api "repos/${GITHUB_REPOSITORY:-}/releases/latest" --jq .tag_name 2>/dev/null || true)"
+	LATEST_FLUNCLE="${RELEASED_FLUNCLE_TAG#v}"
+	[[ "$LATEST_FLUNCLE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+		{
+			log "FATAL: a release-triggered run reads fluncle from the latest GitHub release, the source the Dockerfile downloads, and could not (got '$RELEASED_FLUNCLE_TAG')"
+			exit 1
+		}
+else
+	LATEST_FLUNCLE="$(npm view fluncle version 2>/dev/null || true)"
+fi
 LATEST_BUN="$(curl -fsSL https://api.github.com/repos/oven-sh/bun/releases/latest 2>/dev/null |
 	python3 -c 'import sys,json; print(json.load(sys.stdin)["tag_name"].replace("bun-v","",1))' 2>/dev/null || true)"
 LATEST_YTDLP="$(curl -fsSL https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest 2>/dev/null |
