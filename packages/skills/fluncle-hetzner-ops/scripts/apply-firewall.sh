@@ -21,17 +21,14 @@ if [[ -f "${ENV_FILE}" ]]; then
 fi
 
 SERVER_NAME="${SERVER_NAME:-agent-devbox-01}"
-FIREWALL_PROFILE="${FIREWALL_PROFILE:-private}"
+FIREWALL_PROFILE="${FIREWALL_PROFILE:-public-ssh}"
 
 case "${FIREWALL_PROFILE}" in
-  private)
-    FIREWALL_NAME="${FIREWALL_NAME:-agent-devbox-private}"
-    ;;
   public-ssh | rave)
     FIREWALL_NAME="${FIREWALL_NAME:-fluncle-rave-public}"
     ;;
   *)
-    printf 'Unknown firewall profile: %s. Expected private or public-ssh.\n' "${FIREWALL_PROFILE}" >&2
+    printf 'Unknown firewall profile: %s. Expected public-ssh.\n' "${FIREWALL_PROFILE}" >&2
     exit 1
     ;;
 esac
@@ -85,7 +82,7 @@ if ! has_rule udp 41641; then
 fi
 
 rules_json="$(hcloud firewall describe "${FIREWALL_NAME}" -o json)"
-if [[ "${FIREWALL_PROFILE}" != "private" ]] && ! has_rule tcp 22; then
+if ! has_rule tcp 22; then
   hcloud firewall add-rule \
     --direction in \
     --protocol tcp \

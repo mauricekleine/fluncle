@@ -1,6 +1,6 @@
 # Hermes box (the sweep runtime)
 
-The long-lived runtime every Fluncle automation sweep runs in: a container built from a digest-pinned `oven/bun` Debian base plus the sweeps' toolchain, named `hermes`, whose main process does no work — no chat platform, no model, no scheduler. It exists so the host systemd timers have somewhere to `docker exec` into; "Hermes" is only the name of this box, its container, its `hermes` user, and its image tag (`fluncle-hermes:v…`); each sweep acts on the archive **only** through the authenticated `fluncle` CLI and the agent-scoped token.
+The long-lived runtime every Fluncle automation sweep runs in: a container built from a digest-pinned `oven/bun` Debian base plus the sweeps' toolchain, named `hermes`, whose main process does no work — no chat platform, no model, no scheduler. It exists so the host systemd timers have somewhere to `docker exec` into; "Hermes" is only the name of this box, its container, its `hermes` user, and its image tag (`fluncle-hermes:v…`), and is unrelated to the `hermes-parser` packages in the lockfile, which belong to React Native's Hermes engine; each sweep acts on the archive **only** through the authenticated `fluncle` CLI and the agent-scoped token.
 
 > This repo is public. Host names, IPs, and secret values are **not** in this doc — they live in the operator's ops notes + 1Password. This doc is the architecture, the security policy, and the change/runbook procedures.
 

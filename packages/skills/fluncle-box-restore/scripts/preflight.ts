@@ -26,9 +26,6 @@ export const REQUIRED_REPO_ASSETS: readonly string[] = [
   "docs/agents/hermes/scripts/box-state-restore-drill.ts",
   "docs/agents/hermes/scripts/box-state-snapshot.ts",
   "docs/agents/hermes/secrets/fluncle-secrets-sync.sh",
-  "packages/skills/fluncle-hetzner-ops/scripts/apply-firewall.sh",
-  "packages/skills/fluncle-hetzner-ops/scripts/bootstrap-hardening.sh",
-  "packages/skills/fluncle-hetzner-ops/scripts/bootstrap-private-vps.sh",
   "packages/skills/fluncle-hetzner-ops/scripts/install-toolchain.sh",
 ];
 
@@ -545,43 +542,6 @@ export function resolveLabsDir(
   return candidates.find((candidate) => existsSync(join(candidate, LABS_BOX_DOC_DIR)));
 }
 
-export const SERVER_SKILL = join("skills", "mk-hetzner-devbox", "SKILL.md");
-
-export function resolveServerSkill(
-  repoRoot: string,
-  env: NodeJS.ProcessEnv = process.env,
-  home: string = homedir(),
-): string | undefined {
-  const candidates = [
-    env.DOTFILES_DIR,
-    join(home, ".local", "share", "agent-layer", "dotfiles"),
-    join(dirname(repoRoot), "dotfiles"),
-    join(home, "Projects", "dotfiles"),
-    join(home, "projects", "dotfiles"),
-  ].filter((value): value is string => typeof value === "string" && value !== "");
-  return candidates.map((dir) => join(dir, SERVER_SKILL)).find((path) => existsSync(path));
-}
-
-function checkServerSkill(repoRoot: string): CheckResult {
-  const path = resolveServerSkill(repoRoot);
-  if (!path) {
-    return {
-      detail: "no dotfiles checkout with mk-hetzner-devbox found",
-      id: "server-skill",
-      remedy:
-        "Step 1 creates the server with mk-hetzner-devbox. Refresh the agent layer, clone mauricekleine/dotfiles next to this repo, or set DOTFILES_DIR to a dotfiles checkout, so the drill can run step 1 offline.",
-      status: "unknown",
-      title: "Server-creation skill (mk-hetzner-devbox) available",
-    };
-  }
-  return {
-    detail: "mk-hetzner-devbox found in a local dotfiles checkout",
-    id: "server-skill",
-    status: "pass",
-    title: "Server-creation skill (mk-hetzner-devbox) available",
-  };
-}
-
 function checkSecretTemplates(labsDir: string | undefined): CheckResult[] {
   const id = "secret-templates";
   const title = "The box's secret templates are present and hold only references";
@@ -760,7 +720,6 @@ export async function runPreflight(options: {
 }): Promise<CheckResult[]> {
   const results: CheckResult[] = [
     checkRepoAssets(options.repoRoot),
-    checkServerSkill(options.repoRoot),
     checkSchedulePlan(options.repoRoot),
     checkEncryptionKey(),
   ];
