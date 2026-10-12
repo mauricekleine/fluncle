@@ -37,6 +37,7 @@ import {
 } from "./admin-telemetry";
 import { updateGalaxyMap } from "./admin-galaxies";
 import { presignClipUpload, presignSetVideoUpload } from "./admin-mixtapes";
+import { LIVE_STATE_TIMESTAMP_MAX, recordLiveState } from "./admin-twitch";
 import { presignRecordingUpload } from "./admin-recordings";
 import {
   getOperationReceipt,
@@ -927,6 +928,49 @@ function accepts(op: unknown, input: unknown): boolean {
       `${id}: one character past the length cap is rejected`,
     );
   }
+}
+
+{
+  const live = {
+    at: "2026-10-13T01:00:00.000Z",
+    live: true,
+    startedAt: "2026-10-13T00:30:00Z",
+    title: "Fluncle live",
+  };
+  const capped = `2026-10-13T01:00:00.${"0".repeat(LIVE_STATE_TIMESTAMP_MAX - 21)}Z`;
+
+  assert.equal(capped.length, LIVE_STATE_TIMESTAMP_MAX);
+  assert.equal(accepts(recordLiveState, live), true, "the poller's ISO poll time is accepted");
+  assert.equal(
+    accepts(recordLiveState, { ...live, startedAt: null, title: null }),
+    true,
+    "an offline poll with no stream fields is accepted",
+  );
+  assert.equal(
+    accepts(recordLiveState, { ...live, at: capped }),
+    true,
+    "a poll time AT the length cap is accepted",
+  );
+  assert.equal(
+    accepts(recordLiveState, { ...live, at: capped.replace("Z", "0Z") }),
+    false,
+    "a poll time one character past the length cap is rejected",
+  );
+  assert.equal(
+    accepts(recordLiveState, { ...live, at: "now" }),
+    false,
+    "a poll time that is not an ISO datetime is rejected",
+  );
+  assert.equal(
+    accepts(recordLiveState, { ...live, startedAt: "x".repeat(LIVE_STATE_TIMESTAMP_MAX) }),
+    true,
+    "a stream start AT the length cap is accepted",
+  );
+  assert.equal(
+    accepts(recordLiveState, { ...live, startedAt: "x".repeat(LIVE_STATE_TIMESTAMP_MAX + 1) }),
+    false,
+    "a stream start one character past the length cap is rejected",
+  );
 }
 
 console.log("input-caps: ok");
