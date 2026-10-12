@@ -1,6 +1,8 @@
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
+export const LIVE_STATE_TIMESTAMP_MAX = 64;
+
 export const recordLiveState = oc
   .route({
     method: "POST",
@@ -11,9 +13,9 @@ export const recordLiveState = oc
   })
   .input(
     z.object({
-      at: z.string().min(1),
+      at: z.string().max(LIVE_STATE_TIMESTAMP_MAX).datetime({ offset: true }),
       live: z.boolean(),
-      startedAt: z.string().nullable(),
+      startedAt: z.string().max(LIVE_STATE_TIMESTAMP_MAX).nullable(),
       title: z.string().nullable(),
     }),
   )
