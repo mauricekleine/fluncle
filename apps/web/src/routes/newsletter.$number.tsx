@@ -1,7 +1,7 @@
 import { Link, createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type EditionDTO, orderedGalaxies } from "@/lib/editions";
-import { logPageUrl, siteUrl } from "@/lib/fluncle-links";
+import { fluncleEntityRef, logPageUrl, siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { newsletterBreadcrumbsJsonLd } from "@/lib/log-schema";
@@ -61,9 +61,10 @@ function editionHead(edition: EditionDTO | undefined) {
       jsonLdScript({
         "@context": "https://schema.org",
         "@type": "Article",
-        author: { "@type": "Person", name: "Fluncle" },
+        author: fluncleEntityRef,
         datePublished: edition.sentAt,
         headline: edition.subject ?? `Edition #${edition.number}`,
+        publisher: fluncleEntityRef,
         url: pageUrl,
       }),
 

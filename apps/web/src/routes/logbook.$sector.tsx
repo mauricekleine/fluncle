@@ -3,7 +3,7 @@ import { Fragment } from "react";
 import { Link, createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
-import { siteUrl } from "@/lib/fluncle-links";
+import { fluncleEntityRef, siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { logbookBreadcrumbsJsonLd } from "@/lib/log-schema";
@@ -70,7 +70,7 @@ function logbookHead(loaderData: LogbookPageData | undefined) {
   const article = {
     "@context": "https://schema.org",
     "@type": "Article",
-    author: { "@type": "Person", name: "Fluncle", url: `${siteUrl}/about` },
+    author: fluncleEntityRef,
     dateModified: entry.generatedAt,
     datePublished,
     description,
@@ -78,7 +78,7 @@ function logbookHead(loaderData: LogbookPageData | undefined) {
     inLanguage: "en",
     isPartOf: { "@type": "Blog", name: "Fluncle's Logbook", url: `${siteUrl}/logbook` },
     mainEntityOfPage: pageUrl,
-    publisher: { "@type": "Organization", name: "Fluncle", url: siteUrl },
+    publisher: fluncleEntityRef,
     url: pageUrl,
   };
 

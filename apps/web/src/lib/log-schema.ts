@@ -10,6 +10,7 @@ export { logPageUrl };
 export type LogSchemaInput = LogProseInput & {
   album?: string;
   albumImageUrl?: string;
+  albumSlug?: string;
 
   appleMusicUrl?: string;
 
@@ -115,7 +116,18 @@ export function musicRecordingJsonLd(
     ],
     image: imageUrl,
     ...(track.isrc ? { isrcCode: track.isrc } : {}),
-    ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
+    ...(track.album
+      ? {
+          inAlbum: track.albumSlug
+            ? {
+                "@id": albumPageUrl(track.albumSlug),
+                "@type": "MusicAlbum",
+                name: track.album,
+                url: albumPageUrl(track.albumSlug),
+              }
+            : { "@type": "MusicAlbum", name: track.album },
+        }
+      : {}),
     name: track.title,
 
     ...(track.label && track.labelSlug

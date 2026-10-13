@@ -62,11 +62,14 @@ Each artist, label, and album page leads with the findings Fluncle has logged th
 - [Mixtapes API](https://www.fluncle.com/api/v1/mixtapes): published mixtapes as JSON
 - [Random track](https://www.fluncle.com/api/v1/tracks/random): one pick from the archive, as JSON
 - [Archive search API](https://www.fluncle.com/api/v1/search/archive): search the archive by coordinate, artist, label, album, a bare word, or a plain-language question, as JSON. This searches the archive itself; the track search under Submit is a different endpoint
+- [Reach](https://www.fluncle.com/reach): how far the findings have carried, platform by platform, and the crew aboard over time. The same numbers as JSON at https://www.fluncle.com/api/v1/reach/stats
+- [System status](https://www.fluncle.com/status): the live health of Fluncle's services (web, database, storage, and the rest) and their recent events. Also at https://status.fluncle.com, and as JSON at https://www.fluncle.com/api/v1/status
 
 ## Submit
 
 - [Search API](https://www.fluncle.com/api/v1/search): GET with a q query param (artist and title, or a Spotify track URL), searches Fluncle's catalogue and other music sources such as Deezer, returns candidates to submit as JSON
-- [Submissions API](https://www.fluncle.com/api/v1/submissions): POST a candidate for review; Fluncle gives it a listen before anything publishes
+- Submissions API: POST https://www.fluncle.com/api/v1/submissions with a candidate for review; Fluncle gives it a listen before anything publishes
+- Newsletter API: POST https://www.fluncle.com/api/v1/newsletter with an email address to subscribe to Fluncle's newsletter. Fresh bangers, every Friday, from Fluncle. Every edition Fluncle has sent reads as JSON at https://www.fluncle.com/api/v1/newsletter/editions
 
 ## For agents
 
