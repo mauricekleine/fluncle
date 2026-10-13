@@ -2766,7 +2766,7 @@ async function resolveAnchorPhasedBatch(
   return outcomes;
 }
 
-async function resolveAnchorReleaseOnBox(
+export async function resolveAnchorReleaseOnBox(
   trackId: string,
   spotifySearch: boolean,
 ): Promise<AnchorReleaseVerdict> {
@@ -2796,7 +2796,7 @@ async function resolveAnchorReleaseOnBox(
   ) {
     throw new Error("probe_anchor_release returned an invalid result");
   }
-  const result = body.probe.result;
+  const result = { ...body.probe.result };
   if (
     body.probe.evidence.every(
       (evidence) => !evidence.checkedAt && evidence.siblingTrackIds.length === 0,
