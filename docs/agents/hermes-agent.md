@@ -44,7 +44,7 @@ Enforcement is at the route: agent-allowed routes call `requireAdmin` (any princ
 
 A private, Tailscale-only devbox (admin over OpenSSH on the tailnet; no public inbound TCP). Docker only — deliberately no general dev tooling, for a small blast radius. The container runs a pinned Docker image; state lives in `~/.hermes` (`/opt/data` in the container, owned by the `hermes` uid/gid 10000): the cron run markers under `cron/output/`, and the sweeps' home `home/` — the shared `0600` sweep secrets file, the render conductor's state, the prober's transition memory, per-sweep budgets — plus the audit and triage workspaces.
 
-On bootstrapped hosts, the admin user belongs to `systemd-journal` and reads service and kernel logs with `journalctl` without sudo.
+On bootstrapped hosts, the admin user belongs to `systemd-journal` and reads service and kernel logs with `journalctl` without sudo. Fleet agents log in as `observer` over Tailscale SSH: a member of `systemd-journal` with no sudo and no Docker, so it reads the journal and `systemctl status` but not the env files or the markers.
 
 ## The image
 

@@ -82,6 +82,7 @@ A cron is a fan-out surface like any other (the `fluncle-surfaces` skill's shape
 ## When the box misbehaves
 
 - Sweep logs are in journald (`journalctl -u fluncle-<job>.service`) and in each run's marker under `/opt/data/cron/output/fluncle-<job>/` (its stderr tail included); the container's own stdout carries nothing, because its main process only idles.
+- Fleet agents read the box as `observer` over Tailscale SSH. It reads the journal and `systemctl status` without sudo; Docker, the env files and the markers are out of its reach. Restarts, unit installs and secrets need the operator's admin login.
 - Every admitted sweep reporting `breaker-open` means the runner's box-wide admission circuit breaker is open after repeated coordinator gateway failures. Its state is `~/.database-admission/breaker` in the container (opened-at, expires-at, cooldown in ms); `pending/` holds releases and cancels waiting to be settled. It closes itself on the first answered half-open probe; deleting the `breaker` file forces the next firing to try the coordinator at once.
 - A "refused" publish is the role boundary working as designed: a publish-class command **should** come back 403 for the agent token. The operator runs those actions with the full token, not the box.
 
