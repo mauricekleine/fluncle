@@ -43,7 +43,7 @@ Child diagnostics may contain concrete vault paths or URLs. The preflight redact
 Do not rebuild a box that is merely unreachable — a re-provision throws away accumulated state a reboot would have kept.
 
 - **Every `/status` cron row stale but the web app fine** → the box, not Fluncle. Likely the whole guest or its host.
-- **You cannot SSH in over the tailnet** → check the node in the Tailscale admin console, then try the hypervisor's own key-only path into the guest. The node is tagged, so its key does not expire; a box that answers there is a reachability problem.
+- **You cannot SSH in over the tailnet** → check the node in the Tailscale admin console, then ask the operator whether the hypervisor lists the guest as running. The node is tagged, so its key does not expire.
 - **The hypervisor lists the guest as running** → it is a reachability problem. Fix that.
 - **The guest or its disk is gone** → this runbook. If the hypervisor host itself is gone, the platform's own restore comes first; this runbook starts once it can create guests again.
 
@@ -51,9 +51,9 @@ Do not rebuild a box that is merely unreachable — a re-provision throws away a
 
 The order is load-bearing. Each step names the asset that does the work.
 
-**1. Create the guest.** Run the private platform repo's guest script on the hypervisor; the labs doc names it. It creates the VM with the box posture (admin user, key-only OpenSSH on 2222, UFW, Tailscale, **and `op`**), then runs this repo's [`install-toolchain.sh`](../fluncle-hetzner-ops/scripts/install-toolchain.sh) with `TOOLCHAIN_PROFILE=agent-box`: Docker and a small host floor, no workstation toolchain. Size, network, and tags are box facts — read them from the labs doc, do not re-derive them.
+**1. Create the guest.** Run the private platform repo's guest script on the hypervisor; the labs doc names it. It creates the VM with the box posture (admin user, the read-only `observer` login, key-only OpenSSH on 2222, UFW, Tailscale, **and `op`**), then runs this repo's [`install-toolchain.sh`](../fluncle-hetzner-ops/scripts/install-toolchain.sh) with `TOOLCHAIN_PROFILE=agent-box`: Docker and a small host floor, no workstation toolchain. Size, network, and tags are box facts — read them from the labs doc, do not re-derive them.
 
-**2. Join the tailnet tagged.** Use the tags from the labs doc; a tagged node's key does not expire. Then open a **second** terminal and confirm you can get in over the tailnet before relying on it.
+**2. Join the tailnet tagged.** Use the tags from the labs doc; a tagged node's key does not expire. Then open a **second** terminal and confirm you can get in over the tailnet before relying on it. Once you can, remove the hypervisor's provisioning key from admin as the platform's guest README says, so fleet agents keep only the read-only login.
 
 **3. Place the bootstrap env.** `op inject` cannot fetch its own credential, so this one file is the irreducible manual link. The recipe (reading the token with the operator's own biometric session and piping it over SSH, never typing it) and the file's contents are in the labs doc. **`op` must already be installed** — step 1 does that.
 
@@ -76,7 +76,7 @@ Self-deploy resumes on its own once the box is up: [`pin-watch`](../../../docs/a
 - **Container before sweep env, then sync again.** The secrets sync writes the sweep env file _into the container's bind mount_, which does not exist until the container has started once. On a fresh box the first sync half-succeeds: the container env lands, the sweep env does not, and every sweep runs credential-less. Sequence is **bootstrap → sync → container → sync again**.
 - **The image never chowns the data mount.** Nothing runs at container start except an idle `sleep`, so the host `~/.hermes` (`/opt/data` in the container) must already be owned by uid/gid 10000 before the first `docker run`, or the `hermes` user every sweep runs as cannot write its markers or state. The secrets sync creates `home/` with that owner when it is missing; the directory above it is yours to create with that owner (`chown -R 10000:10000` it if it is ever found root-owned).
 - **Restore box state into a STOPPED container.** A sweep `docker exec`d into a running container can write into the tree mid-unpack. Untar with `tar` (not a copy tool that drops modes) — it preserves the `0600` on the restored env files, and that is load-bearing.
-- **Join the tailnet tagged.** A tagged node's key does not expire. An untagged join expires in time and closes the tailnet path, leaving only the hypervisor's own path into the guest.
+- **Join the tailnet tagged.** A tagged node's key does not expire. An untagged join expires in time and closes the tailnet path, leaving only the hypervisor.
 - **`op` before any secret is read.** Confirm `op --version` before placing the bootstrap environment; secret rendering depends on it.
 - **pin-watch cannot bootstrap itself.** It is steady-state only: it harvests the runtime env off the _running_ container via `docker inspect` and reads nothing from `op`. With no container there is nothing to harvest. The first image build and `docker run` are manual, every time.
 - **A green `/status` row is not proof.** Treat `/status` as valid only when the probe is configured and corroborated by a fresh real artifact.
