@@ -45,7 +45,7 @@ export const Route = createFileRoute("/mixtapes/")({
         "@type": "ItemList",
         itemListElement: loaderData?.map((mixtape, index) => ({
           "@type": "ListItem",
-          name: `${mixtape.logId} · ${mixtape.title}`,
+          name: `${mixtape.logId} · ${mixtapeDisplayTitle(mixtape.title)}`,
           position: index + 1,
           url: `${siteUrl}/log/${encodeURIComponent(mixtape.logId as string)}`,
         })),

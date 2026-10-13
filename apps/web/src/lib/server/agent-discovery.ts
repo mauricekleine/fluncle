@@ -302,13 +302,17 @@ ${tracks.join("\n")}
 
 ## Data
 
-- [RSS feed](${siteUrl}/rss.xml): the 25 most recent findings and mixtapes
+- [RSS feed](${siteUrl}/rss.xml): the 25 most recent findings and mixtapes. The same list reads as an Atom feed at ${siteUrl}/atom.xml and as a JSON Feed at ${siteUrl}/feed.json
 - [Fresh releases feed](${siteUrl}/fresh.xml): the newest drum & bass releases over the last 30 days, as RSS (also ${siteUrl}/fresh.json as a JSON Feed). Release-dated (when a tune came out), not found-dated
+- [Mixtape podcast](${siteUrl}/podcast.xml): every published mixtape as a podcast episode, for any podcast app
+- [Live calendar](${siteUrl}/calendar.ics): Fluncle's planned live sessions as an iCalendar feed, plus every past mixtape dated by when it was recorded
 - [Findings API](${siteUrl}/api/v1/findings): the feed as JSON, newest found first, cursor-paginated; accepts limit (max 48) and cursor query params
 - [Tracks API](${siteUrl}/api/v1/tracks): every track, newest release first, numbered pages (page); certified=true narrows to findings, certified=false to the rest
 - [Fresh API](${siteUrl}/api/v1/tracks/fresh): what just came out, the newest releases over a 30-day window, as JSON; accepts limit (max 100)
 - [Random track](${siteUrl}/api/v1/tracks/random): one pick from the archive, as JSON
 - [Archive search API](${siteUrl}/api/v1/search/archive): search the archive by coordinate, artist, label, album, a bare word, or a plain-language question, as JSON. This searches the archive itself; the track search under Submit is a different endpoint
+- [Reach](${siteUrl}/reach): how far the findings have carried, platform by platform, and the crew aboard over time. The same numbers as JSON at ${siteUrl}/api/v1/reach/stats
+- [System status](${siteUrl}/status): the live health of Fluncle's services (web, database, storage, and the rest) and their recent events. Also at https://status.fluncle.com, and as JSON at ${siteUrl}/api/v1/status
 - [Identity](${siteUrl}/identity): look a recording up by ISRC, MusicBrainz recording id, or Log ID and get its identifiers and platform links, one page each at ${siteUrl}/identity/{key}. Every link says how Fluncle came to trust it and when he last checked, and every gap is named: he looked and found nothing, he will not look, or he hands out no such link. Same answer as JSON at ${siteUrl}/api/v1/tracks/-?isrc={isrc} or ?mbid={mbid}. Metered at 30 requests a minute and 1,000 a day per caller; free, no key
 - [Artists API](${siteUrl}/api/v1/artists): every artist Fluncle holds, A to Z, paginated, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings plus their verified identity links (MusicGroup + sameAs)
 - [Labels API](${siteUrl}/api/v1/labels): every label Fluncle holds, A to Z, paginated, as JSON; /api/v1/labels/{slug} for one label's identity, imprint lineage, and counts. Each resolves to a page at ${siteUrl}/label/{slug}
@@ -323,7 +327,8 @@ ${tracks.join("\n")}
 ## Submit
 
 - [Search API](${siteUrl}/api/v1/search): GET with a q query param (artist and title, or a Spotify track URL), searches Fluncle's catalogue and other music sources such as Deezer, returns candidates to submit as JSON
-- [Submissions API](${siteUrl}/api/v1/submissions): POST a candidate for review; Fluncle gives it a listen before anything publishes
+- Submissions API: POST ${siteUrl}/api/v1/submissions with a candidate for review; Fluncle gives it a listen before anything publishes
+- Newsletter API: POST ${siteUrl}/api/v1/newsletter with an email address to subscribe to Fluncle's newsletter. Fresh bangers, every Friday, from Fluncle. Every edition Fluncle has sent reads as JSON at ${siteUrl}/api/v1/newsletter/editions
 
 ## For agents
 
@@ -343,6 +348,7 @@ ${tracks.join("\n")}
 - [Fluncle Lens](https://chromewebstore.google.com/detail/efkkceaofendabikblfjhoepgejfpakk): a Chrome extension that finds fluncle:// coordinates on any web page and links each to its /log finding
 - [Fluncle for iOS](https://apps.apple.com/app/id6790080540): the native app carrying the feed, the archive, the radio, and each finding's /log screen, with push when a new banger lands
 - The rave terminal: ssh rave.fluncle.com, the deep end of the Galaxy
+- Findings over DNS: dig random.dig.fluncle.com TXT +short returns a finding as a TXT record (try latest, or any coordinate like 004.7.2I)
 `;
 
   return new Response(markdown, {

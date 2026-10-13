@@ -806,7 +806,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "discovery",
     name: "discovery.sitemap",
     operatorNotes:
-      "A sitemap INDEX, not a flat urlset: the URLs live in children at /sitemap/<kind>-<n>.xml, ONE CHILD PER ENTITY TYPE (pages/findings/artists/labels/albums/galaxies/logbook/docs), each auto-paged under Google's 50,000-URL ceiling so a breach cannot happen rather than merely not having happened yet. robots.txt still names this one URL — a crawler discovers the children from here. Splitting per entity type is also the diagnostic: Search Console reports coverage PER sitemap, so each entity type gets its own submitted/indexed count.",
+      "A sitemap INDEX, not a flat urlset: the URLs live in children at /sitemap/<kind>-<n>.xml, ONE CHILD PER ENTITY TYPE (pages/findings/tracks/artists/labels/albums/galaxies/logbook/docs), each auto-paged under Google's 50,000-URL ceiling so a breach cannot happen rather than merely not having happened yet. robots.txt still names this one URL — a crawler discovers the children from here. Splitting per entity type is also the diagnostic: Search Console reports coverage PER sitemap, so each entity type gets its own submitted/indexed count.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/sitemap.xml",
     url: `${SITE}/sitemap.xml`,
@@ -815,7 +815,7 @@ export const SURFACES: readonly Surface[] = [
   {
     apiFormat: "application/xml",
     exposedContent: [
-      "one child sitemap, per entity type: the pages / findings / artists / labels / albums / galaxies / logbook / docs URLs, auto-paged",
+      "one child sitemap, per entity type: the pages / findings / tracks / artists / labels / albums / galaxies / logbook / docs URLs, auto-paged",
     ],
     kind: "discovery",
     name: "discovery.sitemap-shard",

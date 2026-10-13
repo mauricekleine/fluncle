@@ -77,6 +77,20 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
     expect(jsonLd.url).toBe("https://www.fluncle.com/log/004.7.2I");
   });
 
+  it("links inAlbum to the album page when the finding carries an album slug", () => {
+    const linked = musicRecordingJsonLd(
+      { ...track, albumSlug: "nobody-else-1991-remix" },
+      "https://img/cover.jpg",
+    );
+
+    expect(linked.inAlbum).toEqual({
+      "@id": "https://www.fluncle.com/album/nobody-else-1991-remix",
+      "@type": "MusicAlbum",
+      name: track.album,
+      url: "https://www.fluncle.com/album/nobody-else-1991-remix",
+    });
+  });
+
   it("omits recordLabel when the finding carries no label entity", () => {
     expect(jsonLd).not.toHaveProperty("recordLabel");
   });

@@ -1,7 +1,7 @@
 import { DOCS_PAGES } from "../docs-pages";
 import { formatSector } from "../log-id-shared";
-import { mixtapeSetVideoUrl, albumCoverAtSize, trackMedia } from "../media";
-import { mixtapeCoverUrl } from "../mixtapes";
+import { albumCoverAtSize, bestAlbumCoverUrl, mixtapeSetVideoUrl, trackMedia } from "../media";
+import { mixtapeCoverUrl, mixtapeDisplayTitle } from "../mixtapes";
 import { artistTitleLine, definitionalSentences } from "../log-prose";
 import {
   EMPTY_SITEMAP_BAGS,
@@ -144,6 +144,9 @@ export function sitemapWindowStatement(
 
 type TrackRow = {
   added_at: string;
+  album_image_key: string | null;
+  album_image_state: string | null;
+  album_image_updated_at: string | null;
   album_image_url: string | null;
   artists_json: string;
   bpm: number | null;
@@ -166,7 +169,13 @@ function trackPage(row: TrackRow): SitemapLogPage {
   const logId = row.log_id;
   const media = trackMedia(logId);
   const artists = parseArtistsJson(row.artists_json);
-  const imageLoc = albumCoverAtSize(row.album_image_url ?? undefined, "large") ?? media.coverUrl;
+  const cover = bestAlbumCoverUrl({
+    imageKey: row.album_image_key,
+    imageState: row.album_image_state,
+    imageUpdatedAt: row.album_image_updated_at,
+    spotifyUrl: row.album_image_url,
+  });
+  const imageLoc = albumCoverAtSize(cover, "large") ?? media.coverUrl;
 
   if (!row.video_url) {
     return { imageLoc, lastmod: row.lastmod, logId };
@@ -199,6 +208,7 @@ function trackPage(row: TrackRow): SitemapLogPage {
 function mixtapePage(row: MixtapeRow): SitemapLogPage {
   const logId = row.log_id;
   const imageLoc = mixtapeCoverUrl(logId, "card");
+  const title = mixtapeDisplayTitle(row.title);
 
   if (!row.set_video_at) {
     return { imageLoc, lastmod: row.lastmod, logId };
@@ -210,11 +220,9 @@ function mixtapePage(row: MixtapeRow): SitemapLogPage {
     logId,
     video: {
       contentLoc: mixtapeSetVideoUrl(logId),
-      description: row.note?.trim()
-        ? row.note.trim()
-        : `Fluncle drum & bass mixtape: ${row.title}.`,
+      description: row.note?.trim() ? row.note.trim() : `Fluncle drum & bass mixtape: ${title}.`,
       thumbnailLoc: mixtapeCoverUrl(logId, "card"),
-      title: row.title,
+      title,
     },
   };
 }
@@ -225,6 +233,9 @@ async function readLogPages(): Promise<SitemapLogPage[]> {
     db.execute({
       sql: `select findings.log_id, title, artists_json, note, bpm, album_image_url, video_url,
                    findings.added_at,
+                   (select image_key from albums where albums.id = tracks.album_id) as album_image_key,
+                   (select image_state from albums where albums.id = tracks.album_id) as album_image_state,
+                   (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at,
                    max(coalesce(findings.video_squared_at, ''),
                        coalesce(version.changed_at, findings.updated_at, ''),
                        findings.added_at) as lastmod

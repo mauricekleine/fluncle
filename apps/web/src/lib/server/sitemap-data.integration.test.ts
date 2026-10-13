@@ -855,4 +855,29 @@ describe("a child sitemap fetches only its own bag", () => {
 
     expect(xml.match(/<loc>/g)).toHaveLength(4);
   });
+
+  it("images a finding with the self-hosted cover its log page shows", async () => {
+    await db.execute({
+      sql: `update albums
+               set image_key = 'albums/wormhole.jpg', image_state = 'resolved',
+                   image_updated_at = '2026-07-02T00:00:00.000Z'
+             where slug = 'wormhole'`,
+    });
+
+    const xml = buildSitemapShardXml("findings", 1, await collectSitemapBag("findings")) ?? "";
+
+    expect(xml).toContain("albums/wormhole.jpg");
+    expect(xml).not.toContain("i.scdn.co/image/track-1");
+  });
+
+  it("titles a mixtape video without the Log ID its stored title carries", async () => {
+    await db.execute({
+      sql: `update mixtapes set title = 'Amen Break Voyage | 018.F.1A' where id = 'mixtape-2'`,
+    });
+
+    const xml = buildSitemapShardXml("findings", 1, await collectSitemapBag("findings")) ?? "";
+
+    expect(xml).toContain("<video:title>Amen Break Voyage</video:title>");
+    expect(xml).not.toContain("| 018.F.1A");
+  });
 });
