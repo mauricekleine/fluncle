@@ -14,6 +14,7 @@ import {
   parseIsrcAskWindow,
   parseLimitArg,
   readAnchorIsrcDue,
+  resolveAnchorReleaseOnBox,
   runApifyActor,
   runAnchorSweep,
   runAnchorTick,
@@ -3017,5 +3018,79 @@ describe("runAnchorSweep — the firing preflight", () => {
 
     expect(fetches).toBe(1);
     expect(summary.reason).toBeNull();
+  });
+});
+
+describe("resolveAnchorReleaseOnBox", () => {
+  test("sends every commit page the probe exactly as the worker signed it", async () => {
+    const realFetch = globalThis.fetch;
+    const realRunnerPid = process.env.FLUNCLE_ADMISSION_RUNNER_PID;
+    process.env.FLUNCLE_ADMISSION_RUNNER_PID = "1";
+    const probe = {
+      evidence: [
+        {
+          albumId: "album-1",
+          checkedAt: "2026-10-13T03:30:00.000Z",
+          releaseId: "release-1",
+          siblingTrackIds: ["sibling-1", "sibling-2"],
+          tracks: [],
+        },
+      ],
+      issuedAt: 1_760_000_000_000,
+      result: {
+        albumFetchFailed: 0,
+        albumsFetched: 1,
+        anchored: false,
+        anchoredCount: 0,
+        backoffSkipped: 0,
+        cacheHits: 0,
+        noAlbum: 0,
+        remainder: null,
+        throttled: false,
+        verifiedBy: null,
+      },
+      trackId: "mb_release",
+    };
+    const signed = JSON.stringify(probe);
+    const commits: { cursor: number; probe: string }[] = [];
+    globalThis.fetch = Object.assign(
+      (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.endsWith("/anchor/release/probe")) {
+          return Promise.resolve(Response.json({ ok: true, probe, proof: "proof" }));
+        }
+        const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+          cursor: number;
+          probe: unknown;
+        };
+        commits.push({ cursor: body.cursor, probe: JSON.stringify(body.probe) });
+        return Promise.resolve(
+          Response.json(
+            commits.length === 1
+              ? { anchored: true, anchoredCount: 1, ok: true, remainder: 1, verifiedBy: "isrc" }
+              : { anchored: true, anchoredCount: 1, ok: true, remainder: null, verifiedBy: "isrc" },
+          ),
+        );
+      },
+      { preconnect: realFetch.preconnect },
+    );
+    try {
+      const result = await resolveAnchorReleaseOnBox("mb_release", true);
+      expect(commits).toEqual([
+        { cursor: 0, probe: signed },
+        { cursor: 1, probe: signed },
+      ]);
+      expect(result.anchoredCount).toBe(2);
+      expect(result.anchored).toBe(true);
+      expect(result.verifiedBy).toBe("isrc");
+    } finally {
+      globalThis.fetch = realFetch;
+      if (realRunnerPid === undefined) {
+        delete process.env.FLUNCLE_ADMISSION_RUNNER_PID;
+      } else {
+        process.env.FLUNCLE_ADMISSION_RUNNER_PID = realRunnerPid;
+      }
+    }
   });
 });
