@@ -3,7 +3,7 @@
 A repo-checked-in host systemd timer on the rave-02 host that checks **Sentry every night** and
 opens a fix PR for each production error that is a straightforward fix. It is deliberately its **own
 cron on its own set time** — NOT part of the codebase-audit rotation — because Sentry should be
-looked at every single night, not one night in seven.
+looked at every single night, not one night in eight.
 
 - **`fluncle-sentry-triage`** (03:30 Amsterdam) — reconciles yesterday's merged fixes (resolves
   their Sentry issues), pulls tonight's NEW unresolved issues from both projects, and runs one

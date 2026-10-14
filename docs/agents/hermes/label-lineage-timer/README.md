@@ -16,9 +16,9 @@ The box holds no MusicBrainz budget; the Worker does. So the walk happens IN THE
 
 That split makes the **cadence, not the batch size, the real throttle.** Every scrap of state is on the `labels` row, so "run again" and "resume" are the same command: a walked label is terminal and skipped forever; a label MusicBrainz cannot identify is marked `none` and drains; a throttle just circuit-breaks and the next tick resumes fresh. A reboot mid-worklist costs nothing.
 
-- `FLUNCLE_LABEL_LINEAGE_LIMIT` (default `25`) — labels handled per tick. The CLI loops the slug cursor internally up to this cap (or until the worklist drains, or MusicBrainz throttles); the Worker clamps a single pass to 8 labels regardless, each ≤2 paced ~1.1s calls, so a tick is under a minute.
+- `FLUNCLE_LABEL_LINEAGE_LIMIT` (default `8`) — labels handled per tick. The CLI loops the slug cursor internally up to this cap (or until the worklist drains, or MusicBrainz throttles); the Worker clamps a single pass to 8 labels regardless, each ≤2 paced ~1.1s calls, so a tick is under a minute.
 
-At 25 labels every 60 minutes — against a worklist that is the findings' labels plus the crawler's slow drip — the worklist stays drained with wide headroom, and a tick that finds every label walked/attempted is a cheap no-op.
+At 8 labels every 60 minutes — against a worklist that is the findings' labels plus the crawler's slow drip — the worklist stays drained with wide headroom, and a tick that finds every label walked/attempted is a cheap no-op.
 
 Check on it any time:
 

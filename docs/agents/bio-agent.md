@@ -96,7 +96,14 @@ The **machine-readable discovery layer** is the half that surprises people, beca
 
 It does **not** reach `llms.txt`, the sitemap, any RSS/Atom/JSON/podcast/ICS feed, oEmbed, the OG images, `GET /api/v1/artists/{slug}` (that contract carries no `bio` field — an asymmetry with labels and albums), WebMCP, mobile, the SSH terminal, DNS, Raycast, or the extension.
 
-Final-attempt acceptance is an operator-controlled policy. To disable it, follow the `SEVERABLE` recipe in `bio.ts`; rejected third drafts then take the existing `exhausted` outcome.
+Final-attempt acceptance is an operator-controlled policy, built to come out in one deletion. To disable it:
+
+1. In `apps/web/src/lib/server/bio.ts`, delete `acceptFinalDraftBio` and collapse `gateOrAcceptBio` to `{ bio: gateBioText(…) }`; the handlers spread its result, so they need no edit.
+2. Drop `finalAttempt` / `gateBypassed` / `voiceViolations` from the three describe contracts (`packages/contracts/src/orpc/admin-{artists,labels,albums}.ts`).
+3. Drop `--final-attempt` from the CLI: `buildBioBody`, `BioDescribeOptions`, the three `.option()` calls, and the `gateBypassed` print.
+4. In `docs/agents/hermes/scripts/entity-bio-sweep.ts`, stop passing `finalAttempt` to `deliverBio` and drop the `bypassedGate` counter.
+
+The attempt budget is a separate mechanism: rejected third drafts then take the existing `exhausted` outcome.
 
 ### The review every bypassed bio raises
 

@@ -143,8 +143,8 @@ assert.match(
 );
 assert.match(
   projectionMaintenance.operatorNotes ?? "",
-  /track and crawl get at most twenty pages of 500.*public aggregates and artist qualification get at most four pages of 500/,
-  "projection maintenance pins the 20-step and 4-step serial budgets",
+  /oldest debt first, each repairing in pages of 500.*capped at 100, with a floor of four for public aggregates and artist qualification/,
+  "projection maintenance pins the oldest-debt-first adaptive repair budget",
 );
 
 assert.ok(

@@ -4,7 +4,7 @@ The host guard against a rave-02 systemd timer that reports `active` but will ne
 
 ## The failure
 
-Every sweep timer on this box is monotonic: it fires once on `OnBootSec` and then rides `OnUnitActiveSec=<period>`, which systemd measures from the **service's** last activation. Stop such a timer before its one-shot boot fire and start it again afterwards, and it can be left with no reference point at all — `NextElapse` becomes `infinity` and the sweep never runs again.
+Most sweep timers on this box are monotonic: such a timer fires once on `OnBootSec` and then rides `OnUnitActiveSec=<period>`, which systemd measures from the **service's** last activation. Stop such a timer before its one-shot boot fire and start it again afterwards, and it can be left with no reference point at all — `NextElapse` becomes `infinity` and the sweep never runs again.
 
 `Persistent=true` is the ingredient that makes this permanent, and it is worth being precise about because the intuition runs the other way. Persistent writes a stamp file (`/var/lib/systemd/timers/stamp-<unit>`). On a fresh `systemctl start`, systemd reads that stamp as the timer's last trigger and therefore treats the one-shot `OnBootSec` as already satisfied — so it does **not** re-fire it. `OnUnitActiveSec` then waits for a service activation that can only come from the timer firing. Deadlock.
 
@@ -53,7 +53,7 @@ A clean pass logs `ok — every active timer has a next elapse` and exits 0. A p
 
 ## What it reports
 
-A clean exit code is the weakest possible signal from a **detector**. This unit legitimately re-arms nothing for months, so `produced == 0` says nothing at all about its health — and a pass that enumerates ZERO timers exits 0 and logs the same reassuring line while being completely blind. That is not hypothetical: a watchdog on the other box ran 897 consecutive times with zero checks and stayed green throughout.
+A clean exit code is the weakest possible signal from a **detector**. This unit legitimately re-arms nothing for months, so `produced == 0` says nothing at all about its health — and before the zero-timer check a pass that enumerated ZERO timers exited 0 and logged the same reassuring line while being completely blind. That is not hypothetical: a watchdog on the other box ran 897 consecutive times with zero checks and stayed green throughout.
 
 So every pass ends with a JSON summary line on stdout and POSTs it to the run ledger (`record_run`, agent tier) with the run's start, end, and exit code:
 

@@ -98,11 +98,11 @@ The `claude -p` step authors through the `copywriting-fluncle` skill; the prompt
 
 ## The box cron + host timer (LIVE spec; activation OPERATOR-GATED)
 
-`fluncle-logbook` is the on-box `--no-agent` HYBRID sweep — deterministic gap read + gather, ONE `claude -p` authoring per day, deterministic delivery — mirroring `fluncle-note`. It runs once a day at **00:40 Amsterdam** (shortly after local midnight, so the day that just ended is complete). Source: [`hermes/scripts/logbook-sweep.{sh,ts}`](./hermes/scripts/); the host systemd timer + the full activation + backfill runbook is [`hermes/logbook-timer/README.md`](./hermes/logbook-timer/README.md). It exposes `LOGBOOK_CLAUDE_MODEL` (default `claude-sonnet-4-6`) + `LOGBOOK_CLAUDE_EFFORT` env hooks, and its `/status` freshness row is `cron.logbook` (registered in `@fluncle/registry` + the `fluncle-healthcheck` prober). The operator installs and activates the host timer through the linked runbook.
+`fluncle-logbook` is the on-box `--no-agent` HYBRID sweep — deterministic gap read + gather, ONE `claude -p` authoring per day, deterministic delivery — mirroring `fluncle-note`. It runs once a day at **00:40 Amsterdam** (shortly after local midnight, so the day that just ended is complete). Source: [`hermes/scripts/logbook-sweep.{sh,ts}`](./hermes/scripts/); the host systemd timer + the full activation + backfill runbook is [`hermes/logbook-timer/README.md`](./hermes/logbook-timer/README.md). It exposes `LOGBOOK_CLAUDE_MODEL` (default `claude-sonnet-5`) + `LOGBOOK_CLAUDE_EFFORT` env hooks, and its `/status` freshness row is `cron.logbook` (registered in `@fluncle/registry` + the `fluncle-healthcheck` prober). The operator installs and activates the host timer through the linked runbook.
 
 ## Run bound
 
-Process one sector-day per tick; the durable gap list drains oldest-first.
+Process up to `BATCH_CAP` (4) sector-days per tick, stopping early once the remaining 15-minute budget cannot fit the slowest recorded pass; the durable gap list drains oldest-first.
 
 ## The prompt lives in the DATABASE, not in the image
 

@@ -34,7 +34,7 @@ At 60 nodes every 10 minutes that is ~8,600 nodes/day — a seed label's neighbo
 
 ## The operator's steering wheel
 
-The crawl only ever seeds from labels whose `seed_state` is `enabled`. A label the walk DISCOVERS that nobody has ruled on enters as `undecided` and surfaces in the `/admin` attention queue — it is **not** crawled until the operator enables it. So the crawl widens only where he lets it, and the whole controls surface is one keystroke per label at `/admin/labels`. Ruling on a label stays OPERATOR tier (`update_label`); the crawl itself is agent tier.
+The crawl only ever seeds from labels whose `seed_state` is `enabled`. A label the walk DISCOVERS that nobody has ruled on enters as `undecided` and surfaces in the `/admin` attention queue — it is **not** crawled until the operator enables it. So the crawl widens only where he lets it, and the whole controls surface is one keystroke per label at `/admin/labels`. Ruling on a label stays the operator's call; the agent token may only apply a ratified ruling (`update_label`), which no sweep does, and the crawl itself is agent tier.
 
 Check on it any time:
 
