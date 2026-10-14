@@ -2097,13 +2097,29 @@ async function ensureIndexedLabel(
   }
 }
 
-async function getScopeMemo(client?: Pick<Client, "execute">): Promise<ScopeMemo> {
+async function getScopeMemo(
+  artistMbids: readonly string[],
+  labelId: null | string,
+  client?: Pick<Client, "execute">,
+): Promise<ScopeMemo> {
   const db = client ?? (await getDb());
   const result = await db.execute({
-    args: [ARTIST_RULE_MEMO_LIMIT + 1],
-    sql: `select artist_mbid, label_id, verdict from artist_rules
-          where verdict in ('allow', 'block')
-          order by id asc limit ?`,
+    args: [JSON.stringify([...new Set(artistMbids)]), ARTIST_RULE_MEMO_LIMIT + 1, labelId],
+    sql: `with relevant_rules as (
+            select artist_mbid, label_id, verdict from artist_rules
+            where artist_mbid in (select value from json_each(?))
+              and verdict in ('allow', 'block')
+            order by id asc limit ?
+          ), global_allow as (
+            select artist_mbid, label_id, verdict from artist_rules
+            where label_id is null and verdict = 'allow' limit 1
+          ), label_allow as (
+            select artist_mbid, label_id, verdict from artist_rules
+            where label_id = ? and verdict = 'allow' limit 1
+          )
+          select * from relevant_rules
+          union select * from global_allow
+          union select * from label_allow`,
   });
   const rules = typedRows<ArtistRuleMemoRow>(result.rows);
 
@@ -2375,8 +2391,15 @@ async function applyRelease(
 
   collectReleaseCandidates();
 
-  const memo = await getScopeMemo(client);
   const scope = await releaseLabelScope(mbLabelId, mbLabelName ?? labelName, client, context);
+  const memo = await getScopeMemo(
+    candidates.flatMap((candidate) => {
+      const first = candidate.creditMbids.find((mbid): mbid is string => mbid !== null);
+      return first ? [first] : [];
+    }),
+    scope.labelId,
+    client,
+  );
   const labelCanAllow = scope.labelId ? (memo.labelAllow.get(scope.labelId)?.size ?? 0) > 0 : false;
   const canAllow = scope.rulesAllowed && (memo.globalAllow.size > 0 || labelCanAllow);
   const kept: TrackCandidate[] = [];

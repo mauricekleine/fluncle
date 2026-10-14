@@ -39,6 +39,7 @@ import {
   type DatabaseRequestTransactionLease,
 } from "./database-request-scope";
 import { readEnvs, readOptionalEnv } from "./env";
+import { databaseFetch } from "./database-fetch";
 
 const DATABASE_OPERATION_METADATA = Symbol("fluncle.database-operation");
 
@@ -367,11 +368,49 @@ function instrumentTransaction(
   let settingsWritten = false;
 
   const runStatement = <Result>(
-    invalidates: boolean,
+    statements: InStatement[],
     run: () => Promise<Result>,
+    invalidates = statements.some((statement) => writesSettings(statementSql(statement))),
   ): Promise<Result> => {
     settingsWritten ||= invalidates;
-    return invalidateSettingsOnWrite(invalidates, run);
+    const accessClasses = statements.map(accessClassForStatement);
+    const accessClass = accessClasses.includes("write")
+      ? "write"
+      : accessClasses.includes("heavy-read")
+        ? "heavy-read"
+        : "read";
+    const first = statements[0];
+    const operationId =
+      statements.length === 1 && first !== undefined
+        ? operationIdForStatement(first, accessClass)
+        : normalizeDatabaseOperationId(
+            undefined,
+            statements.map((statement) => canonicalSqlShape(statementSql(statement))).join(";"),
+            accessClass,
+          );
+    return startSpan(
+      {
+        attributes: {
+          ...baseSpanAttributes(accessClass, operationId, statements.length),
+          "fluncle.transaction_statement": true,
+        },
+        name: `db.query ${operationId}`,
+        op: "db.query",
+        parentSpan: span,
+      },
+      async (statementSpan) => {
+        const statementStartedAt = Date.now();
+        let outcome: DatabaseOutcome = "success";
+        try {
+          return await invalidateSettingsOnWrite(invalidates, run);
+        } catch (error) {
+          outcome = "failure";
+          throw error;
+        } finally {
+          finishSpan(statementSpan, statementStartedAt, outcome, requestOperation);
+        }
+      },
+    );
   };
 
   const finish = (outcome: DatabaseOutcome) => {
@@ -402,9 +441,7 @@ function instrumentTransaction(
       if (property === "execute") {
         return async (statement: InStatement) => {
           try {
-            return await runStatement(writesSettings(statementSql(statement)), () =>
-              target.execute(statement),
-            );
+            return await runStatement([statement], () => target.execute(statement));
           } catch (error) {
             return fail(target, error);
           }
@@ -413,10 +450,7 @@ function instrumentTransaction(
       if (property === "batch") {
         return async (statements: InStatement[]) => {
           try {
-            return await runStatement(
-              statements.some((statement) => writesSettings(statementSql(statement))),
-              () => target.batch(statements),
-            );
+            return await runStatement(statements, () => target.batch(statements));
           } catch (error) {
             return fail(target, error);
           }
@@ -425,7 +459,11 @@ function instrumentTransaction(
       if (property === "executeMultiple") {
         return async (sql: string) => {
           try {
-            return await runStatement(/\bsettings\b/i.test(sql), () => target.executeMultiple(sql));
+            return await runStatement(
+              [sql],
+              () => target.executeMultiple(sql),
+              /\bsettings\b/i.test(sql),
+            );
           } catch (error) {
             return fail(target, error);
           }
@@ -650,6 +688,7 @@ export async function getDb() {
       createClient({
         authToken: env.TURSO_AUTH_TOKEN,
         concurrency: PRIMARY_DB_CONCURRENCY,
+        fetch: databaseFetch,
         url: env.TURSO_DATABASE_URL,
       }),
     );
@@ -674,7 +713,7 @@ export async function getTelemetryDb(): Promise<Client | undefined> {
     }
 
     return instrument(
-      createClient({ authToken, concurrency: TELEMETRY_DB_CONCURRENCY, url }),
+      createClient({ authToken, concurrency: TELEMETRY_DB_CONCURRENCY, fetch: databaseFetch, url }),
       workerTelemetryDatabaseConcurrencyGate,
     );
   });

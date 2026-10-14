@@ -300,9 +300,12 @@ describe("getFunnel (real SQL)", () => {
 
     await seedCatalogueTrack(db, { trackId: "cat-1" });
 
-    await recordCatalogueSnapshot({ day: "2026-07-16" });
-    await recordCatalogueSnapshot({ day: "2026-07-17" });
-    await recordCatalogueSnapshot({ day: "2026-07-18" });
+    const days = [2, 1, 0].map((offset) =>
+      new Date(Date.now() - offset * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    );
+    for (const day of [...days].reverse()) {
+      await recordCatalogueSnapshot({ day });
+    }
 
     const view = await getFunnel();
 
@@ -311,7 +314,7 @@ describe("getFunnel (real SQL)", () => {
     expect(view.live.meters.captureBudget).toHaveProperty("remainingTracks");
     expect(typeof view.live.meters.frontierPending).toBe("number");
 
-    expect(view.series.map((row) => row.day)).toEqual(["2026-07-16", "2026-07-17", "2026-07-18"]);
+    expect(view.series.map((row) => row.day)).toEqual(days);
   });
 
   it("caps the series to the window and walks it ASC (last N days only)", async () => {
