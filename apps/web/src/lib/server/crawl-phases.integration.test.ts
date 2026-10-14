@@ -41,7 +41,7 @@ type TransactionCounts = {
   commit: number;
   execute: number;
   maxBatchStatements: number;
-  statements: unknown[];
+  statements: InStatement[];
 };
 
 vi.mock("./db", async (importOriginal) => {
@@ -1069,6 +1069,21 @@ describe("crawl admission phases", () => {
   });
 
   it("loads one narrow label fold index per commit batch and stores release tracks", async () => {
+    await db.batch(
+      Array.from({ length: 101 }, (_, index) => ({
+        args: [
+          `scope-rule-${index}`,
+          index === 0 ? "artist-0" : `unrelated-artist-${index}`,
+          index === 0 ? "allow" : "block",
+          timestamp,
+          timestamp,
+        ],
+        sql: `insert into artist_rules
+          (id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+          values (?, ?, 'Scope artist', ?, 'operator', ?, ?)`,
+      })),
+      "write",
+    );
     await db.execute({
       args: [timestamp, timestamp],
       sql: `insert into crawl_frontier
@@ -1138,6 +1153,50 @@ describe("crawl admission phases", () => {
         /select artist_mbid, label_id, verdict from artist_rules/.test(sql),
       ),
     ).toHaveLength(2);
+    const ruleReads = instrumented.counts.statements.filter((statement) =>
+      /select artist_mbid, label_id, verdict from artist_rules/.test(executedSql(statement)),
+    );
+    for (const statement of ruleReads) {
+      const result = await db.execute(statement);
+      expect(result.rows.map((row) => row.artist_mbid)).toEqual(["artist-0"]);
+    }
+  });
+
+  it("preserves disabled-label block accounting when another artist has an allow", async () => {
+    await db.execute("update labels set seed_state = 'undecided'");
+    await db.batch([
+      {
+        args: [timestamp, timestamp],
+        sql: `insert into artist_rules
+          (id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+          values ('relevant-block', 'artist-0', 'Artist 0', 'block', 'operator', ?, ?)`,
+      },
+      {
+        args: [timestamp, timestamp],
+        sql: `insert into artist_rules
+          (id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+          values ('unrelated-allow', 'unrelated-artist', 'Other artist', 'allow', 'operator', ?, ?)`,
+      },
+    ]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify(
+              providerBatchRelease("release-phase", {
+                id: "label-phase-mbid",
+                name: "Phase Label",
+              }),
+            ),
+          ),
+      ),
+    );
+    const receipt = await commitCrawlPhase(await prepareAndFetch());
+    expect(receipt).toMatchObject({
+      outcome: "committed",
+      result: { tracksSkippedArtistRule: 1, tracksSkippedLabelGate: 0, tracksWritten: 0 },
+    });
   });
 
   it("retries a failed label index load on the next item of the same batch", async () => {
