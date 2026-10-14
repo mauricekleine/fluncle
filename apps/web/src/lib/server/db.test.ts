@@ -416,7 +416,7 @@ describe("request transaction admission", () => {
             outer.close();
             expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(4);
             await db.batch(["select 1"], "read");
-            expect(spanAttributes[2]?.["fluncle.queue_wait_ms"]).toBe(0);
+            expect(spanAttributes.at(-1)?.["fluncle.queue_wait_ms"]).toBe(0);
             expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(4);
             inner.close();
             inner.close();
@@ -1405,4 +1405,31 @@ describe("getDb transient-gateway retry", () => {
     expect(await rejectionAfterTimers(db.execute("select 1"))).toBe(error);
     expect(execute).toHaveBeenCalledTimes(1);
   });
+});
+
+it("attributes transaction statements to redacted operation children without acquiring another seat", async () => {
+  const statement = "select 'private-row-value'";
+  const result = { rows: [{ value: "private-row-value" }] };
+  const transactionExecute = vi.fn(async () => result);
+  transaction.mockResolvedValue({
+    close: vi.fn(),
+    closed: false,
+    execute: transactionExecute,
+  });
+  const db = await getDb();
+  const tx = await db.transaction("write");
+  try {
+    expect(await tx.execute(statement)).toBe(result);
+    expect(transactionExecute).toHaveBeenCalledWith(statement);
+    expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(1);
+    expect(spanContexts[1]).toMatchObject({
+      attributes: { "fluncle.transaction_statement": true },
+      op: "db.query",
+    });
+    expect(spanContexts[1]?.attributes?.["fluncle.operation_id"]).toMatch(/^db\.read\./);
+    expect(JSON.stringify({ spanAttributes, spanContexts })).not.toContain("private-row-value");
+  } finally {
+    tx.close();
+  }
+  expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
 });
