@@ -172,7 +172,7 @@ So the API is mostly clean REST (method = verb, path = resource), with a recurri
 
 ### 1.3 MCP / WebMCP tools
 
-`SHARED_TOOL_SPECS` is the canonical tool inventory. Read its `transports` values or `tools/registry.test.ts` for the per-surface sets. The archive operations are `list_findings`, `list_tracks`, and `search_archive`.
+`SHARED_TOOL_SPECS` is the canonical tool inventory; the one tool outside it is `search_tracks`, hand-written in `mcpOnlyTools` (`apps/web/src/lib/server/mcp.ts`) and `webmcpOnlyTools` (`apps/web/src/lib/webmcp.ts`) and held in step by `mcp-webmcp-parity.test.ts`. Read its `transports` values or `tools/registry.test.ts` for the per-surface sets. The archive operations are `list_findings`, `list_tracks`, and `search_archive`.
 
 Beyond tools, the server MCP also serves **resources** (the archive as a corpus — `fluncle://finding/<logId>`, `fluncle://mixtape/<logId>`) and Fluncle-voiced **prompts** (`recommend_finding`, `walk_recent_night`, `decode_coordinate`), named `verb_noun` like the tools. Both are server-MCP only: `navigator.modelContext` has no resource/prompt primitive, so the browser WebMCP surface mirrors the tool set alone.
 

@@ -186,7 +186,7 @@ Everything is overridable via the environment; the defaults are the canonical de
 | `SONARFRESHEN_SERVICE`              | `sonar`                    | The systemd unit to restart.                                                                             |
 | `SONARFRESHEN_APP_BIN`              | `/opt/sonar/sonar`         | The binary to swap.                                                                                      |
 | `SONARFRESHEN_SERVICE_ENV`          | `/etc/sonar.env`           | Read-only source of local-state paths, replica open credentials, search secret, and live port/TLS shape. |
-| `SONARFRESHEN_BOOT_TIMEOUT_SECS`    | `180`                      | How long an index load may take, pre-smoke and post-swap alike.                                          |
+| `SONARFRESHEN_BOOT_TIMEOUT_SECS`    | `1200`                     | How long an index load may take, pre-smoke and post-swap alike.                                          |
 | `SONARFRESHEN_WORKER_URL`           | `https://www.fluncle.com`  | Where the `/status` health post goes.                                                                    |
 
 Operator env file (`/etc/fluncle/sonar-freshen.env`, optional, `0600`, kept out of the repo): `DISCORD_ALERT_WEBHOOK`, `FLUNCLE_API_TOKEN`.

@@ -30,7 +30,7 @@ systemctl list-timers fluncle-logbook.timer
 
 ### The `claude -p` token
 
-The `--no-agent` runner withholds provider credentials, so `claude -p`'s subscription token reaches the sweep only via a 0600 operator-placed file (the same file `fluncle-note` uses): `${HOME}/.fluncle-secrets.env` (mounted `~/.hermes`) holding `CLAUDE_CODE_OAUTH_TOKEN` (required) plus optionally `DISCORD_ALERT_WEBHOOK`, `LOGBOOK_CLAUDE_MODEL` (default `claude-sonnet-4-6`), and `LOGBOOK_CLAUDE_EFFORT`. Written from the configured 1Password item (see the ops runbook note). If it is missing, the sweep leaves the gap list untouched and pings Discord on an auth signature.
+The `--no-agent` runner withholds provider credentials, so `claude -p`'s subscription token reaches the sweep only via a 0600 operator-placed file (the same file `fluncle-note` uses): `${HOME}/.fluncle-secrets.env` (mounted `~/.hermes`) holding `CLAUDE_CODE_OAUTH_TOKEN` (required) plus optionally `DISCORD_ALERT_WEBHOOK`, `LOGBOOK_CLAUDE_MODEL` (default `claude-sonnet-5`), and `LOGBOOK_CLAUDE_EFFORT`. Written from the configured 1Password item (see the ops runbook note). If it is missing, the sweep leaves the gap list untouched and pings Discord on an auth signature.
 
 ## Backfill — the first runs
 

@@ -12,7 +12,7 @@ The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (sour
 
 The fill happens IN THE WORKER (`backfill_artist_edges`, agent tier) and this driver only paces it — the `fluncle-recording-mbids` shape, verbatim. It makes **no vendor call** (pure DB matching), so there is no rate limit and no circuit breaker; the only durable state is the per-row `tracks.artist_edges_backfilled_at` stamp the Worker writes on EVERY visited track (matched, partial, or zero-match), so the worklist drains to empty and a re-run is a cheap no-op. A reboot mid-worklist costs nothing.
 
-- `FLUNCLE_ARTIST_EDGES_LIMIT` (default `200`) — tracks visited per tick. The default is pinned to the Worker's `MAX_BATCH` (200), so the CLI's internal cursor loop meets its cap on a full first page and fires **exactly one HTTP request per tick**. A larger value just loops the cursor a few more times.
+- `FLUNCLE_ARTIST_EDGES_LIMIT` (default `100`) — tracks visited per tick. The CLI's shared `--limit` validator refuses anything above 100, and 100 sits below the Worker's `MAX_BATCH` (200), so the CLI's internal cursor loop meets its cap on a full first page and fires **exactly one HTTP request per tick**.
 
 Check on it any time:
 

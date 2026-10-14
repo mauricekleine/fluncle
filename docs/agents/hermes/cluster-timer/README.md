@@ -31,7 +31,7 @@ A full k-means fit is an operator act — a warm-started full re-fit can relocat
 # assigns every finding, then STOP: the operator names the map (Slice 3) before it goes public.
 docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/cluster-sweep.sh --cold-start
 
-# REMINT (a deliberate full redraw: retire every id, refit fresh k=9, re-queue naming).
+# REMINT (a deliberate full redraw: retire every id, refit fresh k=4, re-queue naming).
 # Reserved for an embed-model change or a corpus shift too large for splits.
 docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/cluster-sweep.sh --remint
 ```
@@ -48,10 +48,10 @@ sudo install -m 0644 docs/agents/hermes/cluster-timer/fluncle-cluster.timer   /e
 sudo systemctl daemon-reload
 sudo systemctl enable --now fluncle-cluster.timer
 
-# The cold-start pilot BEFORE arming the timer (de-risks the most, per the RFC): run the k=9
+# The cold-start pilot BEFORE arming the timer (de-risks the most, per the RFC): run the k=4
 # fit by hand, eyeball the silhouette evidence with the operator, then name the map (Slice 3).
 docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/cluster-sweep.sh --cold-start
-journalctl -u fluncle-cluster.service -n 40 --no-pager  # expect a { "ok": true, "minted": 9, … } line
+journalctl -u fluncle-cluster.service -n 40 --no-pager  # expect a { "ok": true, "minted": 4, … } line
 systemctl list-timers fluncle-cluster.timer
 ```
 

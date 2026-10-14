@@ -23,7 +23,7 @@ sudo systemctl daemon-reload
 
 # Pre-flight: a dry run against a couple of real slugs (voice gate only, nothing stored).
 docker exec -u hermes -e HOME=/opt/data/home hermes \
-  bash /opt/hermes-scripts/entity-bio-sweep.ts --kind label --dry-run <slug-a> <slug-b>
+  bun /opt/hermes-scripts/entity-bio-sweep.ts --kind label --dry-run <slug-a> <slug-b>
 
 # One real tick, then enable.
 sudo systemctl start fluncle-label-bio.service            # one tick now

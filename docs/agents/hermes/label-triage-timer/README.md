@@ -17,9 +17,9 @@ The split is the whole design. **Every agent-bearing cron in this repo has had a
 ## What it cannot do
 
 - **The model holds no Fluncle credential and cannot reach the sweep secrets file.** Its process gets an allowlisted environment (the Claude token, the Discogs token, the Firecrawl key, `PATH`, locale) and its own `HOME`, the batch's temporary directory. It runs `--restricted --strict-mcp-config --permission-mode dontAsk`: user, project and local Claude settings are ignored, bypass mode is refused, the file tools (`Read`, `Glob`, `Grep`) are confined to the batch directory and the skill, and Bash is denied except `fluncle admin labels evidence …`, the one fetcher. Chained commands and command substitution around it are denied too. With an MBID argument that command reads MusicBrainz, Discogs, Beatport and Apple and never calls the Fluncle API. A live probe against a planted secrets file confirmed all of this; without `--restricted`, a bypass-mode user setting overrode `--allowedTools` and the file was read.
-- **The script can only record.** Recording is `record_label_triage` → `fluncle admin labels triage` — **agent tier**. It stamps the cursor and stores a proposal. RULING on a label (`update_label`) and writing artist rules (`replace_label_artist_rules`, `rule_artist`) are **operator tier** and 403 the box's agent token at `operatorGuard`, pinned by `orpc-auth-coverage`.
+- **The script can only record.** Recording is `record_label_triage` → `fluncle admin labels triage` — **agent tier**. It stamps the cursor and stores a proposal. Applying a ratified ruling (`update_label`, `replace_label_artist_rules`) accepts the agent token so a ratified round can be applied mechanically ([hermes-agent.md](../../hermes-agent.md)), but this script never calls either; global artist rules (`add_artist_rule`, `update_artist_rule`) are **operator tier** and 403 the box's agent token at `operatorGuard`, pinned by `orpc-auth-coverage`.
 
-So nothing this sweep does can enable a label, disable one, or write an artist rule, however wrong a batch goes.
+So nothing this sweep does can enable a label, disable one, or write an artist rule, however wrong a batch goes: its only write is `fluncle admin labels triage`.
 
 ## No silent failure
 

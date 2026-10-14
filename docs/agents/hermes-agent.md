@@ -34,11 +34,12 @@ The dividing line: _could a stranger see the result, or could it not be taken ba
 | `newsletter send`                                                                                                                 | operator | Publish-class: sends the Resend broadcast to the real list             |
 | `recordings promote`, `mixtapes update/distribute/resync`                                                                         | operator | Publishes or mutates the spine; minting uses `promote`.                |
 | `submissions approve/reject`                                                                                                      | operator | Editorial decision; approve can publish                                |
-| `auth *`, `backfill *`                                                                                                            | operator | Credentials / bulk mutation                                            |
+| `auth *`, `backfills previews`                                                                                                    | operator | Credentials / durable archive write                                    |
+| `backfills *` (every other leg)                                                                                                   | agent    | Internal + reversible enrichment; none publishes                       |
 
 **Box-supplied evidence is agent-tier input, not agent-tier authority.** Several vendors — Deezer, Discogs, and MusicBrainz for the catalogue crawl — rate-limit or block per SOURCE IP, and a Cloudflare Worker's egress address is shared with strangers. So the box makes those vendor calls from its own address and hands the response to the Worker, which verifies and writes. The pattern holds the same line in every case: the box supplies bytes, never a verdict. The Worker pins what may be asked for (the crawl's prepare issues the exact MusicBrainz url a claim allows, host pinned), parses a supplied body with the same parser its own fetch feeds, and applies the same gate — the anchor's match gate, the crawl's label rulings and artist rules — before anything is stored. See [docs/catalogue-crawler.md](../catalogue-crawler.md) for the crawl's version and the residual risk it accepts.
 
-Enforcement is at the route: agent-allowed routes call `requireAdmin` (any principal); publish-/irreversible-class routes call `requireOperator` (403s the agent). The two conditional commands (`track update`, `track draft`) authenticate with `requireAdmin`, then branch on `adminRole` to reject an operator-only field/platform. The CLI on the box runs ungated — an agent-role attempt at an operator route is refused server-side with a 403.
+Enforcement is on the oRPC procedure, from the middlewares in `apps/web/src/lib/server/orpc-auth.ts`: agent-allowed ops use `adminAuth` (any principal); publish-/irreversible-class ops add `.use(operatorGuard)` (403s the agent). The two conditional commands (`track update`, `track draft`) authenticate with `adminAuth`, then branch on `context.role` to reject an operator-only field/platform. The handful of REST file-routes outside oRPC (under `apps/web/src/routes/api/admin/`) use the older `requireAdmin` / `requireOperator` guards from `apps/web/src/lib/server/env.ts`. The CLI on the box runs ungated — an agent-role attempt at an operator route is refused server-side with a 403.
 
 ## Where it runs
 
@@ -63,7 +64,7 @@ docker build -f docs/agents/hermes/Dockerfile -t fluncle-hermes:v2026.7.7.2 .
 
 ## Changing what the agent may do
 
-The allow-list lives in one place — the Worker. To move a command across the operator/agent line, change its route guard in `apps/web/src/lib/server/env.ts` consumers: `requireOperator` for operator-only, `requireAdmin` for agent-allowed, or an `adminRole` branch for a field/platform-level split (see the [Roles](#roles-operator-vs-agent) table). It goes through git review and ships with the next Worker deploy; no box rebuild, no second list to keep in sync.
+The allow-list lives in one place — the Worker. To move a command across the operator/agent line, change its procedure's middleware in `apps/web/src/lib/server/orpc/`: `.use(operatorGuard)` for operator-only, `adminAuth` alone for agent-allowed, or a `context.role` branch for a field/platform-level split, and update its tier in `orpc-auth-coverage.test.ts` (see the [Roles](#roles-operator-vs-agent) table). It goes through git review and ships with the next Worker deploy; no box rebuild, no second list to keep in sync.
 
 ## Secrets
 

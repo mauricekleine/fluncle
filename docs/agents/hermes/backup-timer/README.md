@@ -17,7 +17,7 @@ Dumps the prod DB over the libSQL HTTP pipeline → gzip → an S3-direct PUT to
 bun docs/agents/hermes/scripts/backup-sweep.ts --out <dir>   # dump + gzip + manifest, no R2
 ```
 
-**The dump STREAMS, and must keep streaming.** Until 2026-07-26 the sweep built the whole dump as one JavaScript string, then `Buffer.from`'d it, then `gzipSync`'d it — three simultaneous full copies of the payload, and a JS string is UTF-16, so the 323 MB dump of 2026-07-23 wanted ≈650 MB for the string alone. The container is capped at 4 GiB with no swap: the sweep was OOM-killed on three consecutive nights (2026-07-24/25/26, `status=137`, `oom-kill:constraint=CONSTRAINT_MEMCG`), the last good backup was 2026-07-23, and nothing about that shape self-heals — it worsens as the archive grows.
+**The dump STREAMS, and must keep streaming.** Until 2026-07-26 the sweep built the whole dump as one JavaScript string, then `Buffer.from`'d it, then `gzipSync`'d it — three simultaneous full copies of the payload, and a JS string is UTF-16, so the 323 MB dump of 2026-07-23 wanted ≈650 MB for the string alone. The container was capped at 4 GiB with no swap: the sweep was OOM-killed on three consecutive nights (2026-07-24/25/26, `status=137`, `oom-kill:constraint=CONSTRAINT_MEMCG`), the last good backup was 2026-07-23, and nothing about that shape self-heals — it worsens as the archive grows.
 
 Now rows are paged out of libSQL a batch at a time (`FLUNCLE_BACKUP_ROW_BATCH`, default 1,000), rendered straight into a gzip stream, and the gzip lands in a temp FILE that is uploaded by streaming it back off disk (signed with a SHA-256 computed the same way). **Measured: peak RSS is flat at ~130 MB from a 48 MB dump to a 1.9 GB dump** — bounded by the page size, not the database size. The unit tests hold that line; keep the shape (never join the dump, never `Buffer.from` it, never read the artifact back with `readFileSync`).
 
@@ -51,8 +51,6 @@ A real restore is the drill with `--keep`: the kept file is a complete SQLite da
 - `cron/output/` — the run markers `/status` judges every cron by
 - the cron user's `.render-conductor/` (`box-id` + the poison ledger), `.healthcheck/` (the transition memory, so a restore doesn't re-baseline every service), and `.entity-bio-sweep/` (the per-entity authoring budgets)
 - the hand-placed `0600` `*.env` files in the data dir and the cron user's home — the shared sweep secrets file among them — discovered rather than named, so a new one is covered the night it appears
-
-`BOX_STATE_INCLUDES` also names `state.db` (+ `-wal`/`-shm`), `config.yaml`, and `memories/` at the data root, with `state.db` and `memories/` marked required. No process in the current image writes them: they are archived where an older runtime left them on the mount, and a `/opt/data` that lacks them fails the drill's load-bearing check until that list is trimmed.
 
 **What it deliberately leaves** — this is the difference between a few-MB nightly and a 5 GB one:
 
@@ -132,7 +130,7 @@ What it proves, in order, exiting non-zero (loudly) on any of them:
 2. the artifact opens with the key, and the decrypted archive's size + SHA-256 match what the producer recorded;
 3. **tamper-detection is real** — a byte is flipped in a COPY of the ciphertext and the open MUST fail. GCM's whole job here is that a corrupted artifact refuses to open instead of unpacking garbage over live state, so a decrypt that succeeded anyway is a drill failure;
 4. every manifest entry is present after unpacking, at its recorded size, in the recorded count;
-5. the LOAD-BEARING set is there — every `required` entry (the cron markers, the render conductor's directory **including its `box-id`**, and the legacy entries noted above) and at least one `0600` env file. That expectation is read from `BOX_STATE_INCLUDES` in [`../scripts/box-state-snapshot.ts`](../scripts/box-state-snapshot.ts), the same declaration the sweep archives from, so the drill cannot drift from the producer.
+5. the LOAD-BEARING set is there — every `required` entry (the cron markers, the render conductor's directory **including its `box-id`**) and at least one `0600` env file. That expectation is read from `BOX_STATE_INCLUDES` in [`../scripts/box-state-snapshot.ts`](../scripts/box-state-snapshot.ts), the same declaration the sweep archives from, so the drill cannot drift from the producer.
 
 The drill is **read-only against storage**: LIST and GET only, no PUT and no DELETE anywhere in the file, so it can never overwrite or prune a backup object. It never restores over the live data dir either — it unpacks only into a temp dir it creates and removes. Its output is paths, sizes and counts; never a key, never a decrypted byte. The one exception is the one you ask for: `--keep <dir>` copies the unpacked tree out for inspection, **credentials included**, into a fresh `0700` directory (it refuses a non-empty target) — delete it when you are done.
 

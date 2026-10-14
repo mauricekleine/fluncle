@@ -37,7 +37,7 @@ Every yt-dlp invocation receives its sticky proxy through `--config-locations`: 
 
 **Fencing boundary.** Database admission contains the queue, prepare, reconcile, and commit child processes; the host heartbeat/watchdog stops further local work after lease loss. Capture HTTP requests do not carry the admission lease coordinates, so an already-issued Worker request may still finish after that local lease is lost. Safety across that interval comes from the operation receipt and the commit transaction's current-snapshot checks: an ambiguous response is reconciled before replay, and changed capture status, rejection memory, provenance, or eligibility rejects the older result. This is not a claim of fleet-wide transaction fencing.
 
-`yt-dlp` is **baked PINNED** (`2026.07.04`) at `/opt/hermes-scripts/yt-dlp` — an early Dockerfile layer above the frequently-bumped pins, on the sweep's PATH — and `ffprobe` (ffmpeg) is in the image. Both ride the image, so a rebuilt box has them already. Freshen `yt-dlp` when YouTube's bot-walls move by bumping the pin in the Dockerfile (a repo change that auto-deploys on the next pin-watch rebuild) — no hand-copied persistent-volume binary.
+`yt-dlp` is **baked PINNED** (the release named in the Dockerfile's `yt-dlp` layer) at `/opt/hermes-scripts/yt-dlp` — an early Dockerfile layer above the frequently-bumped pins, on the sweep's PATH — and `ffprobe` (ffmpeg) is in the image. Both ride the image, so a rebuilt box has them already. Freshen `yt-dlp` when YouTube's bot-walls move by bumping the pin in the Dockerfile (a repo change that auto-deploys on the next pin-watch rebuild) — no hand-copied persistent-volume binary.
 
 ## Coordinated phased-admission rollout
 
