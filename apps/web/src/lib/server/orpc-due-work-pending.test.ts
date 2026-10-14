@@ -41,7 +41,9 @@ vi.mock("./track-work", async (importOriginal) => {
       trackWorkPage === "real" ? actual.countTrackWork(...args) : Promise.resolve(4_812),
     listTrackWork: (...args: Parameters<typeof actual.listTrackWork>) =>
       trackWorkPage === "pending"
-        ? Promise.reject(new DueWorkMaintenancePendingError("embed-catalogue"))
+        ? Promise.reject(
+            new DueWorkMaintenancePendingError("embed-catalogue", "source_repair_empty_page"),
+          )
         : trackWorkPage === "served"
           ? Promise.resolve([])
           : actual.listTrackWork(...args),
@@ -80,6 +82,7 @@ describe("the worklist count answers under debt while the page stays withheld", 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toMatchObject({
       debtPending: true,
+      dueWork: { branch: "source_repair_empty_page", workKind: "embed-catalogue" },
       ok: true,
       queued: 4_812,
       tracks: [],
@@ -95,6 +98,7 @@ describe("the worklist count answers under debt while the page stays withheld", 
     expect(response?.status).toBe(503);
     expect(await readJson(response)).toMatchObject({
       code: "due_work_maintenance_pending",
+      dueWork: { branch: "source_repair_empty_page", workKind: "embed-catalogue" },
       ok: false,
     });
   });

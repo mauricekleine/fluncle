@@ -37,13 +37,18 @@ export function dueWorkCatalogueRankMarkerMaterialRevision(
 }
 
 export class DueWorkMaintenancePendingError extends Error {
-  constructor(workKind: string) {
+  constructor(
+    readonly workKind: string,
+    readonly branch: import("@fluncle/contracts").DueWorkPendingDetails["branch"] = "repair",
+  ) {
     super(`due-work maintenance is still converging for ${workKind}`);
     this.name = "DueWorkMaintenancePendingError";
   }
 }
 
-export function isDueWorkMaintenancePending(error: unknown): boolean {
+export function isDueWorkMaintenancePending(
+  error: unknown,
+): error is DueWorkMaintenancePendingError {
   return error instanceof DueWorkMaintenancePendingError;
 }
 
@@ -1017,7 +1022,7 @@ export async function claimDueWork<WorkKind extends string>(
     claimed.length === 0 &&
     (await hasDueScheduledWork(client, workKind, { now: () => new Date(now) }))
   ) {
-    throw new DueWorkMaintenancePendingError(workKind);
+    throw new DueWorkMaintenancePendingError(workKind, "scheduled_promotion");
   }
 
   return {

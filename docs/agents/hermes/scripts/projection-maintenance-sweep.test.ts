@@ -118,7 +118,7 @@ describe("the stale-definition re-projection the repair path carries", () => {
 
   test("advances a due-work family with zero repair debt when its rebuild is incomplete", () => {
     const calls: string[][] = [];
-    const summary = runProjectionMaintenanceTick((args) => {
+    const summary = runTick((args) => {
       calls.push(args);
       if (args[2] === "get") {
         return status({ trackDueWork: true }, { track: family({ rebuild: { complete: false } }) });
@@ -130,7 +130,12 @@ describe("the stale-definition re-projection the repair path carries", () => {
       };
     });
 
-    expect(calls.some((args) => args.includes("advance"))).toBe(true);
+    expect(
+      calls[1]?.slice(calls[1].indexOf("--max-steps"), calls[1].indexOf("--max-steps") + 2),
+    ).toEqual(["--max-steps", "100"]);
+    expect(
+      calls[1]?.slice(calls[1].indexOf("--wall-ms"), calls[1].indexOf("--wall-ms") + 2),
+    ).toEqual(["--wall-ms", "30000"]);
     expect(summary.trackDueWork).toMatchObject({
       attempted: true,
       complete: false,

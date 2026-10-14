@@ -638,6 +638,7 @@ export function adminTracksHandlers(os: Implementer) {
       const debtAware = counting && input.debtAware === "true";
       let tracks: Awaited<ReturnType<typeof listTrackWork>> = [];
       let debtPending = false;
+      let dueWork: import("@fluncle/contracts").DueWorkPendingDetails | undefined;
       try {
         tracks = await listTrackWork({
           captureState,
@@ -651,6 +652,7 @@ export function adminTracksHandlers(os: Implementer) {
           throw error;
         }
         debtPending = true;
+        dueWork = { branch: error.branch, workKind: error.workKind };
       }
 
       const queued = counting
@@ -673,6 +675,7 @@ export function adminTracksHandlers(os: Implementer) {
             ? { closedReason: captureState.closedReason, open: false as const }
             : undefined,
         debtPending: debtAware ? debtPending : undefined,
+        dueWork,
         ok: true,
         oldestQueuedCaptureOver24h,
         queued,

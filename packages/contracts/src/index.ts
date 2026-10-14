@@ -102,7 +102,30 @@ export type { ClipDTO, RecordingDTO, RecordingTracklistItem };
 
 export type Ok<T> = { ok: true } & T;
 
+export type DueWorkPendingDetails = {
+  branch:
+    | "repair"
+    | "source_repair"
+    | "physical_repair"
+    | "catalogue_rank_rebuild"
+    | "scheduled_promotion"
+    | "source_repair_empty_page"
+    | "catalogue_rank_state"
+    | "crawl_source_repair"
+    | "crawl_physical_repair";
+  workKind: string;
+};
+
+export type TrackRepairMetrics = {
+  catalogueRankRowsScanned: number;
+  physicalRowsScanned: Record<string, number>;
+  sourceMarkersCleared: number;
+  sourceMarkersDeferred: number;
+  sourceMarkersScanned: number;
+};
+
 export type ApiFailure = {
+  dueWork?: DueWorkPendingDetails;
   ok: false;
   code: string;
   message: string;

@@ -88,6 +88,27 @@ describe("API Promise boundary", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
+  test("preserves due-work branch attribution through the API failure and JSON output", async () => {
+    const dueWork = { branch: "scheduled_promotion", workKind: "finding.context" };
+    fetchSpy.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: "due_work_maintenance_pending",
+          dueWork,
+          message: "Due-work maintenance is still converging",
+          ok: false,
+        }),
+        { status: 503 },
+      ),
+    );
+    const failure = await publicApiPost("/submit").catch((error: unknown) => error);
+    expect(toJsonFailure(failure)).toMatchObject({
+      code: "due_work_maintenance_pending",
+      dueWork,
+      ok: false,
+    });
+  });
+
   test.each([new Error("ECONNRESET"), "connection lost"])(
     "rejects with the original transport failure %s",
     async (failure) => {

@@ -75,6 +75,7 @@ describe("apiFault — the oRPC catch converter", () => {
     expect(fault.data).toEqual({
       apiCode: "due_work_maintenance_pending",
       apiMessage: "Due-work maintenance is still converging",
+      dueWork: { branch: "repair", workKind: "catalogue-rank" },
     });
     expect(errSpy).not.toHaveBeenCalled();
     expect(sentrySpy).not.toHaveBeenCalled();

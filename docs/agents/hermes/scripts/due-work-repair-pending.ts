@@ -20,6 +20,23 @@ export function isDueWorkRepairPending(error: unknown): error is DueWorkRepairPe
   return error instanceof DueWorkRepairPendingError;
 }
 
+function reportRepairPending(payload: Record<string, unknown> | undefined): void {
+  const dueWork = payload?.dueWork;
+  if (typeof dueWork !== "object" || dueWork === null) {
+    return;
+  }
+  const { branch, workKind } = dueWork as Record<string, unknown>;
+  if (
+    typeof branch !== "string" ||
+    typeof workKind !== "string" ||
+    !/^[a-z_]{1,64}$/.test(branch) ||
+    !/^[a-z][a-z.-]{0,63}$/.test(workKind)
+  ) {
+    return;
+  }
+  console.error(JSON.stringify({ branch, event: "due_work.repair_pending", workKind }));
+}
+
 function jsonObject(text: string): Record<string, unknown> | undefined {
   try {
     const parsed: unknown = JSON.parse(text);
@@ -56,6 +73,7 @@ export async function failureBodyUnlessRepairPending(
   const body = await response.text();
 
   if (isDueWorkMaintenancePendingResponse(response.status, body)) {
+    reportRepairPending(jsonObject(body));
     throw new DueWorkRepairPendingError(operation);
   }
 
@@ -66,12 +84,14 @@ export function throwIfPageRepairPending(operation: string, payload: unknown): v
   const page = jsonObject(typeof payload === "string" ? payload : JSON.stringify(payload));
 
   if (page?.debtPending === true) {
+    reportRepairPending(page);
     throw new DueWorkRepairPendingError(operation);
   }
 }
 
 export function throwIfCliRepairPending(operation: string, exitCode: number, stdout: string): void {
   if (isDueWorkMaintenancePendingCliFailure(exitCode, stdout)) {
+    reportRepairPending(jsonObject(stdout));
     throw new DueWorkRepairPendingError(operation);
   }
 }

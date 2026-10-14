@@ -62,6 +62,9 @@ function parseCatalogueRankCorpusCheck(value: unknown): CatalogueRankCorpusCheck
 export type DueWorkSourceRepairResult = DueWorkRepairResult & {
   expanded: number;
   rankRebuildScanned: number;
+  sourceMarkersCleared: number;
+  sourceMarkersDeferred: number;
+  sourceMarkersScanned: number;
 };
 
 async function readEntitySlugs(
@@ -483,6 +486,9 @@ export async function fanOutDueWorkSourceRepairs(
     rankRebuildScanned: rankResult?.scanned ?? 0,
     repaired: expanded,
     scanned: page.items.length + (rankMarker === undefined ? 0 : 1),
+    sourceMarkersCleared: cleared,
+    sourceMarkersDeferred: regularDeferred,
+    sourceMarkersScanned: regular.length,
   };
 }
 
@@ -620,7 +626,15 @@ export async function drainDueWorkBeforeRead(
     physical = await drainPhysicalChunk();
   }
 
-  return { physicalConverged: repairConverged(physical), sourceConverged };
+  const physicalConverged = repairConverged(physical);
+  const pendingBranch = !repairConverged(source)
+    ? "source_repair"
+    : rank !== undefined && !rank.complete
+      ? "catalogue_rank_rebuild"
+      : !physicalConverged
+        ? "physical_repair"
+        : undefined;
+  return { pendingBranch, physicalConverged, sourceConverged };
 }
 
 export async function repairDueWorkBeforeRead(
@@ -630,6 +644,6 @@ export async function repairDueWorkBeforeRead(
 ): Promise<void> {
   const outcome = await drainDueWorkBeforeRead(client, workKind, options);
   if (!outcome.sourceConverged || !outcome.physicalConverged) {
-    throw new DueWorkMaintenancePendingError(workKind);
+    throw new DueWorkMaintenancePendingError(workKind, outcome.pendingBranch);
   }
 }

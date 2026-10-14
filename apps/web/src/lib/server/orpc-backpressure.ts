@@ -11,7 +11,7 @@ export const dueWorkMaintenancePendingMiddleware = implement(contract)
       return await next();
     } catch (error) {
       if (isDueWorkMaintenancePending(error)) {
-        throw dueWorkMaintenancePendingFault();
+        throw dueWorkMaintenancePendingFault(error);
       }
 
       throw error;

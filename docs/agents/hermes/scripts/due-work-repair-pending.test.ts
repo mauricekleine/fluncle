@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, spyOn } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -101,6 +101,38 @@ describe("CLI recognition", () => {
     } catch (error) {
       expect(isDueWorkRepairPending(error)).toBe(true);
       expect(isDueWorkRepairPending(new Error("other"))).toBe(false);
+    }
+  });
+});
+
+describe("repair branch attribution", () => {
+  test("HTTP, CLI and debt-aware pauses emit only work-kind and branch journal evidence", async () => {
+    const dueWork = { branch: "source_repair_empty_page", workKind: "embed-catalogue" };
+    const body = JSON.stringify({ code: "due_work_maintenance_pending", dueWork, ok: false });
+    const log = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const error = await failureBodyUnlessRepairPending(
+        new Response(body, { status: 503 }),
+        "queue",
+      ).catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(DueWorkRepairPendingError);
+      expect(() => throwIfCliRepairPending("queue", 1, body)).toThrow(DueWorkRepairPendingError);
+      expect(() => throwIfPageRepairPending("queue", { debtPending: true, dueWork })).toThrow(
+        DueWorkRepairPendingError,
+      );
+      expect(log.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual(
+        Array.from({ length: 3 }, () => ({ ...dueWork, event: "due_work.repair_pending" })),
+      );
+      log.mockClear();
+      expect(() =>
+        throwIfPageRepairPending("queue", {
+          debtPending: true,
+          dueWork: { branch: "source_repair", workKind: "subject/private-id" },
+        }),
+      ).toThrow(DueWorkRepairPendingError);
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
     }
   });
 });

@@ -106,6 +106,7 @@ class ApiTransportError extends Data.TaggedError("ApiTransportError")<{
 }> {}
 
 class ApiResponseError extends Data.TaggedError("ApiResponseError")<{
+  dueWork?: import("@fluncle/contracts").DueWorkPendingDetails;
   code: string;
   message: string;
 }> {}
@@ -134,6 +135,7 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
 
         return yield* new ApiResponseError({
           code: failure?.code ?? `http_${response.status}`,
+          dueWork: failure?.dueWork,
           message: failure?.message ?? `${response.status} ${response.statusText}`,
         });
       }
@@ -141,7 +143,9 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
       return data as T;
     }).pipe(
       Effect.mapError((error) =>
-        error._tag === "ApiTransportError" ? error.cause : new CliError(error.code, error.message),
+        error._tag === "ApiTransportError"
+          ? error.cause
+          : new CliError(error.code, error.message, error.dueWork),
       ),
     ),
   );

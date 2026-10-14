@@ -819,6 +819,7 @@ export const listTrackWork = oc
         .optional(),
 
       debtPending: z.boolean().optional(),
+      dueWork: z.object({ branch: z.string(), workKind: z.string() }).optional(),
       ok: z.literal(true),
       oldestQueuedCaptureOver24h: z.boolean().optional(),
 

@@ -856,7 +856,7 @@ async function readRankStateForCandidates(
   }
   const state = parseCatalogueRankState(await getSetting(CATALOGUE_RANK_STATE_KEY));
   if (state === undefined) {
-    throw new DueWorkMaintenancePendingError("catalogue-rank-state");
+    throw new DueWorkMaintenancePendingError("catalogue-rank-state", "catalogue_rank_state");
   }
   return state;
 }

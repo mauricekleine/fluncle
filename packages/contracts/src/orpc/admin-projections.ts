@@ -125,13 +125,20 @@ export const advanceProjection = oc
       complete: z.boolean(),
       ok: z.literal(true),
       processed: CountSchema,
-
       rebuildRowsWalked: CountSchema.optional(),
       rebuildStaleFamilies: CountSchema.optional(),
       scheduled: CountSchema,
       status: ProjectionStatusSchema.optional(),
       target: ProjectionTargetSchema,
-
+      trackRepair: z
+        .object({
+          catalogueRankRowsScanned: CountSchema,
+          physicalRowsScanned: z.record(z.string(), CountSchema),
+          sourceMarkersCleared: CountSchema,
+          sourceMarkersDeferred: CountSchema,
+          sourceMarkersScanned: CountSchema,
+        })
+        .optional(),
       trackSourceMarkersPending: z.boolean().optional(),
     }),
   );
