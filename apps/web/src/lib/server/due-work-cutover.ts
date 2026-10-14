@@ -76,7 +76,7 @@ export async function readPromotedDueWorkPage(
   const repair = await maintainDueWork(client, workKind);
   await promoteDueWork(client, workKind, { limit: promotionLimit, now: options.now });
   if (await hasDueScheduledWork(client, workKind, { now: options.now })) {
-    throw new DueWorkMaintenancePendingError(workKind);
+    throw new DueWorkMaintenancePendingError(workKind, "scheduled_promotion");
   }
 
   if (options.subjectIds?.length === 0) {
@@ -125,7 +125,7 @@ export async function readPromotedDueWorkPage(
     !repair.sourceConverged &&
     options.emptyPageUnderDebt !== "serve"
   ) {
-    throw new DueWorkMaintenancePendingError(workKind);
+    throw new DueWorkMaintenancePendingError(workKind, "source_repair_empty_page");
   }
 
   return {
@@ -156,7 +156,7 @@ async function readReadyPage(
   await promoteDueWork(client, entry.workKind, { limit: Math.max(limit, 100) });
   const page = await listServableDueWork(client, entry.workKind, { limit, requireTrack: true });
   if (page.items.length === 0 && !repair.sourceConverged) {
-    throw new DueWorkMaintenancePendingError(entry.workKind);
+    throw new DueWorkMaintenancePendingError(entry.workKind, "source_repair_empty_page");
   }
   return page.items;
 }

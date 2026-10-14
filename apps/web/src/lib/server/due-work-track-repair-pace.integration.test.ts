@@ -318,6 +318,30 @@ describe("track due-work repair pace", () => {
     expect(await countRankRows("state = 'ready'")).toBe(501);
   });
 
+  it("measures rank rebuild rows separately from source markers in bounded maintenance", async () => {
+    await insertPlainTracks(Array.from({ length: 3 }, (_, index) => `measured-${index}`));
+    await db.execute(rankMarker("measured-v1"));
+
+    expect(
+      await advanceProjectionFor(db, {
+        action: "repair",
+        includeStatus: false,
+        limit: 2,
+        target: "track_due_work",
+      }),
+    ).toMatchObject({
+      complete: false,
+      processed: 2,
+      trackRepair: {
+        catalogueRankRowsScanned: 2,
+        physicalRowsScanned: {},
+        sourceMarkersCleared: 0,
+        sourceMarkersDeferred: 0,
+        sourceMarkersScanned: 0,
+      },
+    });
+  });
+
   it("finds physical repair debt with one indexed read wherever the per-definition probe finds it", async () => {
     const definitions = dueWorkRepairDefinitions(db);
     const first = definitions[0];

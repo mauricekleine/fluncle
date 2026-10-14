@@ -890,10 +890,21 @@ async function advanceTrackRepair(client: ProjectionClient, limit: number) {
   );
   let processed = 0;
   let scheduled = 0;
+  const trackRepair: import("@fluncle/contracts").TrackRepairMetrics = {
+    catalogueRankRowsScanned: 0,
+    physicalRowsScanned: {},
+    sourceMarkersCleared: 0,
+    sourceMarkersDeferred: 0,
+    sourceMarkersScanned: 0,
+  };
   if (sourceCount.rows.length > 0) {
     const result = await fanOutDueWorkSourceRepairs(client, { limit });
-    processed += result.scanned;
+    processed += result.sourceMarkersScanned + result.rankRebuildScanned;
     scheduled += result.expanded;
+    trackRepair.catalogueRankRowsScanned = result.rankRebuildScanned;
+    trackRepair.sourceMarkersCleared = result.sourceMarkersCleared;
+    trackRepair.sourceMarkersDeferred = result.sourceMarkersDeferred;
+    trackRepair.sourceMarkersScanned = result.sourceMarkersScanned;
   }
   const definition = await findPendingPhysicalRepairDefinition(client);
   if (definition !== undefined) {
@@ -901,6 +912,7 @@ async function advanceTrackRepair(client: ProjectionClient, limit: number) {
       limit: Math.min(limit, PHYSICAL_REPAIR_LIMIT),
     });
     processed += result.scanned;
+    trackRepair.physicalRowsScanned[definition.workKind] = result.scanned;
   }
 
   const convergence = await client.execute(
@@ -913,6 +925,7 @@ async function advanceTrackRepair(client: ProjectionClient, limit: number) {
     complete: Number(row?.repair_debt ?? 1) === 0,
     processed,
     scheduled,
+    trackRepair,
     trackSourceMarkersPending: Number(row?.track_source_markers_pending ?? 1) === 1,
   };
 }
@@ -2306,6 +2319,7 @@ type ProjectionAdvanceOutcome = {
   scheduled: number;
 
   trackSourceMarkersPending?: boolean;
+  trackRepair?: import("@fluncle/contracts").TrackRepairMetrics;
 };
 
 async function advanceAuditProjection(
@@ -2513,6 +2527,7 @@ export async function advanceProjectionFor(
         rebuildRowsWalked: rebuild.rowsWalked,
         rebuildStaleFamilies: rebuild.staleFamilies,
         scheduled: repair.scheduled,
+        trackRepair: repair.trackRepair,
         trackSourceMarkersPending: repair.trackSourceMarkersPending,
       };
     }

@@ -143,6 +143,7 @@ export async function captureQueueCommand(limit: number): Promise<RecentTrack[]>
 export type TrackWorkKind = "analyze" | "capture" | "embed";
 export type TrackWorkPage = {
   debtPending?: boolean;
+  dueWork?: import("@fluncle/contracts").DueWorkPendingDetails;
 
   queued?: number;
 
@@ -172,6 +173,7 @@ export async function trackWorkCommand(options: {
 
   return {
     debtPending: response.debtPending,
+    dueWork: response.dueWork,
     queued: response.queued,
     tracks: response.tracks ?? [],
   };

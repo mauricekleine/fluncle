@@ -188,6 +188,46 @@ describe("projection operator commands", () => {
     ]);
   });
 
+  test("accumulates repair branch counters across steps rather than keeping only the last page", async () => {
+    for (let step = 0; step < 2; step += 1) {
+      postResponses.push({
+        action: "repair",
+        complete: step === 1,
+        ok: true,
+        processed: 503,
+        scheduled: 2,
+        target: "track_due_work",
+        trackRepair: {
+          catalogueRankRowsScanned: 500,
+          physicalRowsScanned: { "artist-edges": 1 },
+          sourceMarkersCleared: 2,
+          sourceMarkersDeferred: 0,
+          sourceMarkersScanned: 2,
+        },
+      });
+    }
+    const result = await projections.advanceProjectionCommand({
+      action: "repair",
+      includeTerminalStatus: false,
+      limit: 500,
+      maxSteps: 100,
+      target: "track_due_work",
+      wallMs: 30_000,
+    });
+    expect(result).toMatchObject({
+      processed: 1006,
+      steps: 2,
+      trackRepair: {
+        catalogueRankRowsScanned: 1000,
+        physicalRowsScanned: { "artist-edges": 2 },
+        sourceMarkersCleared: 4,
+        sourceMarkersDeferred: 0,
+        sourceMarkersScanned: 4,
+      },
+    });
+    expect(calls).toHaveLength(2);
+  });
+
   test("aggregates exhausted steps and preserves the final payload", async () => {
     postResponses.push(
       {

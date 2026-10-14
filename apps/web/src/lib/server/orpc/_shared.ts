@@ -31,7 +31,12 @@ export async function requireTrack(idOrLogId: string): Promise<TrackListItem> {
   return track;
 }
 
-export type ApiFaultData = { apiCode: string; apiMessage: string; until?: null | string };
+export type ApiFaultData = {
+  apiCode: string;
+  apiMessage: string;
+  dueWork?: import("@fluncle/contracts").DueWorkPendingDetails;
+  until?: null | string;
+};
 
 export function isApiFaultData(data: unknown): data is ApiFaultData {
   return (
@@ -42,11 +47,16 @@ export function isApiFaultData(data: unknown): data is ApiFaultData {
   );
 }
 
-export function dueWorkMaintenancePendingFault(): ORPCError<string, ApiFaultData> {
+export function dueWorkMaintenancePendingFault(
+  error?: import("../due-work").DueWorkMaintenancePendingError,
+): ORPCError<string, ApiFaultData> {
   return new ORPCError("SERVICE_UNAVAILABLE", {
     data: {
       apiCode: "due_work_maintenance_pending",
       apiMessage: "Due-work maintenance is still converging",
+      ...(error === undefined
+        ? {}
+        : { dueWork: { branch: error.branch, workKind: error.workKind } }),
     },
     message: "Due-work maintenance is still converging",
     status: 503,
@@ -55,7 +65,7 @@ export function dueWorkMaintenancePendingFault(): ORPCError<string, ApiFaultData
 
 export function apiFault(error: unknown): ORPCError<string, ApiFaultData> {
   if (isDueWorkMaintenancePending(error)) {
-    return dueWorkMaintenancePendingFault();
+    return dueWorkMaintenancePendingFault(error);
   }
 
   if (error instanceof ApiError) {

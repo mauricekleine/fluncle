@@ -168,7 +168,10 @@ export async function claimCrawlFrontierRows(
     nodes = await drainNodeChunk();
   }
   if (!sourceConverged || nodes.hasMore) {
-    throw new DueWorkMaintenancePendingError(CRAWL_CLAIM_REPAIR_WORK_KIND);
+    throw new DueWorkMaintenancePendingError(
+      CRAWL_CLAIM_REPAIR_WORK_KIND,
+      sourceConverged ? "crawl_physical_repair" : "crawl_source_repair",
+    );
   }
 
   if (options.limit === 0) {

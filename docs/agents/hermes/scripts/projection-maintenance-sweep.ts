@@ -79,10 +79,12 @@ type AdvanceResponse = {
   steps: number;
   target: FamilyName;
 
+  trackRepair?: import("@fluncle/contracts").TrackRepairMetrics;
   wallStopped?: boolean;
 };
 
 export type FamilySummary = {
+  trackRepair?: import("@fluncle/contracts").TrackRepairMetrics;
   attempted: boolean;
   complete: boolean | null;
   error: string | null;
@@ -332,7 +334,11 @@ export function adaptiveSteps(
 ): number {
   const debt = family.repairs.total;
   const ageMs = family.oldestOutstandingMarkerAge?.ageMs ?? null;
-  if (debt.truncated || (ageMs !== null && ageMs >= DEBT_AGE_ESCALATION_MS)) {
+  if (
+    family.rebuild?.complete === false ||
+    debt.truncated ||
+    (ageMs !== null && ageMs >= DEBT_AGE_ESCALATION_MS)
+  ) {
     return ceiling;
   }
   const measured = Math.ceil(debt.count / Math.max(subjectsPerStep, 1));
@@ -389,6 +395,7 @@ function advanceFamily(
     );
     return {
       attempted: true,
+      ...(response.trackRepair === undefined ? {} : { trackRepair: response.trackRepair }),
       complete: response.complete,
       error: null,
       leaseHoldMs: now() - startedAt,

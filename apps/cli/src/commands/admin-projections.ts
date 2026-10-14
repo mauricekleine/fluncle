@@ -78,6 +78,7 @@ export type ProjectionStepResponse = {
   ok: true;
   processed: number;
 
+  trackRepair?: import("@fluncle/contracts").TrackRepairMetrics;
   rebuildRowsWalked?: number;
   rebuildStaleFamilies?: number;
   scheduled: number;
@@ -145,6 +146,30 @@ export async function advanceProjectionCommand(
   let wallStopped = false;
   let rebuildRowsWalked = response.rebuildRowsWalked ?? 0;
   let rebuildReported = response.rebuildStaleFamilies !== undefined;
+  const trackRepair: import("@fluncle/contracts").TrackRepairMetrics = {
+    catalogueRankRowsScanned: 0,
+    physicalRowsScanned: {},
+    sourceMarkersCleared: 0,
+    sourceMarkersDeferred: 0,
+    sourceMarkersScanned: 0,
+  };
+  let trackRepairReported = false;
+  const addTrackRepair = () => {
+    const metrics = response.trackRepair;
+    if (metrics === undefined) {
+      return;
+    }
+    trackRepairReported = true;
+    trackRepair.catalogueRankRowsScanned += metrics.catalogueRankRowsScanned;
+    trackRepair.sourceMarkersCleared += metrics.sourceMarkersCleared;
+    trackRepair.sourceMarkersDeferred += metrics.sourceMarkersDeferred;
+    trackRepair.sourceMarkersScanned += metrics.sourceMarkersScanned;
+    for (const [kind, scanned] of Object.entries(metrics.physicalRowsScanned)) {
+      trackRepair.physicalRowsScanned[kind] =
+        (trackRepair.physicalRowsScanned[kind] ?? 0) + scanned;
+    }
+  };
+  addTrackRepair();
 
   while (!response.complete && steps < maxSteps) {
     if (wallMs !== undefined && now() - startedAt >= wallMs) {
@@ -155,6 +180,7 @@ export async function advanceProjectionCommand(
       `/api/v1/admin/projections/${target}/advance`,
       stepBody,
     );
+    addTrackRepair();
     steps += 1;
     processed += response.processed;
     scheduled += response.scheduled;
@@ -162,9 +188,12 @@ export async function advanceProjectionCommand(
     rebuildReported ||= response.rebuildStaleFamilies !== undefined;
   }
 
-  const rebuild = rebuildReported
-    ? { rebuildRowsWalked, rebuildStaleFamilies: response.rebuildStaleFamilies ?? 0 }
-    : {};
+  const rebuild = {
+    ...(rebuildReported
+      ? { rebuildRowsWalked, rebuildStaleFamilies: response.rebuildStaleFamilies ?? 0 }
+      : {}),
+    ...(trackRepairReported ? { trackRepair } : {}),
+  };
   if (!includeTerminalStatus) {
     const { status: _status, ...withoutStatus } = response;
     return { ...withoutStatus, ...rebuild, processed, scheduled, steps, wallStopped };

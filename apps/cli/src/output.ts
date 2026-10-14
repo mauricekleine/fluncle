@@ -59,7 +59,11 @@ export function isJsonFailure(value: unknown): value is ApiFailure {
 export class CliError extends Error {
   code: string;
 
-  constructor(code: string, message: string) {
+  constructor(
+    code: string,
+    message: string,
+    readonly dueWork?: import("@fluncle/contracts").DueWorkPendingDetails,
+  ) {
     super(message);
     this.name = "CliError";
     this.code = code;
@@ -74,6 +78,7 @@ export function toJsonFailure(error: unknown): ApiFailure {
   if (error instanceof CliError) {
     return {
       code: error.code,
+      ...(error.dueWork === undefined ? {} : { dueWork: error.dueWork }),
       message: error.message,
       ok: false,
     };
