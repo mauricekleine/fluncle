@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import { createIntegrationDb, seedCatalogueTrack } from "../../src/lib/server/integration-db";
@@ -205,9 +205,11 @@ describe("pullSnapshot", () => {
       outPath,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await vi.waitFor(
+      () => expect(lines.some((line) => line.includes("waiting for it to finish"))).toBe(true),
+      { interval: 20, timeout: 10_000 },
+    );
     expect(existsSync(outPath)).toBe(false);
-    expect(lines.some((line) => line.includes("waiting for it to finish"))).toBe(true);
 
     await held.rollback();
     holder.close();
