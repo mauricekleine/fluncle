@@ -2,6 +2,7 @@ import { type CatalogueTrackListItem, type SearchFilters } from "@fluncle/contra
 import { type Client } from "@libsql/client";
 import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
+import { getRequestScopedValue } from "./database-request-scope";
 import { getDb, typedRows } from "./db";
 import {
   type FreshCatalogueItem,
@@ -772,10 +773,36 @@ export async function listTracksHubPage(
   };
 }
 
+type ReleaseHeadCounts = { futureCount: number; retainedHeadCount: number };
+
+const RELEASE_HEAD_COUNTS_MEMO = Symbol("fluncle.tracks-hub-release-head-counts");
+
 async function releaseHeadCounts(
   client: Pick<Client, "execute">,
   today: string,
-): Promise<{ futureCount: number; retainedHeadCount: number }> {
+): Promise<ReleaseHeadCounts> {
+  const memo = getRequestScopedValue(
+    RELEASE_HEAD_COUNTS_MEMO,
+    () => new Map<string, Promise<ReleaseHeadCounts>>(),
+  );
+  const cached = memo?.get(today);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const counts = readReleaseHeadCounts(client, today);
+  memo?.set(today, counts);
+  try {
+    return await counts;
+  } catch (error) {
+    memo?.delete(today);
+    throw error;
+  }
+}
+
+async function readReleaseHeadCounts(
+  client: Pick<Client, "execute">,
+  today: string,
+): Promise<ReleaseHeadCounts> {
   const result = await client.execute({
     args: [today],
     sql: `select count(*) as after_today,

@@ -332,8 +332,7 @@ function backfillStatement(
       sql: `select ${columns} from ${due}
         cross join tracks on tracks.track_id = subject_id
         where ${where} and ${TRACK_PAGE_INDEXABLE_WHERE}
-        order by exists (select 1 from findings where findings.track_id = tracks.track_id) desc,
-          tracks.release_date desc nulls last, subject_id limit ?`,
+        order by tracks.release_date desc nulls last, subject_id limit ?`,
     };
   }
   const table = `${kind}s`;
