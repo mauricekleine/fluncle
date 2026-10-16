@@ -335,8 +335,9 @@ describe("getFunnel (real SQL)", () => {
   it("computes the live block on EVERY call — a count change shows without a new snapshot", async () => {
     const { getFunnel, recordCatalogueSnapshot } = await import("./funnel");
 
+    const day = new Date().toISOString().slice(0, 10);
     await seedCatalogueTrack(db, { trackId: "cat-1" });
-    await recordCatalogueSnapshot({ day: "2026-07-18" });
+    await recordCatalogueSnapshot({ day });
 
     const first = await getFunnel();
     expect(first.live.stages.crawled).toBe(1);
@@ -346,7 +347,7 @@ describe("getFunnel (real SQL)", () => {
     const second = await getFunnel();
     expect(second.live.stages.crawled).toBe(2);
 
-    expect(second.series.map((row) => row.day)).toEqual(["2026-07-18"]);
+    expect(second.series.map((row) => row.day)).toEqual([day]);
     expect(second.series[0]?.crawled).toBe(1);
   });
 });
