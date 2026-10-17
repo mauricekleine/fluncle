@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { type MixReason } from "@fluncle/contracts";
 import { Button } from "@fluncle/ui/components/button";
 import { Input } from "@fluncle/ui/components/input";
+import { Label } from "@fluncle/ui/components/label";
 import { Textarea } from "@fluncle/ui/components/textarea";
 import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
@@ -108,9 +109,9 @@ function MixableOrderPage() {
     >
       <div className="flex flex-col gap-4 p-3 sm:p-4">
         <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium text-muted-foreground" htmlFor="mix-pool">
+          <Label className="text-xs leading-snug text-muted-foreground" htmlFor="mix-pool">
             The pool: Log IDs, separated by spaces, commas, or new lines (2–64)
-          </label>
+          </Label>
           <Textarea
             id="mix-pool"
             onChange={(event) => setPool(event.target.value)}
@@ -120,9 +121,9 @@ function MixableOrderPage() {
           />
         </div>
         <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium text-muted-foreground" htmlFor="mix-seed">
+          <Label className="text-xs leading-snug text-muted-foreground" htmlFor="mix-seed">
             Open on (optional): pin the first track by Log ID
-          </label>
+          </Label>
           <Input
             className="max-w-xs"
             id="mix-seed"

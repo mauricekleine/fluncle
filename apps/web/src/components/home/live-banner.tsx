@@ -36,7 +36,7 @@ export function LiveBanner({ live }: { live: LiveCallout }) {
         </p>
         <p className="text-sm text-muted-foreground">
           Mixing live. Come through, cosmonauts.
-          {live.title ? <span className="text-muted-foreground/80"> “{live.title}”</span> : null}
+          {live.title ? <span> “{live.title}”</span> : null}
         </p>
       </div>
 
