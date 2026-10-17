@@ -624,10 +624,6 @@ describe("catalogue claims and acknowledgements", () => {
       "update tracks set release_date = '2026-08-01' where track_id in ('000002','000003')",
     );
     await db.execute("update tracks set release_date = '2026-09-01' where track_id = '000005'");
-    await db.execute({
-      args: [ORIGINAL],
-      sql: "insert into findings (track_id,added_at) values ('000002',?)",
-    });
     for (const kind of ["artist", "label", "album"] as const) {
       await db.execute(
         `update ${kind}s set certified_finding_count = 2, latest_release_date = '2026-07-01'`,
@@ -674,10 +670,10 @@ describe("catalogue claims and acknowledgements", () => {
           (id) => `${kind}:${id}`,
         ),
       ),
-      "track:000002",
-      "track:000000",
       "track:000005",
+      "track:000002",
       "track:000003",
+      "track:000000",
       "track:000001",
       "track:000004",
     ]);

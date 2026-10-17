@@ -10,6 +10,7 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 import { CatalogueHubPageOutOfRangeError } from "./labels";
+import { runWithDatabaseRequestScope } from "./database-request-scope";
 import { createIntegrationDb } from "./integration-db";
 import {
   hubCorpusFingerprint,
@@ -784,6 +785,41 @@ describe("the page-independent aggregates are memoised", () => {
     await seedTrack({ releaseDate: "2024-01-01", trackId: "a" });
 
     await expect(listTracksHubPage({}, 2)).rejects.toBeInstanceOf(CatalogueHubPageOutOfRangeError);
+  });
+
+  it("reads the unreleased head once per request and fresh on the next one", async () => {
+    await seedTrack({ releaseDate: "2024-01-01", trackId: "a" });
+    await seedTrack({ releaseDate: "2999-01-01", trackId: "future" });
+    const headReads: string[] = [];
+    const execute = db.execute.bind(db);
+    vi.spyOn(db, "execute").mockImplementation((statement: InStatement) => {
+      const sql = typeof statement === "string" ? statement : statement.sql;
+      if (sql.includes("as after_today")) {
+        headReads.push(sql);
+      }
+      return execute(statement);
+    });
+    const now = new Date("2026-10-17T00:00:00.000Z");
+
+    const [page, lane, total] = await runWithDatabaseRequestScope(() =>
+      Promise.all([
+        listTracksHubPage({ label: "Hospital" }, 1, now),
+        listTracksHubYearLane({ label: "Hospital" }, now),
+        countAllTracks(now),
+      ]),
+    );
+
+    expect(headReads).toHaveLength(1);
+    expect(page.total).toBe(0);
+    expect(lane).toEqual([]);
+    expect(total).toBe(1);
+
+    await seedTrack({ releaseDate: "2998-01-01", trackId: "future-b" });
+    resetTracksHubAggregateCache();
+    const next = await runWithDatabaseRequestScope(() => listTracksHubPage({}, 1, now));
+
+    expect(headReads).toHaveLength(2);
+    expect(ids(next.items)).toEqual(["a"]);
   });
 
   it("evicts a failed load instead of serving the rejection for the rest of the window", async () => {
