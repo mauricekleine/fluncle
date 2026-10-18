@@ -1950,7 +1950,7 @@ JSON field reference:
 
   adminMixtapes
     .command("get")
-    .description("Show one mixtape by id or log id")
+    .description("Show one mixtape by id or Log ID")
     .argument("[idOrLogId]")
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
@@ -6881,7 +6881,7 @@ async function runMixtapeGet(
   mixtapeGetCommand: typeof import("./commands/mixtapes").mixtapeGetCommand,
 ): Promise<void> {
   if (!idOrLogId) {
-    throw new Error("Missing mixtape id or log id. Usage: fluncle admin mixtapes get <id|logId>");
+    throw new Error("Missing mixtape id or Log ID. Usage: fluncle admin mixtapes get <id|logId>");
   }
 
   const mixtape = await mixtapeGetCommand(idOrLogId);

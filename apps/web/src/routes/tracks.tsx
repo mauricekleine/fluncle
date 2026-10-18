@@ -557,7 +557,7 @@ function TracksPage() {
           <p className="log-index-empty empty-scanlines">
             {hasFilters
               ? "No tracks match those filters. Loosen them and try again."
-              : "Nothing here yet. Quiet sector tonight."}
+              : "No drum & bass tracks yet."}
           </p>
         ) : (
           <DiscoveryPlayableList nextPageHref={nextPageHref} tracks={discoveryTracks}>

@@ -62,7 +62,7 @@ export async function mixtapeDistributeCommand(
   const mixtape = await mixtapeGetCommand(idOrLogId);
 
   if (!mixtape.id) {
-    throw new CliError("mixtape_not_found", `No mixtape with id or log id ${idOrLogId}`);
+    throw new CliError("mixtape_not_found", `No mixtape with id or Log ID ${idOrLogId}`);
   }
 
   const both = !options.youtube && !options.mixcloud;
@@ -150,7 +150,7 @@ export async function mixtapeResyncCommand(
   const mixtape = await mixtapeGetCommand(idOrLogId);
 
   if (!mixtape.id) {
-    throw new CliError("mixtape_not_found", `No mixtape with id or log id ${idOrLogId}`);
+    throw new CliError("mixtape_not_found", `No mixtape with id or Log ID ${idOrLogId}`);
   }
 
   if (!mixtape.logId) {
