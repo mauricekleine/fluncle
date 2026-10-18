@@ -15,7 +15,7 @@ export async function mixtapeGetCommand(idOrLogId: string): Promise<MixtapeListI
   const match = mixtapes.find((mixtape) => mixtape.id === idOrLogId || mixtape.logId === idOrLogId);
 
   if (!match) {
-    throw new CliError("mixtape_not_found", `No mixtape with id or log id ${idOrLogId}`);
+    throw new CliError("mixtape_not_found", `No mixtape with id or Log ID ${idOrLogId}`);
   }
 
   return match;

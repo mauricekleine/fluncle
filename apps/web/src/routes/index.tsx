@@ -145,8 +145,8 @@ function FrontDoorPage() {
         <header className="fd-masthead">
           <h1 className="fd-nameplate">Fluncle&apos;s Findings</h1>
           <p className="fd-standfirst">
-            Now and then a tune lands and my knees go before I do. That one gets logged, and it is
-            in here with everything else I brought back. Start wherever you like, fam.
+            Now and then a tune lands and my knees go before I do. That one I log, and it is in here
+            with everything else I brought back. Start wherever you like, fam.
           </p>
         </header>
 
