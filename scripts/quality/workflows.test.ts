@@ -60,7 +60,7 @@ describe("quality topology", () => {
   const quality = workflow("quality-checks.yml");
   const qualitySource = source("quality-checks.yml");
 
-  test("draft pull requests skip runners until readiness without changing protected contexts", () => {
+  test("live readiness controls heavy jobs without changing protected contexts", () => {
     const draftEvents = [
       "opened",
       "reopened",
@@ -68,8 +68,7 @@ describe("quality topology", () => {
       "ready_for_review",
       "converted_to_draft",
     ];
-    const draftGuard =
-      "github.event_name != 'pull_request' || github.event.pull_request.draft == false";
+    const draftGuard = "needs.pr_state.outputs.run == 'true'";
 
     for (const file of ["quality-checks.yml", "gitleaks.yml", "dependency-audit.yml"]) {
       expect(at(workflow(file), "on", "pull_request", "types")).toEqual(draftEvents);
@@ -77,9 +76,61 @@ describe("quality topology", () => {
 
     expect(at(quality, "jobs", "core", "if")).toBe(draftGuard);
     expect(at(quality, "jobs", "e2e", "if")).toBe(draftGuard);
-    expect(at(quality, "jobs", "gate", "if")).toBe(`always() && (${draftGuard})`);
+    expect(at(quality, "jobs", "gate", "if")).toBe(`always() && ${draftGuard}`);
     expect(at(workflow("gitleaks.yml"), "jobs", "scan", "if")).toBe(draftGuard);
     expect(at(workflow("dependency-audit.yml"), "jobs", "audit", "if")).toBe(draftGuard);
+  });
+
+  test("live PR state wins over stale payloads and API errors stop validation", () => {
+    const directory = mkdtempSync(join(tmpdir(), "live-pr-state-"));
+    try {
+      const gh = join(directory, "gh");
+      writeFileSync(gh, '#!/bin/sh\nprintf "%s\\n" "$LIVE_DRAFT"\nexit "$API_STATUS"\n', {
+        mode: 0o755,
+      });
+      for (const file of ["quality-checks.yml", "gitleaks.yml", "dependency-audit.yml"]) {
+        const steps = at(workflow(file), "jobs", "pr_state", "steps") as Array<
+          Record<string, unknown>
+        >;
+        const script = steps.find((step) => step.id === "live")?.run as string;
+        for (const [event, payload, live, status, expected] of [
+          ["pull_request", "true", "false", "0", "true"],
+          ["pull_request", "false", "true", "0", "false"],
+          ["push", "null", "unused", "1", "true"],
+          ["pull_request", "true", "", "1", null],
+          ["pull_request", "false", "null", "0", null],
+        ]) {
+          const output = join(directory, "output");
+          writeFileSync(output, "");
+          const result = spawnSync("bash", ["-c", script], {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              API_STATUS: String(status),
+              EVENT_NAME: String(event),
+              GH_REPO: "owner/repo",
+              GITHUB_OUTPUT: output,
+              LIVE_DRAFT: String(live),
+              PATH: `${directory}:${process.env.PATH ?? ""}`,
+              PAYLOAD_DRAFT: String(payload),
+              PR_NUMBER: "42",
+            },
+          });
+          if (expected === null) {
+            expect(result.status).not.toBe(0);
+            expect(readFileSync(output, "utf8")).toBe("");
+          } else {
+            expect(result.status, result.stderr).toBe(0);
+            expect(readFileSync(output, "utf8")).toBe(`run=${expected}\n`);
+            expect(result.stdout).toContain(
+              `payload_draft=${payload} live_draft=${event === "push" ? "false" : live}`,
+            );
+          }
+        }
+      }
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
   });
 
   test("the protected context always reports and aggregates every selected lane", () => {
@@ -88,9 +139,9 @@ describe("quality topology", () => {
     expect(at(quality, "on", "push", "paths")).toBeUndefined();
     expect(at(quality, "on", "push", "paths-ignore")).toBeUndefined();
     expect(at(quality, "jobs", "gate", "name")).toBe("Lint, Format, and Typecheck");
-    expect(at(quality, "jobs", "gate", "needs")).toEqual(["core", "e2e"]);
+    expect(at(quality, "jobs", "gate", "needs")).toEqual(["pr_state", "core", "e2e"]);
     expect(at(quality, "jobs", "gate", "if")).toBe(
-      "always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)",
+      "always() && needs.pr_state.outputs.run == 'true'",
     );
   });
 

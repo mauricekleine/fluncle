@@ -24,12 +24,45 @@ env:
   QUALITY_HEAD: ${{ github.sha }}
 
 jobs:
+  pr_state:
+    name: PR readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    outputs:
+      run: ${{ steps.live.outputs.run }}
+    steps:
+      - name: Read live PR draft state
+        id: live
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PAYLOAD_DRAFT: ${{ toJSON(github.event.pull_request.draft) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          live_draft=false
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            live_draft=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq '.draft')
+          fi
+          case "$live_draft" in
+            false) run=true ;;
+            true) run=false ;;
+            *) echo "::error::Invalid live PR draft state: $live_draft"; exit 1 ;;
+          esac
+          echo "payload_draft=$PAYLOAD_DRAFT live_draft=$live_draft run=$run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   core:
     name: Selected quality lanes
     outputs:
       turbo_cache_key: ${{ steps.turbo_cache.outputs.cache-primary-key }}
       cargo_cache_key: ${{ steps.cargo_cache.outputs.cache-primary-key }}
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    needs: pr_state
+    if: needs.pr_state.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -194,7 +227,8 @@ jobs:
     name: Public flows when selected
     outputs:
       playwright_cache_key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    needs: pr_state
+    if: needs.pr_state.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -362,8 +396,8 @@ jobs:
 
   gate:
     name: Lint, Format, and Typecheck
-    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-    needs: [core, e2e]
+    if: always() && needs.pr_state.outputs.run == 'true'
+    needs: [pr_state, core, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
