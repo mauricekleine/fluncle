@@ -24,12 +24,45 @@ env:
   QUALITY_HEAD: ${{ github.sha }}
 
 jobs:
+  pr_state:
+    name: PR readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    outputs:
+      run: ${{ steps.live.outputs.run }}
+    steps:
+      - name: Read live PR draft state
+        id: live
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PAYLOAD_DRAFT: ${{ toJSON(github.event.pull_request.draft) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          live_draft=false
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            live_draft=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq '.draft')
+          fi
+          case "$live_draft" in
+            false) run=true ;;
+            true) run=false ;;
+            *) echo "::error::Invalid live PR draft state: $live_draft"; exit 1 ;;
+          esac
+          echo "payload_draft=$PAYLOAD_DRAFT live_draft=$live_draft run=$run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   core:
     name: Selected quality lanes
     outputs:
       turbo_cache_key: ${{ steps.turbo_cache.outputs.cache-primary-key }}
       cargo_cache_key: ${{ steps.cargo_cache.outputs.cache-primary-key }}
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    needs: pr_state
+    if: ${{ !cancelled() && needs.pr_state.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -194,7 +227,8 @@ jobs:
     name: Public flows when selected
     outputs:
       playwright_cache_key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    needs: pr_state
+    if: ${{ !cancelled() && needs.pr_state.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -362,18 +396,34 @@ jobs:
 
   gate:
     name: Lint, Format, and Typecheck
-    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-    needs: [core, e2e]
+    if: ${{ !cancelled() && needs.pr_state.outputs.run != 'false' }}
+    needs: pr_state
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 35
+    permissions:
+      actions: read
     steps:
       - name: Hold the stable protected result
         env:
-          CORE_RESULT: ${{ needs.core.result }}
-          E2E_RESULT: ${{ needs.e2e.result }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          if [ "$CORE_RESULT" != "success" ] || [ "$E2E_RESULT" != "success" ]; then
-            echo "::error::Selected quality closure failed: core=$CORE_RESULT e2e=$E2E_RESULT"
-            exit 1
-          fi
-          echo "Selected quality closure passed: core=$CORE_RESULT e2e=$E2E_RESULT"
+          set -euo pipefail
+          for ((attempt = 0; attempt < 120; attempt++)); do
+            jobs=$(gh api --paginate --slurp "repos/$GH_REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100")
+            lanes=$(jq '[.[].jobs[] | select(.name == "Selected quality lanes" or .name == "Public flows when selected")]' <<< "$jobs")
+            if jq -e 'any(.[]; .status == "completed" and .conclusion != "success")' <<< "$lanes" > /dev/null; then
+              echo "::error::Selected quality lanes did not both succeed: $lanes"
+              exit 1
+            fi
+            if jq -e 'length == 2 and ([.[].name] | unique | length == 2) and all(.[]; .status == "completed" and .conclusion == "success")' <<< "$lanes" > /dev/null; then
+              echo "Both selected quality owners succeeded in run $RUN_ID attempt $RUN_ATTEMPT."
+              exit 0
+            fi
+            echo "Waiting for selected quality owners: $lanes"
+            sleep 15
+          done
+          echo "::error::Timed out waiting for selected quality owners."
+          exit 1
