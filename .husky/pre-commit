@@ -1,5 +1,1 @@
-if command -v bun-canary >/dev/null 2>&1; then
-  bun-canary fmt --staged --no-script && bun-canary lint --staged --no-script
-else
-  echo "pre-commit: bun-canary not found, skipping bun fmt and bun lint" >&2
-fi
+bun scripts/bun-canary.ts fmt --staged --no-script && bun scripts/bun-canary.ts lint --staged --no-script
