@@ -41,6 +41,8 @@ void invalid;
 void imported;
 `;
 
+const DIAGNOSTIC = /no-comments(?:\(no-comments\)|\/no-comments)/gu;
+
 type RunResult = {
   readonly exitCode: number;
   readonly fixed?: string;
@@ -99,19 +101,16 @@ const allowedRun = await runLint(ALLOWED, false);
 
 test("the no-comments rule reports every comment form", () => {
   expect(forbiddenRun.exitCode, forbiddenRun.output).not.toBe(0);
-  expect(
-    forbiddenRun.output.match(/no-comments\(no-comments\)/gu)?.length ?? 0,
-    forbiddenRun.output,
-  ).toBe(4);
+  expect(forbiddenRun.output.match(DIAGNOSTIC)?.length ?? 0, forbiddenRun.output).toBe(4);
 });
 
 test("the no-comments rule removes comments without damaging their surroundings", () => {
   expect(fixedRun.exitCode, fixedRun.output).toBe(0);
   expect(fixedRun.fixed).toBe(FIXED);
-  expect(fixedRun.output).not.toContain("no-comments(no-comments)");
+  expect(fixedRun.output).not.toMatch(DIAGNOSTIC);
 });
 
 test("the no-comments rule allows the directives used by the repository", () => {
   expect(allowedRun.exitCode, allowedRun.output).toBe(0);
-  expect(allowedRun.output).not.toContain("no-comments(no-comments)");
+  expect(allowedRun.output).not.toMatch(DIAGNOSTIC);
 });
