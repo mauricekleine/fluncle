@@ -146,8 +146,6 @@ export const router = os.use(dueWorkMaintenancePendingMiddleware).router({
   ...tracksHandlers(os),
 });
 
-export type Router = typeof router;
-
 const ORPC_CODE_TO_API_CODE: Record<string, string> = {
   BAD_REQUEST: "invalid_request",
 

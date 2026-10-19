@@ -676,8 +676,6 @@ export const contract = {
   ...tracksContract,
 };
 
-export type FluncleContract = typeof contract;
-
 export const CONTRACT_OPERATION_NAMES = Object.keys(contract) as Array<keyof typeof contract>;
 
 export const CONTRACT_OPERATION_ROUTES: Record<
