@@ -100,9 +100,9 @@ const allowedRun = await runLint(ALLOWED, false);
 test("the no-comments rule reports every comment form", () => {
   expect(forbiddenRun.exitCode, forbiddenRun.output).not.toBe(0);
   expect(
-    forbiddenRun.output.match(/no-comments\(no-comments\)/gu),
+    forbiddenRun.output.match(/no-comments\(no-comments\)/gu)?.length ?? 0,
     forbiddenRun.output,
-  ).toHaveLength(4);
+  ).toBe(4);
 });
 
 test("the no-comments rule removes comments without damaging their surroundings", () => {
