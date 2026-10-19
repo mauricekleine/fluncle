@@ -74,9 +74,8 @@ async function resolveAlbumsPage(
 
 const fetchAlbumsPage = createServerFn({ method: "GET" })
   .validator((data: { order?: HubOrder; page?: number; q?: string }) => data)
-  .handler(
-    ({ data }): Promise<AlbumsPageData> =>
-      resolveAlbumsPage(data.page, data.q, data.order ?? "most"),
+  .handler(({ data }): Promise<AlbumsPageData> =>
+    resolveAlbumsPage(data.page, data.q, data.order ?? "most"),
   );
 
 const page1Title = "Every drum & bass album · Fluncle";

@@ -66,17 +66,14 @@ export const DEFAULT_MIXED_LOAD: readonly MixedLoadOperation[] = [
     id: "heavy-reader-held",
     workClass: "heavy-reader",
   },
-  ...Array.from(
-    { length: 3 },
-    (_, index): MixedLoadOperation => ({
-      arrivalMs: 1,
-      batchCount: null,
-      clientClass: "primary",
-      durationMs: 5,
-      id: `public-read-${index + 1}`,
-      workClass: "public-read",
-    }),
-  ),
+  ...Array.from({ length: 3 }, (_, index): MixedLoadOperation => ({
+    arrivalMs: 1,
+    batchCount: null,
+    clientClass: "primary",
+    durationMs: 5,
+    id: `public-read-${index + 1}`,
+    workClass: "public-read",
+  })),
   {
     arrivalMs: 1,
     batchCount: 4,

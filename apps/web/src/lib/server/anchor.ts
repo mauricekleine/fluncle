@@ -682,15 +682,13 @@ async function anchorReleaseSibling(
   if (!(await isEligibleReleaseSibling(siblingId))) {
     return false;
   }
-  const candidates = tracks.map(
-    (track: SpotifyAlbumTrack): AnchorCandidate => ({
-      artists: track.artists,
-      durationMs: track.durationMs,
-      isrc: track.isrc,
-      spotifyTrackId: track.spotifyTrackId,
-      title: track.title,
-    }),
-  );
+  const candidates = tracks.map((track: SpotifyAlbumTrack): AnchorCandidate => ({
+    artists: track.artists,
+    durationMs: track.durationMs,
+    isrc: track.isrc,
+    spotifyTrackId: track.spotifyTrackId,
+    title: track.title,
+  }));
   try {
     return (
       await anchorTrack(siblingId, candidates, {

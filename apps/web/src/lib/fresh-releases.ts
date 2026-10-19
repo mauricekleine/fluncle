@@ -100,16 +100,16 @@ export function freshWeekIndex(releaseDate: string, today: string, windowDays: n
 
 function freshEntries(data: FreshReleases): FreshEntry[] {
   const entries: FreshEntry[] = [
-    ...data.findings.map(
-      (finding): FreshEntry => ({
-        finding,
-        kind: "finding",
-        releaseDate: finding.releaseDate ?? "",
-      }),
-    ),
-    ...data.catalogue.map(
-      (track): FreshEntry => ({ kind: "catalogue", releaseDate: track.releaseDate, track }),
-    ),
+    ...data.findings.map((finding): FreshEntry => ({
+      finding,
+      kind: "finding",
+      releaseDate: finding.releaseDate ?? "",
+    })),
+    ...data.catalogue.map((track): FreshEntry => ({
+      kind: "catalogue",
+      releaseDate: track.releaseDate,
+      track,
+    })),
   ];
 
   return entries.sort((a, b) => {

@@ -387,8 +387,8 @@ function LaneHeading({ detail, label }: { detail?: string; label: string }) {
   );
 }
 
-const fetchReach = createServerFn({ method: "GET" }).handler(
-  (): Promise<PlatformStatsView> => listPlatformStats(),
+const fetchReach = createServerFn({ method: "GET" }).handler((): Promise<PlatformStatsView> =>
+  listPlatformStats(),
 );
 
 function crewSeries(rows: ReachRow[]): ReachPoint[] {

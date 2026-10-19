@@ -1490,15 +1490,13 @@ async function readArtistQualificationLabelRepairPrefix(
       subject_id: string;
       subject_type: "label";
     }[]
-  ).map(
-    (row): ProjectionRepairMarker => ({
-      projection: row.projection,
-      sourceEpoch: Number(row.source_epoch),
-      sourceVersion: row.source_version,
-      subjectId: row.subject_id,
-      subjectType: row.subject_type,
-    }),
-  );
+  ).map((row): ProjectionRepairMarker => ({
+    projection: row.projection,
+    sourceEpoch: Number(row.source_epoch),
+    sourceVersion: row.source_version,
+    subjectId: row.subject_id,
+    subjectType: row.subject_type,
+  }));
 }
 
 async function drainEmptyArtistQualificationLabelPrefix(
@@ -1676,15 +1674,13 @@ export async function repairPublicProjectionChunk(
         subject_id: string;
         subject_type: "track";
       }[]
-    ).map(
-      (row): ProjectionRepairMarker => ({
-        projection: row.projection,
-        sourceEpoch: Number(row.source_epoch),
-        sourceVersion: row.source_version,
-        subjectId: row.subject_id,
-        subjectType: row.subject_type,
-      }),
-    );
+    ).map((row): ProjectionRepairMarker => ({
+      projection: row.projection,
+      sourceEpoch: Number(row.source_epoch),
+      sourceVersion: row.source_version,
+      subjectId: row.subject_id,
+      subjectType: row.subject_type,
+    }));
     attempted += markers.length;
     const now = nowIso(options.now);
     repaired +=

@@ -86,9 +86,8 @@ async function resolveArtistsPage(
 
 const fetchArtistsPage = createServerFn({ method: "GET" })
   .validator((data: { order?: HubOrder; page?: number; q?: string }) => data)
-  .handler(
-    ({ data }): Promise<ArtistsPageData> =>
-      resolveArtistsPage(data.page, data.q, data.order ?? "most"),
+  .handler(({ data }): Promise<ArtistsPageData> =>
+    resolveArtistsPage(data.page, data.q, data.order ?? "most"),
   );
 
 function parseCompareSlugs(like: string): string[] {

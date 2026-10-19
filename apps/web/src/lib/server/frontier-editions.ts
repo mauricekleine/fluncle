@@ -145,21 +145,19 @@ export async function getFrontierEdition(
       where edition_id = ?
       order by position asc`,
   });
-  const tracks = typedRows<TrackRow>(trackResult.rows).map(
-    (row): FrontierEditionTrack => ({
-      artists: parseArtistsJson(row.artists_text),
-      bpm: row.bpm ?? undefined,
-      durationMs: row.duration_ms ?? undefined,
-      imageUrl: row.cover_url ?? undefined,
-      key: row.key ?? undefined,
-      logId: row.log_id ?? undefined,
-      similarity: row.similarity ?? undefined,
-      slot: row.slot,
-      spotifyUrl: row.spotify_url ?? undefined,
-      title: row.title_text,
-      trackId: row.track_id,
-    }),
-  );
+  const tracks = typedRows<TrackRow>(trackResult.rows).map((row): FrontierEditionTrack => ({
+    artists: parseArtistsJson(row.artists_text),
+    bpm: row.bpm ?? undefined,
+    durationMs: row.duration_ms ?? undefined,
+    imageUrl: row.cover_url ?? undefined,
+    key: row.key ?? undefined,
+    logId: row.log_id ?? undefined,
+    similarity: row.similarity ?? undefined,
+    slot: row.slot,
+    spotifyUrl: row.spotify_url ?? undefined,
+    title: row.title_text,
+    trackId: row.track_id,
+  }));
 
   return {
     summary: {
