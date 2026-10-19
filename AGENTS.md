@@ -72,7 +72,7 @@ Use the globally installed `mk-agent-orchestration` skill for provider, model, e
 - MUST: Use `bun` for repo scripts and package management unless a documented tool requires otherwise.
 - MUST: Use `rg` for code search when available.
 - NEVER: Use `npm`, `pnpm`, or `yarn` for installs unless the task targets tooling that explicitly requires them.
-- NEVER: Run `prettier` or `bunx prettier` outside `apps/raycast`. Formatting is owned by `oxfmt` for the repo, except `apps/raycast` where Raycast's CLI is the source of truth and `ray lint` runs a Prettier check over `src/**`. Use `bunx oxfmt <files>` or `bun run check` for non-Raycast files; use `bun run --cwd apps/raycast lint -- --fix` only for Raycast formatting fixes.
+- NEVER: Run `prettier` or `bunx prettier` outside `apps/raycast`. Formatting is owned by `bun fmt` for the repo, except `apps/raycast` where Raycast's CLI is the source of truth and `ray lint` runs a Prettier check over `src/**`. Use `bun run format <files>` or `bun run check` for non-Raycast files; use `bun run --cwd apps/raycast lint -- --fix` only for Raycast formatting fixes.
 - MUST: Quote shell variables and iterate with explicit arrays so expansions resolve to the intended targets. In DB scripts use parameterized SQL (or proper escaping), and confirm a table actually has a column before querying it.
 
 ## Quality Checks
@@ -80,7 +80,8 @@ Use the globally installed `mk-agent-orchestration` skill for provider, model, e
 - Before a commit or handoff, use `bun run quality:classify -- --base <sha> --head <sha>` to identify affected leaves and run their checks. Unknown paths, lockfiles, root configuration, workflow topology, and scheduled/manual runs select the full matrix; worktree setup selects static policy only.
 - Edit hooks format the touched file. Quality Checks and `deploy:gate` own the full matrix. For docs-only changes, verify formatting, links, and readability.
 - Read [docs/development.md#quality-checks](./docs/development.md#quality-checks) for package-specific commands; read [docs/quality-system.md](./docs/quality-system.md) before changing CI, the classifier, or deploy verification.
-- Use guards, early returns, `??`, or `?.` instead of TypeScript non-null assertions, enforced by oxlint.
+- Use guards, early returns, `??`, or `?.` instead of TypeScript non-null assertions, enforced by lint.
+- The repo trials Bun's formatter and linter from Bun canary: `bun run format`, `bun run lint` and the pre-commit hook run `bun-canary fmt` and `bun-canary lint` against `.oxfmtrc.json` and `.oxlintrc.json`. Dotfiles installs `bun-canary` locally; CI, `deploy:gate` and the audit box install it from npm through `scripts/bun-canary.ts`. Retire the trial once a Bun release ships both commands.
 - For browser inspection use the global `agent-browser` skill; use Chrome DevTools MCP for performance traces.
 
 ## Library and API Docs

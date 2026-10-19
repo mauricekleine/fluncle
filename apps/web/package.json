@@ -31,7 +31,7 @@
     "deploy:cf": "bun run db:migrate:production && bun run db:migrate:telemetry:production && bun run scripts/repair-hidden-graph-counts.ts && cf deploy --prebuilt && bun run scripts/backfill-mixable-artists-projection.ts --activate",
     "dev": "bun run scripts/dev.ts",
     "dev:vite": "bun run scripts/copy-sprites.ts && vite dev --host 127.0.0.1 --port 3000",
-    "lint": "oxlint",
+    "lint": "bun ../../scripts/bun-canary.ts lint --no-script",
     "postinstall": "fumadocs-mdx",
     "preview": "bun run build && vite preview",
     "probe": "bun run scripts/post-deploy-probe.ts",

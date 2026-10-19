@@ -74,9 +74,8 @@ async function resolveLabelsPage(
 
 const fetchLabelsPage = createServerFn({ method: "GET" })
   .validator((data: { order?: HubOrder; page?: number; q?: string }) => data)
-  .handler(
-    ({ data }): Promise<LabelsPageData> =>
-      resolveLabelsPage(data.page, data.q, data.order ?? "most"),
+  .handler(({ data }): Promise<LabelsPageData> =>
+    resolveLabelsPage(data.page, data.q, data.order ?? "most"),
   );
 
 const page1Title = "Every drum & bass record label · Fluncle";

@@ -114,23 +114,9 @@ if [ -z "${CHANGED[*]+set}" ]; then
 else
 	log "${#CHANGED[@]} changed path(s)"
 
-	if command -v bunx >/dev/null 2>&1; then
-		BUNX=(bunx)
-	else
-		BUNX=(bun x)
-	fi
-
-	step format 256 -- "${BUNX[@]}" oxfmt --check "${CHANGED[@]}"
-
-	BOX_OXLINTRC=".oxlintrc.box.jsonc"
-	sed -E 's/("typeAware"[[:space:]]*:[[:space:]]*)true/\1false/' .oxlintrc.json >"${BOX_OXLINTRC}"
-	if grep -q '"typeAware"[[:space:]]*:[[:space:]]*false' "${BOX_OXLINTRC}"; then
-		step lint "${AUDIT_VERIFY_LINT_HEADROOM_MB}" -- "${BUNX[@]}" oxlint -c "${BOX_OXLINTRC}" "${CHANGED[@]}"
-	else
-
-		record "lint" failed "type-aware-override-missing"
-	fi
-	rm -f "${BOX_OXLINTRC}"
+	BUN_CANARY=(bun scripts/bun-canary.ts)
+	step format 256 -- "${BUN_CANARY[@]}" fmt --check --no-script --no-error-on-unmatched-pattern "${CHANGED[@]}"
+	step lint "${AUDIT_VERIFY_LINT_HEADROOM_MB}" -- "${BUN_CANARY[@]}" lint --no-script --no-type-aware --no-error-on-unmatched-pattern "${CHANGED[@]}"
 
 	PACKAGES=()
 	while IFS= read -r package_dir; do

@@ -1,8 +1,1 @@
-# Agent worktrees share the repo's git but may not have node_modules, so lint-staged's bare
-# oxlint/oxfmt commands can be unavailable. Skip lint-staged LOUDLY when the tools are absent — the
-# CI gate remains the correctness net — and always run it where they exist.
-if [ -x "node_modules/.bin/oxlint" ]; then
-  bunx lint-staged
-else
-  echo "husky: node_modules/.bin/oxlint missing (fresh worktree?) — skipping lint-staged; CI runs the full gate."
-fi
+bun scripts/bun-canary.ts fmt --staged --no-script && bun scripts/bun-canary.ts lint --staged --no-script

@@ -42,7 +42,7 @@ describe("hosted dependency installation", () => {
         devDependencies?: Record<string, string>;
       };
       const devDependencies = { ...packageJson.devDependencies };
-      delete devDependencies.oxfmt;
+      delete devDependencies.taze;
       packageJson.devDependencies = devDependencies;
 
       writeFileSync(join(fixture, "package.json"), `${JSON.stringify(packageJson, null, 2)}\n`);

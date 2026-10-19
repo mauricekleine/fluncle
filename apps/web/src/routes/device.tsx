@@ -15,8 +15,8 @@ type DeviceSearch = {
 
 type Phase = "approved" | "denied" | "error" | "idle" | "working";
 
-const getDeviceIdentity = createServerFn({ method: "GET" }).handler(
-  (): Promise<MeResponse> => meResponse(getRequest()),
+const getDeviceIdentity = createServerFn({ method: "GET" }).handler((): Promise<MeResponse> =>
+  meResponse(getRequest()),
 );
 
 // oxlint-disable-next-line sort-keys

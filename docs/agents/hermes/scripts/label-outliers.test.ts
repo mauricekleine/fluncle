@@ -44,13 +44,11 @@ function build(fixtures: Fixture[], seed = 7) {
   const groups: LabelGroup[] = fixtures.map((fixture) => ({
     labelId: fixture.labelId,
     tracks: fixture.albums.flatMap((album) =>
-      album.trackIds.map(
-        (trackId): OutlierTrack => ({
-          albumId: album.albumId,
-          trackId,
-          vector: vectorToward(album.axis, random),
-        }),
-      ),
+      album.trackIds.map((trackId): OutlierTrack => ({
+        albumId: album.albumId,
+        trackId,
+        vector: vectorToward(album.axis, random),
+      })),
     ),
   }));
   const globalSum = new Float64Array(EMBEDDING_DIMENSIONS);

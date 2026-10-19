@@ -222,14 +222,12 @@ const fetchPlanTargets = createServerFn({ method: "GET" }).handler(
 
     return Promise.all(
       plans.map(async (plan) => ({
-        cues: (await getRecordingCues(plan.id)).map(
-          (cue): PlanTargetCue => ({
-            artistsText: cue.artists_text ?? undefined,
-            findingId: cue.finding_id ?? undefined,
-            startMs: cue.start_ms ?? undefined,
-            titleText: cue.title_text ?? undefined,
-          }),
-        ),
+        cues: (await getRecordingCues(plan.id)).map((cue): PlanTargetCue => ({
+          artistsText: cue.artists_text ?? undefined,
+          findingId: cue.finding_id ?? undefined,
+          startMs: cue.start_ms ?? undefined,
+          titleText: cue.title_text ?? undefined,
+        })),
         id: plan.id,
         title: plan.title,
       })),

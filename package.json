@@ -60,11 +60,11 @@
     "deploy:gate": "bun run format:check && bun run lint && bun run go:check && bun run typecheck && bun run test && bun run test:scripts:worker",
     "deploy:verify": "node scripts/quality/deploy-verify.mjs",
     "dev": "TURBO_CACHE_DIR=\"${TURBO_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/turbo/fluncle}\" turbo run dev --concurrency=10",
-    "format": "oxfmt --write .",
-    "format:check": "oxfmt --check .",
+    "format": "bun scripts/bun-canary.ts fmt --no-script",
+    "format:check": "bun scripts/bun-canary.ts fmt --check --no-script",
     "go:check": "TURBO_CACHE_DIR=\"${TURBO_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/turbo/fluncle}\" turbo run lint format:check --filter=@fluncle/ssh --filter=@fluncle/dns",
-    "lint": "GOMAXPROCS=${GOMAXPROCS:-1} GOMEMLIMIT=${GOMEMLIMIT:-3GiB} oxlint --threads=${OXLINT_THREADS:-2}",
-    "lint:fix": "GOMAXPROCS=${GOMAXPROCS:-1} GOMEMLIMIT=${GOMEMLIMIT:-3GiB} oxlint --threads=${OXLINT_THREADS:-2} --fix",
+    "lint": "bun scripts/bun-canary.ts lint --no-script",
+    "lint:fix": "bun scripts/bun-canary.ts lint --no-script --fix",
     "quality:classify": "node scripts/quality/classify.mjs",
     "quality:history": "node scripts/quality/history-report.mjs",
     "quality:workflows": "bun test scripts/quality/workflows.test.ts",
@@ -87,10 +87,6 @@
     "@types/bun": "catalog:",
     "@types/node": "catalog:",
     "husky": "~9.1.7",
-    "lint-staged": "~17.6.0",
-    "oxfmt": "~0.60.0",
-    "oxlint": "~1.86.0",
-    "oxlint-tsgolint": "~7.0.2003",
     "playwright-core": "catalog:",
     "react-doctor": "~0.9.14",
     "taze": "21.3.0",
@@ -105,17 +101,8 @@
     "sharp": "0.35.5",
     "shell-quote": "1.11.0",
     "source-map-js": "1.2.2",
-    "tinypool": "2.1.2",
     "undici": "7.29.1",
     "vue": "3.5.42"
-  },
-  "lint-staged": {
-    "*": [
-      "oxfmt --write --ignore-path .prettierignore --no-error-on-unmatched-pattern"
-    ],
-    "**/*.{js,jsx,ts,tsx}": [
-      "oxlint --fix --no-error-on-unmatched-pattern"
-    ]
   },
   "engines": {
     "bun": ">=1.4.0"
@@ -128,7 +115,6 @@
     "sharp": "Drop when Transformers and every Miniflare chain require sharp 0.35.5 or newer, including exact pins.",
     "shell-quote": "Drop when React Native devtools and Expo tooling require shell-quote 1.11.0 or newer.",
     "source-map-js": "Drop when every compiler, CSS, and source-map tooling chain requires source-map-js 1.2.2 or newer.",
-    "tinypool": "Drop when oxfmt requires tinypool 2.1.2 or newer.",
     "undici": "Drop when @scalar/json-magic's exact undici dependency is 7.29.1 or newer.",
     "vue": "Drop when every Vue consumer requires Vue 3.5.42 or newer; Vue pins its renderer, compilers, and runtime to the same exact release."
   },

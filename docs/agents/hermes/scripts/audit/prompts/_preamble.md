@@ -63,7 +63,7 @@ package's own typecheck and tests, and writes the machine record the driver fold
 run ledger. Re-run it after every fix, so the last record is the branch's real state.
 
 **Run it instead of, not alongside, the whole-repo passes.** `bun run check`, `bun run typecheck`,
-`bunx oxlint` with no paths, and `apps/web build` do not fit in this box's memory cap — they get
+`bun run lint`, and `apps/web build` do not fit in this box's memory cap — they get
 killed by the kernel mid-run, which looks to you like a flaky check and is actually the night
 falling over. Every one of them runs on the PR the driver opens (the `quality-checks` action) and again in
 `deploy:gate` before anything deploys, and the reviewer merges only on green required checks. The

@@ -8649,18 +8649,18 @@ html[data-player-docked] .nav-shell--workbench {
 }
 
 .discovery-row[data-lit]:has(
-  .play-cover[data-status="playing"],
-  .play-cover[data-status="loading"],
-  .play-cover[data-status="paused"]
-) {
+    .play-cover[data-status="playing"],
+    .play-cover[data-status="loading"],
+    .play-cover[data-status="paused"]
+  ) {
   background: var(--accent);
 }
 
 .discovery-row:not([data-lit]):has(
-  .play-cover[data-status="playing"],
-  .play-cover[data-status="loading"],
-  .play-cover[data-status="paused"]
-) {
+    .play-cover[data-status="playing"],
+    .play-cover[data-status="loading"],
+    .play-cover[data-status="paused"]
+  ) {
   background: var(--muted);
 }
 

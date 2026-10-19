@@ -42,7 +42,7 @@ Same ladder the auditor used, same reason:
 bash docs/agents/hermes/scripts/audit/verify.sh
 ```
 
-Never run `bun run check`, a bare `bunx oxlint`, a whole-repo `typecheck`, or `apps/web build` on
+Never run `bun run check`, `bun run lint`, a whole-repo `typecheck`, or `apps/web build` on
 this box — they exceed its memory cap and get killed by the kernel mid-run. `gh pr checks` is the
 authority on those; the ladder is only your fast local signal. The measurements are in the header
 of `verify.sh`.

@@ -4,7 +4,7 @@ Checked-in Claude Code config for this repo. Personal overrides go in `settings.
 
 ## Hooks (`settings.json` → `hooks/`)
 
-- **`format-on-edit.sh`** — PostToolUse(Edit|Write). Formats the touched file with `oxfmt` (JS/TS) or `gofmt` (Go). Formatting only: `.oxlintrc.json` is type-aware, so lint runs in lint-staged at commit and in CI, not per edit. Best-effort; never blocks an edit.
+- **`format-on-edit.sh`** — PostToolUse(Edit|Write). Formats the touched file with `bun-canary fmt` (JS/TS) or `gofmt` (Go). Formatting only: lint is type-aware, so it runs in the pre-commit hook and in CI, not per edit. Best-effort; never blocks an edit.
 - **`guard-protected-files.sh`** — PreToolUse(Edit|Write). Blocks hand-edits to generated Drizzle migrations under `apps/web/drizzle/` (use `bun run --cwd apps/web db:generate`) and to `.env`/secret files. Its protected-path matcher uses Bash `[[ =~ ]]` expressions rather than GNU ERE `\b`, whose behavior differs between the shipped macOS Bash 3.2 and Linux Bash 5.
 
 ## Subagents (`agents/`)

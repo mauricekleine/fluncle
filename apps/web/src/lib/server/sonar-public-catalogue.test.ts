@@ -36,9 +36,8 @@ beforeEach(async () => {
       trackId,
     });
   }
-  searchSonar.mockImplementation(
-    async ({ topK }: { topK: number }): Promise<SonarMatch[]> =>
-      RANKED.slice(0, topK).map((id, index) => ({ id, score: 1 - index / 10 })),
+  searchSonar.mockImplementation(async ({ topK }: { topK: number }): Promise<SonarMatch[]> =>
+    RANKED.slice(0, topK).map((id, index) => ({ id, score: 1 - index / 10 })),
   );
 });
 

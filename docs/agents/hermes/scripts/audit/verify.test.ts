@@ -75,19 +75,6 @@ function box(options: { stubExitCode?: number; stubSleepSeconds?: number } = {})
   git(repo, "init", "--quiet", "--initial-branch=main");
   writeFileSync(join(repo, "README.md"), "fixture\n", "utf8");
 
-  writeFileSync(
-    join(repo, ".oxlintrc.json"),
-    [
-      "{",
-      "  // a comment the JSON parser would choke on",
-      '  "options": {',
-      '    "typeAware": true',
-      "  }",
-      "}",
-      "",
-    ].join("\n"),
-    "utf8",
-  );
   git(repo, "add", "-A");
   git(repo, "commit", "--quiet", "-m", "fixture");
 
@@ -148,29 +135,16 @@ describe("the audit verification ladder", () => {
     expect(fixture.calls()).toEqual([]);
   });
 
-  test("the lint config it derives has the type-aware switch off, at the repo root", () => {
+  test("lint skips the type-aware rules that do not fit the box", () => {
     const fixture = box();
     writeFileSync(join(fixture.repo, "touched.ts"), "export const a = 1;\n", "utf8");
 
     const { status } = fixture.run();
+
     expect(status).toBe(0);
-    const call = fixture.calls().find((entry) => entry.startsWith("bunx oxlint -c "));
-    expect(call).toBeDefined();
-    const configPath = (call ?? "").split(" ")[3] ?? "";
-
-    expect(configPath.startsWith("/")).toBe(false);
-    expect(existsSync(join(fixture.repo, configPath))).toBe(false);
-  });
-
-  test("a config whose type-aware switch cannot be flipped fails the ladder loudly", () => {
-    const fixture = box();
-    writeFileSync(join(fixture.repo, ".oxlintrc.json"), '{ "options": {} }\n', "utf8");
-    writeFileSync(join(fixture.repo, "touched.ts"), "export const a = 1;\n", "utf8");
-    const { record, status } = fixture.run();
-
-    expect(status).toBe(1);
-    expect(record).toMatchObject({ failed: 1 });
-    expect(fixture.calls().some((entry) => entry.startsWith("bunx oxlint"))).toBe(false);
+    expect(fixture.calls()).toContain(
+      "bun scripts/bun-canary.ts lint --no-script --no-type-aware --no-error-on-unmatched-pattern touched.ts",
+    );
   });
 
   test("formatting and the lint rules run scoped to the changed paths, never the whole repo", () => {
@@ -182,12 +156,15 @@ describe("the audit verification ladder", () => {
     expect(status).toBe(0);
     expect(record).toMatchObject({ failed: 0, ran: 2 });
     const calls = fixture.calls();
-    expect(calls).toContain("bunx oxfmt --check touched.ts");
-
-    expect(calls.some((call) => /^bunx oxlint -c \S+ touched\.ts$/.test(call))).toBe(true);
-    expect(calls.some((call) => /^bunx oxlint touched\.ts$/.test(call))).toBe(false);
-
-    expect(calls.some((call) => /^bunx oxlint$/.test(call))).toBe(false);
+    expect(calls).toContain(
+      "bun scripts/bun-canary.ts fmt --check --no-script --no-error-on-unmatched-pattern touched.ts",
+    );
+    expect(
+      calls.some((call) => /^bun scripts\/bun-canary\.ts lint .* touched\.ts$/.test(call)),
+    ).toBe(true);
+    expect(
+      calls.some((call) => /^bun scripts\/bun-canary\.ts (fmt|lint)( --\S+)*$/.test(call)),
+    ).toBe(false);
     expect(calls.some((call) => call.includes("run check"))).toBe(false);
     expect(calls.some((call) => call.endsWith("typecheck") && !call.includes("--cwd"))).toBe(false);
   });
@@ -267,7 +244,9 @@ describe("the audit verification ladder", () => {
     const { record } = fixture.run();
 
     expect(record.steps).toContainEqual({ reason: "no-headroom", state: "skipped", step: "lint" });
-    expect(fixture.calls().some((call) => call.startsWith("bunx oxlint"))).toBe(false);
+    expect(fixture.calls().some((call) => call.startsWith("bun scripts/bun-canary.ts lint"))).toBe(
+      false,
+    );
   });
 
   test("a failing check fails the ladder so the driver can call the branch red", () => {

@@ -13,7 +13,7 @@ file="$(printf '%s' "$fields" | sed -n '2p')"
 
 case "$file" in
 *.ts | *.tsx | *.js | *.jsx | *.mjs | *.cjs)
-	bunx oxfmt --write "$file" >/dev/null 2>&1 || true
+	bun-canary fmt --no-script "$file" >/dev/null 2>&1 || true
 	;;
 *.go)
 	gofmt -w "$file" >/dev/null 2>&1 || true
