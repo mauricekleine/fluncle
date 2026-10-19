@@ -98,17 +98,20 @@ const fixedRun = await runLint(FORBIDDEN, true);
 const allowedRun = await runLint(ALLOWED, false);
 
 test("the no-comments rule reports every comment form", () => {
-  expect(forbiddenRun.exitCode).not.toBe(0);
-  expect(forbiddenRun.output.match(/no-comments\(no-comments\)/gu)).toHaveLength(4);
+  expect(forbiddenRun.exitCode, forbiddenRun.output).not.toBe(0);
+  expect(
+    forbiddenRun.output.match(/no-comments\(no-comments\)/gu),
+    forbiddenRun.output,
+  ).toHaveLength(4);
 });
 
 test("the no-comments rule removes comments without damaging their surroundings", () => {
-  expect(fixedRun.exitCode).toBe(0);
+  expect(fixedRun.exitCode, fixedRun.output).toBe(0);
   expect(fixedRun.fixed).toBe(FIXED);
   expect(fixedRun.output).not.toContain("no-comments(no-comments)");
 });
 
 test("the no-comments rule allows the directives used by the repository", () => {
-  expect(allowedRun.exitCode).toBe(0);
+  expect(allowedRun.exitCode, allowedRun.output).toBe(0);
   expect(allowedRun.output).not.toContain("no-comments(no-comments)");
 });
