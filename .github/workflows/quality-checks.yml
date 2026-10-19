@@ -114,11 +114,14 @@ jobs:
             turbo-v2-${{ runner.os }}-${{ hashFiles('bun.lock', 'turbo.json') }}-
             turbo-v2-${{ runner.os }}-
 
-      - name: Run static policy
+      - name: Install Bun canary for lint and format
         env:
-          GOMAXPROCS: "1"
-          GOMEMLIMIT: 3GiB
-          OXLINT_THREADS: "2"
+          BUN_CANARY_DIR: ${{ runner.temp }}/bun-canary
+        run: |
+          bun scripts/bun-canary.ts --revision
+          echo "$BUN_CANARY_DIR" >> "$GITHUB_PATH"
+
+      - name: Run static policy
         run: node scripts/quality/measure.mjs --lane static --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane static
 
       - name: Migrations are append-only

@@ -49,11 +49,11 @@ The hermes container's memory cap is shared by ~40 sweeps, the paid capture lane
 | whole-repo `turbo run typecheck` | 2.81 GB  | 2.91 GB at `--concurrency=1` — serializing does not lower it either     |
 | `apps/web typecheck` alone       | 2.80 GB  | one package IS the whole-repo figure                                    |
 | `apps/cli typecheck`             | 0.36 GB  | a normal package fits comfortably                                       |
-| **path-scoped type-aware lint**  | 1.50 GB  | what the ladder actually runs                                           |
+| path-scoped type-aware lint      | 1.50 GB  | still too close to the cap to run every night                           |
 
-`tsgolint` is a Go binary, so a Node heap cap (`--max-old-space-size`) never reaches the process doing the allocating — which is why there is no heap-cap knob here.
+These figures were measured with oxlint and `tsgolint`; the repo now lints with `bun-canary lint`, which reports its own peak with `--timing`.
 
-So both agents verify through **one command**, [`../scripts/audit/verify.sh`](../scripts/audit/verify.sh), which derives the changed paths, runs formatting and the lint rules scoped to them, then each changed package's own `typecheck` and `test`, each behind a wall budget and a cgroup-headroom precondition. A step it cannot afford is recorded as `skipped` with a reason (`no-headroom`, `ci-only`, `no-script`) rather than started into an OOM kill. The record lands in `.audit/verify.json` and the driver folds it into the summary line, so "which checks ran" is a fact in the run ledger instead of a claim in a report.
+So both agents verify through **one command**, [`../scripts/audit/verify.sh`](../scripts/audit/verify.sh), which derives the changed paths, runs `bun-canary fmt --check` and the lint rules without type information (`--no-type-aware`) scoped to them, installing `bun-canary` from npm through `scripts/bun-canary.ts` when the box lacks it, then each changed package's own `typecheck` and `test`, each behind a wall budget and a cgroup-headroom precondition. A step it cannot afford is recorded as `skipped` with a reason (`no-headroom`, `ci-only`, `no-script`) rather than started into an OOM kill. The record lands in `.audit/verify.json` and the driver folds it into the summary line, so "which checks ran" is a fact in the run ledger instead of a claim in a report.
 
 Nothing is lost by not running the whole-repo passes here: every one of them runs on the PR the audit opens (the `quality-checks` action) and again in `deploy:gate` before Cloudflare deploys, and the reviewer merges only on green required checks. Running them a third time on the smallest machine in the chain gated nothing.
 

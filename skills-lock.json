@@ -95,7 +95,7 @@
     "fluncle-surfaces": {
       "source": "./packages/skills/fluncle-surfaces",
       "sourceType": "local",
-      "computedHash": "a9bd6d61630cfd15fb3cb04840fe7750ac2cd044df50f143ad85864f95211ccf"
+      "computedHash": "0c728a16cf628be12d98bf97eb1681add674e62d90733418a32f8b8e3dec0f1b"
     },
     "fluncle-track-enrichment": {
       "source": "./packages/skills/fluncle-track-enrichment",
@@ -105,7 +105,7 @@
     "fluncle-video": {
       "source": "./packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "605a09e0ade8d8cb064f7fd116edaea6071b204566bc098fc17655afeaa671a8"
+      "computedHash": "0e9ebefa7180b2326a9a4a120baec85f30b0303e6c40ac8ad42a4705c7e1d841"
     },
     "improve": {
       "source": "shadcn/improve",

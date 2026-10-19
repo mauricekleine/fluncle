@@ -87,10 +87,10 @@ Iterate until type is legible inside the safe inset (the telemetry block include
 Three pre-render gates, all blocking:
 
 - `bun run --cwd packages/video typecheck`
-- `bunx oxlint packages/video`
+- `bun run lint packages/video`
 - `bun run --cwd packages/video lint:composition src/remotion/workbench/<CompId>.tsx` — the static motion lint. It scans your composition source (JS + GLSL) for any global translation term that binds audio over (or without) a dominant constant clock — the two whole-vehicle JUMP bugs of doctrine 7 — and exits non-zero on a finding. Fix the binding (move the reactivity into in-place material; keep global drift an audio-free constant clock), don't argue with it: it catches at author time what `judge:metrics` would fail after a full render.
 
-Format with `bunx oxfmt --write <files>`.
+Format with `bun run format <files>`.
 
 ## 7. Render
 

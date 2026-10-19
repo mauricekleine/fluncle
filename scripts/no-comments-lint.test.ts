@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { expect, test } from "bun:test";
 
-const OXLINT = Bun.fileURLToPath(new URL("../node_modules/.bin/oxlint", import.meta.url));
+const BUN_CANARY = Bun.fileURLToPath(new URL("bun-canary.ts", import.meta.url));
 const REPOSITORY = Bun.fileURLToPath(new URL("../", import.meta.url));
 const PLUGIN = Bun.fileURLToPath(new URL("../tools/oxlint/no-comments/index.ts", import.meta.url));
 
@@ -47,7 +47,7 @@ type RunResult = {
   readonly output: string;
 };
 
-async function runOxlint(fixture: string, fix: boolean): Promise<RunResult> {
+async function runLint(fixture: string, fix: boolean): Promise<RunResult> {
   const directory = await mkdtemp(join(tmpdir(), "fluncle-no-comments-lint-"));
   const filename = join(directory, "fixture.tsx");
   const config = join(directory, "oxlint.json");
@@ -61,11 +61,23 @@ async function runOxlint(fixture: string, fix: boolean): Promise<RunResult> {
   );
 
   try {
-    const run = Bun.spawn([OXLINT, "--config", config, ...(fix ? ["--fix"] : []), filename], {
-      cwd: REPOSITORY,
-      stderr: "pipe",
-      stdout: "pipe",
-    });
+    const run = Bun.spawn(
+      [
+        process.execPath,
+        BUN_CANARY,
+        "lint",
+        "--no-script",
+        "--config",
+        config,
+        ...(fix ? ["--fix"] : []),
+        filename,
+      ],
+      {
+        cwd: REPOSITORY,
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(run.stdout).text(),
       new Response(run.stderr).text(),
@@ -81,9 +93,9 @@ async function runOxlint(fixture: string, fix: boolean): Promise<RunResult> {
   }
 }
 
-const forbiddenRun = await runOxlint(FORBIDDEN, false);
-const fixedRun = await runOxlint(FORBIDDEN, true);
-const allowedRun = await runOxlint(ALLOWED, false);
+const forbiddenRun = await runLint(FORBIDDEN, false);
+const fixedRun = await runLint(FORBIDDEN, true);
+const allowedRun = await runLint(ALLOWED, false);
 
 test("the no-comments rule reports every comment form", () => {
   expect(forbiddenRun.exitCode).not.toBe(0);

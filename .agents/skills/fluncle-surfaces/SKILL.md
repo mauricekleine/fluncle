@@ -100,7 +100,7 @@ From the repo root:
 ```bash
 bun run --cwd packages/registry typecheck
 bun packages/registry/src/index.test.ts   # self-running asserts; exits non-zero on failure
-bunx oxfmt packages/registry/src/index.ts
+bun run format packages/registry/src/index.ts
 bun run typecheck                          # all packages, if a consumer changed
 ```
 
