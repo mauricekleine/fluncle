@@ -52,7 +52,7 @@ jobs:
   audit:
     name: Audit bun.lock dependencies
     needs: pr_state
-    if: needs.pr_state.outputs.run == 'true'
+    if: ${{ !cancelled() && needs.pr_state.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

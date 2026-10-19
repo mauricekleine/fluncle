@@ -49,7 +49,7 @@ jobs:
   scan:
     name: Scan git history for committed secrets
     needs: pr_state
-    if: needs.pr_state.outputs.run == 'true'
+    if: ${{ !cancelled() && needs.pr_state.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
