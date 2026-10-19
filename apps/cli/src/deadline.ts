@@ -179,10 +179,6 @@ export function noteProgress(note: string): void {
   state.note = note;
 }
 
-export function progressNote(): null | string {
-  return state.note;
-}
-
 export function resetDeadlineForTests(): void {
   disarmDeadline();
   state.at = null;
