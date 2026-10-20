@@ -47,7 +47,7 @@ cd packages/ui && bunx --bun shadcn@latest add dialog
 ## Quality Checks
 
 - Every change uses the dependency-closure contract in `scripts/quality/classifier.mjs`; unknown paths, lockfiles, root configuration, workflow topology, and scheduled/manual runs fail closed to the full matrix. Worktrunk's local worktree setup (`.config/wt.toml`, `.worktreeinclude`) is the one root-configuration exception: no check or deploy reads it, so it selects static policy only. `bun run quality:classify -- --base <sha> --head <sha>` explains the selected leaves.
-- Edit hooks only format the touched file. Before a commit or handoff, run the checks for the packages you changed; `bun run quality:classify` names the affected leaves. Quality Checks and `deploy:gate` run the full matrix.
+- Edit hooks only format the touched file. Before a commit or handoff, run the checks for the packages you changed; `bun run quality:classify` names the affected leaves. Quality Checks runs the full matrix; `deploy:gate` checks what the Worker build deploys.
 - To inspect or verify a running UI, use the global `agent-browser` skill (the pinned `agent-browser` CLI); use Chrome DevTools MCP only for performance traces.
 - TypeScript: `bun run typecheck` from the repo root, or the nearest package `typecheck` for focused changes.
 - Lint and format: `bun run check` from the repo root for broad validation.
