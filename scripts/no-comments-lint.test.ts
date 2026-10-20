@@ -41,13 +41,24 @@ void invalid;
 void imported;
 `;
 
-const DIAGNOSTIC = /no-comments(?:\(no-comments\)|\/no-comments)/gu;
+type Diagnostic = {
+  readonly code: string;
+  readonly labels: readonly { readonly span: { readonly column: number; readonly line: number } }[];
+};
 
 type RunResult = {
+  readonly comments: readonly string[];
   readonly exitCode: number;
   readonly fixed?: string;
   readonly output: string;
 };
+
+function reportedComments(stdout: string): string[] {
+  const report = JSON.parse(stdout) as { readonly diagnostics: readonly Diagnostic[] };
+  return report.diagnostics
+    .filter((diagnostic) => diagnostic.code.includes("no-comments"))
+    .flatMap((diagnostic) => diagnostic.labels.map(({ span }) => `${span.line}:${span.column}`));
+}
 
 async function runLint(fixture: string, fix: boolean): Promise<RunResult> {
   const directory = await mkdtemp(join(tmpdir(), "fluncle-no-comments-lint-"));
@@ -69,6 +80,7 @@ async function runLint(fixture: string, fix: boolean): Promise<RunResult> {
         BUN_CANARY,
         "lint",
         "--no-script",
+        "--format=json",
         "--config",
         config,
         ...(fix ? ["--fix"] : []),
@@ -86,6 +98,7 @@ async function runLint(fixture: string, fix: boolean): Promise<RunResult> {
       run.exited,
     ]);
     return {
+      comments: reportedComments(stdout),
       exitCode,
       output: `${stdout}${stderr}`,
       ...(fix ? { fixed: await readFile(filename, "utf8") } : {}),
@@ -101,16 +114,16 @@ const allowedRun = await runLint(ALLOWED, false);
 
 test("the no-comments rule reports every comment form", () => {
   expect(forbiddenRun.exitCode, forbiddenRun.output).not.toBe(0);
-  expect(forbiddenRun.output.match(DIAGNOSTIC)?.length ?? 0, forbiddenRun.output).toBe(4);
+  expect(forbiddenRun.comments, forbiddenRun.output).toEqual(["2:1", "3:1", "4:26", "5:19"]);
 });
 
 test("the no-comments rule removes comments without damaging their surroundings", () => {
   expect(fixedRun.exitCode, fixedRun.output).toBe(0);
   expect(fixedRun.fixed).toBe(FIXED);
-  expect(fixedRun.output).not.toMatch(DIAGNOSTIC);
+  expect(fixedRun.comments, fixedRun.output).toEqual([]);
 });
 
 test("the no-comments rule allows the directives used by the repository", () => {
   expect(allowedRun.exitCode, allowedRun.output).toBe(0);
-  expect(allowedRun.output).not.toMatch(DIAGNOSTIC);
+  expect(allowedRun.comments, allowedRun.output).toEqual([]);
 });
