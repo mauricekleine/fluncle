@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { AVATAR_MAX_BYTES, validateAvatarUpload, verifyAvatarMutation } from "./avatar";
+import {
+  AVATAR_MAX_BYTES,
+  readAvatarBody,
+  validateAvatarUpload,
+  verifyAvatarMutation,
+} from "./avatar";
 import { createCsrfToken, type PublicUser } from "./public-auth";
 
 function pngBytes(width: number, height: number): ArrayBuffer {
@@ -56,6 +61,62 @@ describe("validateAvatarUpload", () => {
     const result = validateAvatarUpload("image/png", pngBytes(513, 64));
 
     expect(result).toMatchObject({ code: "dimensions_too_large", ok: false, status: 422 });
+  });
+});
+
+function streamedUpload(totalBytes: number, chunkBytes = 64 * 1024): Request {
+  let sent = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent >= totalBytes) {
+        controller.close();
+        return;
+      }
+
+      const size = Math.min(chunkBytes, totalBytes - sent);
+      sent += size;
+      controller.enqueue(new Uint8Array(size));
+    },
+  });
+
+  const init = { body, duplex: "half", method: "POST" };
+
+  return new Request("https://fluncle.com/api/me/avatar", init);
+}
+
+describe("readAvatarBody", () => {
+  it("reads a body exactly at the cap", async () => {
+    const result = await readAvatarBody(streamedUpload(AVATAR_MAX_BYTES));
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.bytes.byteLength).toBe(AVATAR_MAX_BYTES);
+  });
+
+  it("rejects a streamed body one byte past the cap without a declared length", async () => {
+    const result = await readAvatarBody(streamedUpload(AVATAR_MAX_BYTES + 1));
+
+    expect(result).toMatchObject({ code: "too_large", ok: false, status: 413 });
+  });
+
+  it("rejects a declared content-length past the cap before reading the body", async () => {
+    const request = new Request("https://fluncle.com/api/me/avatar", {
+      body: new Uint8Array(16),
+      headers: { "content-length": String(AVATAR_MAX_BYTES + 1) },
+      method: "POST",
+    });
+
+    const result = await readAvatarBody(request);
+
+    expect(result).toMatchObject({ code: "too_large", ok: false, status: 413 });
+    expect(request.bodyUsed).toBe(false);
+  });
+
+  it("returns an empty buffer for a request with no body", async () => {
+    const result = await readAvatarBody(
+      new Request("https://fluncle.com/api/me/avatar", { method: "POST" }),
+    );
+
+    expect(result.ok && result.bytes.byteLength).toBe(0);
   });
 });
 
