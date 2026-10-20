@@ -10,5 +10,6 @@
     "OTEL_LOG_RAW_API_BODIES": "0",
     "OTEL_LOG_MANAGED_SETTINGS": "0"
   },
-  "autoMemoryEnabled": false
+  "autoMemoryEnabled": false,
+  "enableArtifact": false
 }
