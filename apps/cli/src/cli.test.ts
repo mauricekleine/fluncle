@@ -200,7 +200,7 @@ describe("fluncle CLI parsing and JSON output", () => {
       await withStubApi(
         () => Response.json({ labels, ok: true }),
         async (baseUrl) => {
-          const result = await runCliIntoKernelPipe(listArgs, baseUrl, 0);
+          const result = await runCliIntoKernelPipe(listArgs, baseUrl, "immediately");
 
           expect(result.exitCode).toBe(0);
           expect(Buffer.byteLength(result.received)).toBeGreaterThan(64 * 1024);
@@ -209,17 +209,46 @@ describe("fluncle CLI parsing and JSON output", () => {
       );
     });
 
-    testCli("stops at the deadline with exit 124 while the reader is not draining", async () => {
-      await withStubApi(
-        () => Response.json({ labels, ok: true }),
-        async (baseUrl) => {
-          const result = await runCliIntoKernelPipe(["--timeout", "0.5", ...listArgs], baseUrl, 2);
+    testCli(
+      "exits 124 at the deadline when the reader drains only after the CLI exits",
+      async () => {
+        await withStubApi(
+          () => Response.json({ labels, ok: true }),
+          async (baseUrl) => {
+            const result = await runCliIntoKernelPipe(
+              ["--timeout", "0.5", ...listArgs],
+              baseUrl,
+              "after-exit",
+            );
 
-          expect(result.exitCode).toBe(124);
-          expect(result.received.startsWith('{\n  "labels": [')).toBe(true);
-        },
-      );
-    });
+            expect(result.exitCode).toBe(124);
+          },
+        );
+      },
+    );
+
+    testCli(
+      "a write blocked on a full pipe stops at the deadline and keeps what it delivered",
+      async () => {
+        const deadline = new URL("./deadline.ts", import.meta.url).pathname;
+        const output = new URL("./output.ts", import.meta.url).pathname;
+        const script = [
+          `import { armDeadline, fireIfPastDeadline } from ${JSON.stringify(deadline)};`,
+          `import { printJson, routeConsoleThroughBlockingWrites } from ${JSON.stringify(output)};`,
+          `routeConsoleThroughBlockingWrites(() => fireIfPastDeadline("waiting for the stdout reader to take the output"));`,
+          `armDeadline(process.stdout.isTTY ? 0 : 0.5, { command: "admin labels list", json: true });`,
+          `printJson({ labels: Array.from({ length: ${labels.length} }, (_, index) => ({ name: \`Pipe Label \${index}\`, seedState: "undecided", slug: \`pipe-label-\${index}\`, sourceNote: "n".repeat(400) })), ok: true });`,
+        ].join("\n");
+
+        const result = await runIntoKernelPipe([process.execPath, "-e", script], {}, "after-exit");
+
+        expect(result.exitCode).toBe(124);
+        expect(result.received.startsWith('{\n  "labels": [')).toBe(true);
+        expect(Buffer.byteLength(result.received)).toBeLessThan(
+          Buffer.byteLength(JSON.stringify({ labels, ok: true }, null, 2)),
+        );
+      },
+    );
   });
 
   testCli("admin labels update requires a ruling or a scoped re-walk before fetching", async () => {
@@ -2189,37 +2218,39 @@ async function runCli(
   }
 }
 
-async function runCliIntoKernelPipe(
+type PipeReader = "after-exit" | "immediately";
+
+function runCliIntoKernelPipe(
   args: string[],
   baseUrl: string,
-  readerDelaySeconds: number,
+  reader: PipeReader,
+): Promise<{ exitCode: number; received: string }> {
+  return runIntoKernelPipe(
+    [process.execPath, cliPath, ...args],
+    { FLUNCLE_API_BASE_URL: baseUrl, FLUNCLE_API_TOKEN: "test-token" },
+    reader,
+  );
+}
+
+async function runIntoKernelPipe(
+  command: string[],
+  env: Record<string, string>,
+  reader: PipeReader,
 ): Promise<{ exitCode: number; received: string }> {
   const dir = mkdtempSync(join(tmpdir(), "fluncle-cli-pipe-"));
   const statusFile = join(dir, "status");
   const receivedFile = join(dir, "received");
   const script =
-    'status="$1" received="$2" delay="$3"; shift 3; { "$@"; echo "$?" > "$status"; } | { sleep "$delay"; cat > "$received"; }';
+    'status="$1" received="$2" reader="$3"; shift 3; { "$@"; echo "$?" > "$status.partial"; mv "$status.partial" "$status"; } | { if [ "$reader" = after-exit ]; then until [ -e "$status" ]; do sleep 0.05; done; fi; cat > "$received"; }';
 
   try {
     const proc = Bun.spawn(
-      [
-        "sh",
-        "-c",
-        script,
-        "sh",
-        statusFile,
-        receivedFile,
-        String(readerDelaySeconds),
-        process.execPath,
-        cliPath,
-        ...args,
-      ],
+      ["sh", "-c", script, "sh", statusFile, receivedFile, reader, ...command],
       {
         env: {
           ...process.env,
-          FLUNCLE_API_BASE_URL: baseUrl,
-          FLUNCLE_API_TOKEN: "test-token",
           NODE_ENV: "test",
+          ...env,
         },
         killSignal: "SIGKILL",
         stderr: "ignore",
