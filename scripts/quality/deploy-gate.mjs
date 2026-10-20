@@ -33,7 +33,9 @@ function spawnStep(step) {
 export function runDeployGate(
   steps = DEPLOY_GATE_STEPS,
   run = spawnStep,
-  write = (text) => process.stdout.write(text),
+  write = (text) => {
+    process.stdout.write(text);
+  },
 ) {
   const failed = [];
   for (const step of steps) {
