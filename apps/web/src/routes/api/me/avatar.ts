@@ -4,6 +4,7 @@ import { env } from "cloudflare:workers";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 import {
   clearAvatar,
+  readAvatarBody,
   storeAvatar,
   validateAvatarUpload,
   verifyAvatarMutation,
@@ -64,14 +65,19 @@ export const serverHandlers: ApiHandlers = {
 
     try {
       const contentType = request.headers.get("content-type") ?? "";
-      const bytes = await request.arrayBuffer();
-      const validation = validateAvatarUpload(contentType, bytes);
+      const body = await readAvatarBody(request);
+
+      if (!body.ok) {
+        return jsonError(body.status, body.code, body.message);
+      }
+
+      const validation = validateAvatarUpload(contentType, body.bytes);
 
       if (!validation.ok) {
         return jsonError(validation.status, validation.code, validation.message);
       }
 
-      const result = await storeAvatar(env.VIDEOS, user, bytes, contentType, validation.ext);
+      const result = await storeAvatar(env.VIDEOS, user, body.bytes, contentType, validation.ext);
 
       return Response.json({ ...result, ok: true });
     } catch (error) {

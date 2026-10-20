@@ -19,9 +19,63 @@ export const AVATAR_CONTENT_TYPES: Record<string, string> = {
 const CSRF_WINDOW_MS = 24 * 60 * 60 * 1000;
 const CSRF_HEADER = "x-fluncle-csrf";
 
-export type AvatarValidation =
-  | { code: string; message: string; ok: false; status: number }
-  | { ext: string; ok: true };
+type AvatarRejection = { code: string; message: string; ok: false; status: number };
+
+export type AvatarValidation = AvatarRejection | { ext: string; ok: true };
+
+const AVATAR_TOO_LARGE: AvatarRejection = {
+  code: "too_large",
+  message: "That image is too large. Pick one under 2 MB.",
+  ok: false,
+  status: 413,
+};
+
+export async function readAvatarBody(
+  request: Request,
+): Promise<AvatarRejection | { bytes: ArrayBuffer; ok: true }> {
+  if (Number(request.headers.get("content-length")) > AVATAR_MAX_BYTES) {
+    return AVATAR_TOO_LARGE;
+  }
+
+  if (!request.body) {
+    return { bytes: new ArrayBuffer(0), ok: true };
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        break;
+      }
+
+      size += value.byteLength;
+
+      if (size > AVATAR_MAX_BYTES) {
+        void reader.cancel().catch(() => undefined);
+        return AVATAR_TOO_LARGE;
+      }
+
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const body = new Uint8Array(size);
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return { bytes: body.buffer, ok: true };
+}
 
 export function validateAvatarUpload(contentType: string, bytes: ArrayBuffer): AvatarValidation {
   const mime = contentType.split(";")[0]?.trim().toLowerCase() ?? "";
@@ -41,12 +95,7 @@ export function validateAvatarUpload(contentType: string, bytes: ArrayBuffer): A
   }
 
   if (bytes.byteLength > AVATAR_MAX_BYTES) {
-    return {
-      code: "too_large",
-      message: "That image is too large. Pick one under 2 MB.",
-      ok: false,
-      status: 413,
-    };
+    return AVATAR_TOO_LARGE;
   }
 
   const size = readImageSize(bytes);

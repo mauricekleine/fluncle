@@ -283,7 +283,7 @@ Both `adminAuth` (operator **or** agent), registered in the contract as `admin-c
 - **`certify_track`** → `POST /admin/catalogue/certify` — **Log it**: certify an existing catalogue row in place, minting only its finding (§ The operator's actions). **OPERATOR tier**: an agent may never certify.
 - **`set_track_dismissed`** → `PUT /admin/catalogue/dismissed` — **Not for me** / restore, the `set_capture_budget` shape (one op, both directions). **OPERATOR tier**: a taste ruling, not a machine job.
 
-`rank_catalogue` is **agent-allowed, not operator-tier** (the `update_galaxy_map` precedent): it writes only _derived_ ranking columns, and only on catalogue rows. It cannot mint a coordinate, write a note, or certify anything — those columns do not exist on the rows it can reach. The three OPERATOR-tier ops are the acts that change what the archive _is_ (a certification) or what the telescope _points at_ (a dismissal, a quarantine override) — the `update_label` / `set_capture_budget` class.
+`rank_catalogue` is **agent-allowed, not operator-tier** (the `update_galaxy_map` precedent): it writes only _derived_ ranking columns, and only on catalogue rows. It cannot mint a coordinate, write a note, or certify anything — those columns do not exist on the rows it can reach. The three OPERATOR-tier ops are the acts that change what the archive _is_ (a certification) or what the telescope _points at_ (a dismissal, a quarantine override) — the `mint_label` / `set_capture_budget` class.
 
 The CLI mirrors them, and holds no ranking logic of its own:
 

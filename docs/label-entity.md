@@ -108,7 +108,7 @@ Global artist rules ride their own contract file (`admin-artist-rules.ts`): `lis
 
 `?seedState=enabled` is the crawler's agent-authenticated seed-set read. Each `list_labels_admin` item carries `carriesArtistRules`, true when the label holds at least one per-label artist rule (a global rule never counts); the triage box gate reads it to leave a settled `dnb_partial` label out of its pull. It costs one extra statement for the whole list. The `_admin` suffix distinguishes it from the public `list_labels` and `get_label` operations.
 
-`update_label` is operator tier: ruling steers what Fluncle crawls next, which is an editorial act, so an agent token 403s at `operatorGuard` (the `update_galaxy` precedent). `mint_label` is operator tier for the same reason one rung earlier — bringing a label into the archive decides what may be crawled at all and what earns a public page. Both are enforced by the build-fail coverage tests (`orpc-auth-coverage`, `orpc-naming`).
+`mint_label` is operator tier, so an agent token 403s at `operatorGuard`: bringing a label into the archive decides what may be crawled at all and what earns a public page. `update_label` is admin tier for the apply-a-ratified-round reason above, so the server does not stop an agent token from ruling; the triage procedure does. Both tiers are enforced by the build-fail coverage tests (`orpc-auth-coverage`, `orpc-naming`).
 
 The server layer lives in `apps/web/src/lib/server/labels.ts`.
 
