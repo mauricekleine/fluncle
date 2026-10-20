@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
-import { publicApiPost } from "./api";
+import { publicApiGet, publicApiPost } from "./api";
+import { armDeadline, resetDeadlineForTests } from "./deadline";
 import { CliError, toJsonFailure } from "./output";
 
 const originalBaseUrl = process.env.FLUNCLE_API_BASE_URL;
@@ -11,6 +12,7 @@ afterAll(() => {
 
 afterEach(() => {
   fetchSpy.mockReset();
+  resetDeadlineForTests();
 
   if (originalBaseUrl === undefined) {
     delete process.env.FLUNCLE_API_BASE_URL;
@@ -125,5 +127,42 @@ describe("API Promise boundary", () => {
     fetchSpy.mockResolvedValue(response);
 
     expect(await publicApiPost("/submit").catch((error: unknown) => error)).toBe(failure);
+  });
+
+  test("a deadline that fires while a request is held open names that request and aborts it", async () => {
+    process.env.FLUNCLE_API_BASE_URL = "https://fluncle.test";
+    const reached = Promise.withResolvers<void>();
+    const heldOpen = (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        reached.resolve();
+      });
+    fetchSpy.mockImplementation(Object.assign(heldOpen, { preconnect: fetch.preconnect }));
+    const scheduled: (() => void)[] = [];
+    const reports: string[] = [];
+    const beforeExitCode = process.exitCode;
+
+    try {
+      armDeadline(3, {
+        command: "tracks get trk_1234",
+        exit: () => {},
+        json: true,
+        report: (message) => reports.push(message),
+        schedule: (fire) => {
+          scheduled.push(fire);
+          return () => {};
+        },
+      });
+      const request = publicApiGet("/api/v1/tracks/trk_1234").catch((error: unknown) => error);
+      await reached.promise;
+      scheduled[0]?.();
+
+      expect(reports).toEqual([
+        "fluncle tracks get trk_1234 stopped after 3 s: waiting for the Fluncle API: GET /api/v1/tracks/trk_1234. Set --timeout or FLUNCLE_TIMEOUT in seconds (0 disables the deadline).",
+      ]);
+      expect(toJsonFailure(await request)).toMatchObject({ code: "timeout", ok: false });
+    } finally {
+      process.exitCode = beforeExitCode ?? 0;
+    }
   });
 });
