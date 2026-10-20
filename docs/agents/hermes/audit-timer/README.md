@@ -55,7 +55,7 @@ These figures were measured with oxlint and `tsgolint`; the repo now lints with 
 
 So both agents verify through **one command**, [`../scripts/audit/verify.sh`](../scripts/audit/verify.sh), which derives the changed paths, runs `bun-canary fmt --check` and the lint rules without type information (`--no-type-aware`) scoped to them, installing `bun-canary` from npm through `scripts/bun-canary.ts` when the box lacks it, then each changed package's own `typecheck` and `test`, each behind a wall budget and a cgroup-headroom precondition. A step it cannot afford is recorded as `skipped` with a reason (`no-headroom`, `ci-only`, `no-script`) rather than started into an OOM kill. The record lands in `.audit/verify.json` and the driver folds it into the summary line, so "which checks ran" is a fact in the run ledger instead of a claim in a report.
 
-Nothing is lost by not running the whole-repo passes here: every one of them runs on the PR the audit opens (the `quality-checks` action) and again in `deploy:gate` before Cloudflare deploys, and the reviewer merges only on green required checks. Running them a third time on the smallest machine in the chain gated nothing.
+Nothing is lost by not running the whole-repo passes here: every one of them runs on the PR the audit opens (the `quality-checks` action), and the web ones again in `deploy:gate` before Cloudflare deploys, and the reviewer merges only on green required checks. Running them a third time on the smallest machine in the chain gated nothing.
 
 `verify.sh` lives in the CHECKOUT the agents audit, not only in the baked image, so a change to the ladder reaches the next night the moment it merges — no rebake.
 

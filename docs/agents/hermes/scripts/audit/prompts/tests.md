@@ -1,6 +1,6 @@
 # Tonight's domain: Test coverage
 
-Tests are part of "done" — `deploy:gate` (the Cloudflare deploy boundary, `package.json` → repository format check + Go vet/format checks + `lint && typecheck && test`) runs **every** package's suite, so an untested surface is a silent regression waiting to land on `main`. Fluncle's convention is a colocated `*.test.ts` next to the unit it exercises (`apps/web` runs `vitest run --coverage`; `packages/registry`, `packages/contracts`, `apps/cli`, and most others run `bun test`). Tonight, hunt behavior that shipped **without** a focused test, coverage nets that have gone slack, and flaky patterns that will eventually fail a deploy build for reasons unrelated to the change under test.
+Tests are part of "done" — Quality Checks runs **every** package's suite on the PR, and `deploy:gate` (the Cloudflare deploy boundary, `scripts/quality/deploy-gate.mjs`) re-runs the web app's and its workspace dependencies' suites before deploying, so an untested surface is a silent regression waiting to land on `main`. Fluncle's convention is a colocated `*.test.ts` next to the unit it exercises (`apps/web` runs `vitest run --coverage`; `packages/registry`, `packages/contracts`, `apps/cli`, and most others run `bun test`). Tonight, hunt behavior that shipped **without** a focused test, coverage nets that have gone slack, and flaky patterns that will eventually fail a deploy build for reasons unrelated to the change under test.
 
 ## The hunt
 
