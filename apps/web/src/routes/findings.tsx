@@ -19,7 +19,7 @@ import { findingToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { ScrollArea } from "@fluncle/ui/components/scroll-area";
 import { TooltipProvider } from "@fluncle/ui/components/tooltip";
 import { printConsoleGreeting } from "@/lib/console-greeting";
-import { fluncleEntityRef, siteUrl } from "@/lib/fluncle-links";
+import { fluncleEntityRef, logPageUrl, siteUrl } from "@/lib/fluncle-links";
 import { fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import { twitterCardMeta } from "@/lib/page-meta";
@@ -107,7 +107,7 @@ export const Route = createFileRoute("/findings")({
               })),
               ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
               name: track.title,
-              url: track.spotifyUrl,
+              url: track.logId ? logPageUrl(track.logId) : track.spotifyUrl,
             },
           ];
         }),

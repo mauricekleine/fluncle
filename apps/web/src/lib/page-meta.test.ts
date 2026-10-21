@@ -239,6 +239,56 @@ describe("albumMetaDescription", () => {
     expect(description).toBe("Sampler by Various, a drum & bass release. 20 tracks.");
   });
 
+  it("names the first tracks when the whole tracklist does not fit", () => {
+    const description = albumMetaDescription({
+      artist: "Orbit Crew",
+      bio: undefined,
+      findingCount: 0,
+      label: undefined,
+      name: "Far Side LP",
+      releaseDate: "2026-10-15",
+      trackCount: 12,
+      trackTitles: ["Lift Off", "Dust Lane", "Long Way Back"],
+    });
+
+    expect(description).toBe(
+      "Far Side LP by Orbit Crew, a 2026 drum & bass release. 12 tracks, including Lift Off, Dust Lane and Long Way Back.",
+    );
+    expect(description.length).toBeLessThanOrEqual(155);
+  });
+
+  it("keeps the recommendation count rather than a partial tracklist when Fluncle has picks on it", () => {
+    const description = albumMetaDescription({
+      artist: "Orbit Crew",
+      bio: undefined,
+      findingCount: 3,
+      label: undefined,
+      name: "Far Side LP",
+      releaseDate: "2026-10-15",
+      trackCount: 12,
+      trackTitles: ["Lift Off", "Dust Lane", "Long Way Back"],
+    });
+
+    expect(description).toBe(
+      "Far Side LP by Orbit Crew, a 2026 drum & bass release. 12 tracks, 3 recommended by Fluncle.",
+    );
+  });
+
+  it("keeps a bio-led description's facts to the count, leaving the bio its room", () => {
+    const description = albumMetaDescription({
+      artist: "Orbit Crew",
+      bio: "A breakbeat record.",
+      findingCount: 0,
+      label: undefined,
+      name: "Far Side LP",
+      releaseDate: "2026-10-15",
+      trackCount: 12,
+      trackTitles: ["Lift Off", "Dust Lane", "Long Way Back"],
+    });
+
+    expect(description).toBe("A breakbeat record. 12 tracks.");
+  });
+
   it("does not list duplicate titles as if they were the whole record", () => {
     const description = albumMetaDescription({
       artist: undefined,

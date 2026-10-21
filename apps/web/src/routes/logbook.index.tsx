@@ -14,7 +14,7 @@ const fetchLogbook = createServerFn({ method: "GET" }).handler(() =>
 
 const title = "Fluncle's Logbook";
 const description =
-  "Fluncle's Logbook: one first-person entry per day of the voyage. What the day was like, where the trip went, and how each banger landed, with the findings inlined as photos.";
+  "Fluncle's Logbook: one first-person entry per day of the voyage. What the day was like, where the trip went, and how each banger landed.";
 
 function logbookIndexHead(entries: LogbookIndexEntry[] | undefined) {
   const blog = {

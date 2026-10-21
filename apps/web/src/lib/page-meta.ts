@@ -241,13 +241,23 @@ export function albumMetaDescription(album: {
       ? `${trackNoun(trackCount, false)}: ${nameList(titles)}.`
       : undefined;
 
+  const counted = `${countClause(trackCount, findingCount, false)}.`;
   const facts = [
     listed && recommends ? `${listed} ${recommends}` : undefined,
     listed,
-    `${countClause(trackCount, findingCount, false)}.`,
+    counted,
   ].filter((fact) => fact !== undefined);
+  const sampled =
+    listed === undefined && recommends === undefined
+      ? [3, 2].flatMap((size) =>
+          titles.length < size || size >= trackCount
+            ? []
+            : [`${trackNoun(trackCount, false)}, including ${nameList(titles.slice(0, size))}.`],
+        )
+      : [];
+  const fallbackFacts = [...facts.filter((fact) => fact !== counted), ...sampled, counted];
 
-  return withBio(bio, facts, [...facts.map((fact) => `${lead} ${fact}`), lead]);
+  return withBio(bio, facts, [...fallbackFacts.map((fact) => `${lead} ${fact}`), lead]);
 }
 
 type TrackMetaInput = Credited & {

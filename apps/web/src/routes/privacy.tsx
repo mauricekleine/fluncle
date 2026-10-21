@@ -4,7 +4,7 @@ import { fluncleCoverImageMeta } from "@/lib/cover-meta";
 
 const title = "Privacy · Fluncle";
 const description =
-  "How fluncle.com and Fluncle Lens handle your data: privacy-friendly analytics with no tracking cookies, no ads, no data sold, and clear ways to export or delete your account.";
+  "How fluncle.com and Fluncle Lens handle your data: analytics with no tracking cookies, no ads, no data sold, and ways to export or delete your account.";
 
 const lastUpdated = "July 20, 2026";
 

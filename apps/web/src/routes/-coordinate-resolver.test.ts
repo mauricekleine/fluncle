@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { LOG_ID_TEST_VECTORS } from "@fluncle/contracts/log-id";
 import { canonicalCoordinate, isLogPageParam } from "@/lib/log-page-param";
 import { Route as CoordinateRoute } from "./$coordinate";
+import { Route as LogRoute } from "./log.$logId";
 
 type ThrownRedirect = {
   options?: { params?: unknown; statusCode?: number; to?: string };
@@ -113,5 +114,34 @@ describe("/$coordinate → /log/$logId", () => {
       const { notFound } = captureThrow(() => runBeforeLoad(value));
       expect(notFound).toBe(true);
     }
+  });
+});
+
+describe("/log/$logId with a lowercase-typed coordinate", () => {
+  function runLogBeforeLoad(logId: string): unknown {
+    return LogRoute.options.beforeLoad?.({ params: { logId } } as never);
+  }
+
+  it("301s to the canonical-cased coordinate instead of 404ing", () => {
+    for (const [typed, canonical] of [
+      ["122.4.2k", "122.4.2K"],
+      ["019.f.1a", "019.F.1A"],
+    ] as const) {
+      const { redirect } = captureThrow(() => runLogBeforeLoad(typed));
+      const source = redirect?.options ?? redirect;
+
+      expect(source?.to).toBe("/log/$logId");
+      expect(source?.params).toEqual({ logId: canonical });
+      expect(source?.statusCode).toBe(301);
+    }
+  });
+
+  it("passes a canonical coordinate and a legacy Spotify id straight through", () => {
+    expect(runLogBeforeLoad("122.4.2K")).toBeUndefined();
+    expect(runLogBeforeLoad("6Y44zcYp0vUkmKCBve1Epr")).toBeUndefined();
+  });
+
+  it("404s anything that is not a coordinate in any case", () => {
+    expect(captureThrow(() => runLogBeforeLoad("garbage!!")).notFound).toBe(true);
   });
 });

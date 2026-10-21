@@ -13,6 +13,7 @@ import {
   parseTimeSpanMs,
   readTimer,
 } from "./cron-roster";
+import { DAILY_RETRY_SCHEDULES } from "./daily-retry-state";
 import { AUTOMATION_CRONS } from "./fluncle-healthcheck";
 
 const temporaryDirectories: string[] = [];
@@ -163,6 +164,32 @@ describe("the registry agrees with the timer units", () => {
     for (const name of SELF_EVIDENT_CRON_SURFACES) {
       expect(registry.has(name)).toBe(true);
     }
+  });
+
+  test("every daily-retry job carries its primary slot as the registry schedule /status reads", () => {
+    const weekdayNumbers: Record<string, number> = {
+      Fri: 5,
+      Mon: 1,
+      Sat: 6,
+      Sun: 0,
+      Thu: 4,
+      Tue: 2,
+      Wed: 3,
+    };
+    const drifted = Object.entries(DAILY_RETRY_SCHEDULES).flatMap(([job, slot]) => {
+      const surface = SURFACES.find((candidate) => candidate.probeConfig?.cronName === job);
+      const expected = {
+        time: slot.primarySlot,
+        tz: slot.timeZone,
+        ...(slot.weekday === undefined ? {} : { weekday: weekdayNumbers[slot.weekday] }),
+      };
+
+      return Bun.deepEquals(surface?.probeConfig?.schedule, expected)
+        ? []
+        : [`${job}: registry ${JSON.stringify(surface?.probeConfig?.schedule)}`];
+    });
+
+    expect(drifted).toEqual([]);
   });
 });
 

@@ -556,14 +556,10 @@ describe("observationAudioObjectJsonLd (the finding's spoken observation schema)
 });
 
 describe("breadcrumbsJsonLd", () => {
-  it("walks Fluncle → The log → the coordinate", () => {
+  it("walks Fluncle → Log → the coordinate, naming the hub as the visible trail does", () => {
     const jsonLd = breadcrumbsJsonLd("004.7.2I") as { itemListElement: Array<{ name: string }> };
 
-    expect(jsonLd.itemListElement.map((item) => item.name)).toEqual([
-      "Fluncle",
-      "The log",
-      "004.7.2I",
-    ]);
+    expect(jsonLd.itemListElement.map((item) => item.name)).toEqual(["Fluncle", "Log", "004.7.2I"]);
   });
 });
 
