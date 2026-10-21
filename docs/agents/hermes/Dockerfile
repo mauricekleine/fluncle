@@ -83,7 +83,7 @@ RUN apt-get update \
 # because a year rollover (2026.12.x -> 2027.01.x) is a date, not a breaking change, and holding
 # a January release for review is exactly the stall this watch exists to prevent.
 RUN mkdir -p /opt/hermes-scripts \
-  && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux \
+  && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.21/yt-dlp_linux \
        -o /opt/hermes-scripts/yt-dlp \
   && chmod 755 /opt/hermes-scripts/yt-dlp
 
