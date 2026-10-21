@@ -23,7 +23,7 @@ import {
   type LogbookNeighbor,
 } from "@/lib/server/logbook";
 import { type LogbookEntryDTO } from "@fluncle/contracts";
-import { fluncleCoverImageMeta } from "@/lib/cover-meta";
+import { fluncleCoverImageMeta, fluncleCoverUrl } from "@/lib/cover-meta";
 
 type LogbookPageData =
   | {
@@ -75,6 +75,7 @@ function logbookHead(loaderData: LogbookPageData | undefined) {
     datePublished,
     description,
     headline: entry.title,
+    image: fluncleCoverUrl,
     inLanguage: "en",
     isPartOf: { "@type": "Blog", name: "Fluncle's Logbook", url: `${siteUrl}/logbook` },
     mainEntityOfPage: pageUrl,

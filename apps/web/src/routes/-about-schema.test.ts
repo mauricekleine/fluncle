@@ -156,6 +156,28 @@ describe("the @id entity graph — every #fluncle reference resolves to the one 
     expect(playlist).not.toHaveProperty("sameAs");
   });
 
+  it("the archive page's MusicPlaylist points each finding at its /log page, as the visible list does", () => {
+    const head = FindingsRoute.options.head?.({
+      loaderData: {
+        totalCount: 1,
+        tracks: [
+          {
+            artists: ["Calibre"],
+            logId: "004.7.2I",
+            spotifyUrl: "https://open.spotify.com/track/abc",
+            title: "Mr Majestic",
+            type: "track",
+          },
+        ],
+      },
+    } as never) as HeadResult;
+    const playlist = schemasOf(head).find((schema) => schema["@type"] === "MusicPlaylist");
+
+    expect(playlist?.track).toEqual([
+      expect.objectContaining({ url: "https://www.fluncle.com/log/004.7.2I" }),
+    ]);
+  });
+
   it("carries its OWN meta description, never the front door's entity line", () => {
     const aboutHead = AboutRoute.options.head?.({} as never) as HeadResult;
     const aboutDescription = metaDescriptionOf(aboutHead);

@@ -354,7 +354,7 @@ export function breadcrumbsJsonLd(logId: string): Record<string, unknown> {
     "@type": "BreadcrumbList",
     itemListElement: [
       { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
-      { "@type": "ListItem", item: `${siteUrl}/log`, name: "The log", position: 2 },
+      { "@type": "ListItem", item: `${siteUrl}/log`, name: "Log", position: 2 },
       { "@type": "ListItem", name: logId, position: 3 },
     ],
   };

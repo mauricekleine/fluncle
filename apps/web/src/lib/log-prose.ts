@@ -1,4 +1,5 @@
 import { formatDateLong } from "./format";
+import { META_DESCRIPTION_MAX, bioMetaDescription } from "./meta-description";
 
 export const NOTE_MAX_LENGTH = 280;
 
@@ -62,6 +63,22 @@ export function definitionalSentences(track: LogProseInput): string {
   const tempo = track.bpm ? `${Math.round(track.bpm)} BPM ` : "";
 
   return `${track.logId} is Fluncle's Log ID for ${artistTitleLine(track)}: a ${tempo}drum & bass banger found ${formatDateLong(track.addedAt)}. fluncle://${track.logId}.`;
+}
+
+export function logMetaDescription(track: LogProseInput): string {
+  const line = artistTitleLine(track);
+  const found = formatDateLong(track.addedAt);
+  const tempo = track.bpm ? `${Math.round(track.bpm)} BPM ` : "";
+  const candidates = [
+    definitionalSentences(track),
+    `${track.logId} is Fluncle's Log ID for ${line}: a ${tempo}drum & bass banger found ${found}.`,
+    `${track.logId} is Fluncle's Log ID for ${line}: a drum & bass banger found ${found}.`,
+  ];
+
+  return (
+    candidates.find((candidate) => candidate.length <= META_DESCRIPTION_MAX) ??
+    bioMetaDescription(candidates.at(-1) ?? "")
+  );
 }
 
 export function definitionalProseSegments(track: LogProseInput): ProseSegment[] {

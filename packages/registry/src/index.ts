@@ -1239,7 +1239,12 @@ export const SURFACES: readonly Surface[] = [
     name: "cron.cluster",
     operatorNotes:
       "nightly (03:20 Amsterdam), run by a Hermes host systemd timer (docs/agents/hermes/cluster-timer/). Assignment-ONLY + idempotent (a no-op on an unchanged corpus): assign each finding to its nearest stored centroid, recompute centroids as members' means, retire an emptied galaxy, consume an operator split_requested_at (a k=2 fit). Zero LLM tokens; sub-second CPU. A full k=9 fit is an OPERATOR act (--cold-start / --remint), never scheduled. Source: docs/agents/hermes/scripts/cluster-sweep.* + cluster.py. See docs/agents/cluster-engine.md.",
-    probeConfig: { cadenceMs: 24 * 60 * MINUTE_MS, cronName: "fluncle-cluster", kind: "cron" },
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-cluster",
+      kind: "cron",
+      schedule: { time: "03:20", tz: "Europe/Amsterdam" },
+    },
     statusDescription: "groups the archive into sonic galaxies",
     title: "Sonic galaxies",
     weights: { status: "hidden" },
@@ -1529,8 +1534,13 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.label-triage",
     operatorNotes:
-      "daily. The gate is one countless admin read and a sort; it fires only when 40+ NEVER-LOOKED labels with a MusicBrainz identity and no artist rules have accumulated, and stale ones ride along. A fired round runs one claude -p per batch of 10 labels (capped at 3 batches and 30 labels) whose only fetcher is `fluncle admin labels evidence`; the model holds no Fluncle token, and the script records each verdict with record_label_triage (agent tier). It cannot rule: update_label is operator tier and 403s the box token. Labels a round left unfinished (a failed batch, or past the cap) are carried and fire the next day. The model runs --restricted with dontAsk permissions, confined to its batch directory and the skill. A fired round that records zero proposals, or any failed batch, exits non-zero, reads failed on /status and posts to Discord. Source: docs/agents/hermes/scripts/{label-triage-sweep.ts,label-triage-sweep.sh}.",
-    probeConfig: { cadenceMs: 24 * 60 * MINUTE_MS, cronName: "fluncle-label-triage", kind: "cron" },
+      "06:40 Amsterdam daily, retry slot 07:50. The gate is one countless admin read and a sort; it fires only when 40+ NEVER-LOOKED labels with a MusicBrainz identity and no artist rules have accumulated, and stale ones ride along. A fired round runs one claude -p per batch of 10 labels (capped at 3 batches and 30 labels) whose only fetcher is `fluncle admin labels evidence`; the model holds no Fluncle token, and the script records each verdict with record_label_triage (agent tier). It cannot rule: update_label is operator tier and 403s the box token. Labels a round left unfinished (a failed batch, or past the cap) are carried and fire the next day. The model runs --restricted with dontAsk permissions, confined to its batch directory and the skill. A fired round that records zero proposals, or any failed batch, exits non-zero, reads failed on /status and posts to Discord. Source: docs/agents/hermes/scripts/{label-triage-sweep.ts,label-triage-sweep.sh}.",
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-label-triage",
+      kind: "cron",
+      schedule: { time: "06:40", tz: "Europe/Amsterdam" },
+    },
     statusDescription: "researches the label pile when it needs a round",
     title: "Label triage",
     weights: { status: "hidden" },

@@ -10,7 +10,6 @@ import {
   releaseTrack,
 } from "@/lib/fresh-releases";
 import { jsonLdScript } from "@/lib/json-ld";
-import { logPageUrl } from "@/lib/log-schema";
 import { listFreshReleases } from "@/lib/server/fresh";
 import { releaseTodayUtc } from "@/lib/server/release-day";
 import { fluncleCoverImageMeta } from "@/lib/cover-meta";
@@ -32,7 +31,7 @@ function freshItemList(page: FreshPage): Record<string, unknown> {
         artists: releaseTrack(release, track).artists.map((artist) => artist.name),
         releaseDate: release.releaseDate,
         title: track.title,
-        url: track.lit && track.logId ? logPageUrl(track.logId) : track.spotifyUrl,
+        url: track.href ? `${siteUrl}${track.href}` : track.spotifyUrl,
       })),
     ),
   );

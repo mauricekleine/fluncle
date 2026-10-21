@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveCrumbs } from "./nav-breadcrumb";
+import { entityCrumbLabel, resolveCrumbs } from "./nav-breadcrumb";
 
 describe("resolveCrumbs", () => {
   it("renders nothing on home (a single dead crumb is not a trail)", () => {
@@ -70,5 +70,19 @@ describe("resolveCrumbs", () => {
 
   it("hangs a docs page off /docs", () => {
     expect(resolveCrumbs("/docs/cli")).toEqual([{ label: "Docs", to: "/docs" }, { label: "Cli" }]);
+  });
+});
+
+describe("entityCrumbLabel", () => {
+  it("names the leaf crumb from a found entity page, so the trail matches its JSON-LD", () => {
+    expect(entityCrumbLabel({ name: "SGN:LTD", slug: "sgn-ltd", status: "found" })).toBe("SGN:LTD");
+  });
+
+  it("falls back to the slug for anything that is not a found, named entity", () => {
+    expect(entityCrumbLabel(undefined)).toBeUndefined();
+    expect(entityCrumbLabel({ status: "missing" })).toBeUndefined();
+    expect(entityCrumbLabel({ canonicalSlug: "x", status: "redirect" })).toBeUndefined();
+    expect(entityCrumbLabel({ entry: {}, status: "found" })).toBeUndefined();
+    expect(entityCrumbLabel({ name: " ", status: "found" })).toBeUndefined();
   });
 });

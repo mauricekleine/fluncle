@@ -43,6 +43,16 @@ function humanizeSlug(slug: string): string {
     .join(" ");
 }
 
+export function entityCrumbLabel(loaderData: unknown): string | undefined {
+  if (typeof loaderData !== "object" || loaderData === null) {
+    return undefined;
+  }
+
+  const { name, status } = loaderData as { name?: unknown; status?: unknown };
+
+  return status === "found" && typeof name === "string" && name.trim() ? name : undefined;
+}
+
 export function resolveCrumbs(pathname: string, leafLabel?: string, tail?: string): Crumb[] {
   const segments = pathname.split("/").filter(Boolean);
   const root = segments[0];

@@ -3,7 +3,7 @@ import { useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect } from "react";
 import { BrowseMenu } from "@/components/nav/browse-menu";
 import { CrewSlot } from "@/components/nav/crew-slot";
-import { NavBreadcrumb } from "@/components/nav/nav-breadcrumb";
+import { entityCrumbLabel, NavBreadcrumb } from "@/components/nav/nav-breadcrumb";
 import { NavFooter } from "@/components/nav/nav-footer";
 import { PlayerBar } from "@/components/player/player-bar";
 import { PublicToaster } from "@/components/public-toaster";
@@ -36,6 +36,10 @@ export function PublicChrome({
     pathname === "/account" && accountTab
       ? { saves: "Saves", settings: "Settings" }[accountTab]
       : undefined;
+
+  const leafLabel = useRouterState({
+    select: (state) => entityCrumbLabel(state.matches.at(-1)?.loaderData),
+  });
 
   const workbench = pathname === "/chat";
   const chromeless = isChromeless(pathname);
@@ -71,7 +75,7 @@ export function PublicChrome({
             <NavLink aria-label="Fluncle home" className="nav-wordmark" to="/">
               FLUNCLE
             </NavLink>
-            <NavBreadcrumb pathname={pathname} tail={tail} />
+            <NavBreadcrumb leafLabel={leafLabel} pathname={pathname} tail={tail} />
 
             <BrowseMenu />
             <SearchTrigger showTrigger={pathname !== "/"} />

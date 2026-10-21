@@ -23,13 +23,13 @@ import { siteUrl, spotifyPlaylistUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration, formatDateLong, formatDuration } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { formatKey, useKeyNotation } from "@/lib/key-notation";
-import { isLogPageParam } from "@/lib/log-page-param";
+import { canonicalCoordinate, isLogPageParam } from "@/lib/log-page-param";
 import { useSocialArrival } from "@/lib/social-referrer";
 import { GraphLink } from "@/components/graph-link";
 import {
   artistTitleLine,
   definitionalProseSegments,
-  definitionalSentences,
+  logMetaDescription,
   GALAXY_CLAUSE_LEAD,
   GALAXY_CLAUSE_TAIL,
   galaxyClauseLinkText,
@@ -138,7 +138,7 @@ function logHead(loaderData: LogPageData | undefined) {
   const title = `${logId} · ${artistTitleLine(track)} · Fluncle`;
 
   const galaxy = galaxyReady ? track.galaxy : undefined;
-  const description = definitionalSentences({ ...track, logId });
+  const description = logMetaDescription({ ...track, logId });
   const imageUrl = albumCoverAtSize(track.albumImageUrl, "large") ?? media.coverUrl;
   const recording = musicRecordingJsonLd({ ...track, artistSlugs, galaxy, logId }, imageUrl);
 
@@ -213,9 +213,17 @@ function logHead(loaderData: LogPageData | undefined) {
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/log/$logId")({
   beforeLoad: ({ params }) => {
-    if (!isLogPageParam(params.logId)) {
+    if (isLogPageParam(params.logId)) {
+      return;
+    }
+
+    const logId = canonicalCoordinate(params.logId);
+
+    if (!logId) {
       throw notFound();
     }
+
+    throw redirect({ params: { logId }, statusCode: 301, to: "/log/$logId" });
   },
   loader: async ({ params }): Promise<LogPageData> => {
     const data = await fetchLogPage({ data: { logId: params.logId } });

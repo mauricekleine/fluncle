@@ -6,7 +6,9 @@ import {
   LABEL_CLAUSE_LEAD,
   galaxyClauseLinkText,
   type LogProseInput,
+  logMetaDescription,
 } from "./log-prose";
+import { META_DESCRIPTION_MAX } from "./meta-description";
 
 const base: LogProseInput = {
   addedAt: "2026-06-01T00:00:00.000Z",
@@ -70,5 +72,37 @@ describe("definitionalProse — the galaxy clause", () => {
       .join(" ");
 
     expect(definitionalProse(input)).toBe(joined);
+  });
+});
+
+describe("logMetaDescription — the SERP snippet on a finding's page", () => {
+  it("keeps the whole definitional line when it fits", () => {
+    expect(logMetaDescription({ ...base, bpm: 174 })).toBe(
+      "004.7.2I is Fluncle's Log ID for Calibre — Mr Majestic: a 174 BPM drum & bass banger found Jun 1, 2026. fluncle://004.7.2I.",
+    );
+  });
+
+  it("drops the scheme coordinate, then the tempo, before it would run past the cut", () => {
+    const longCredit = {
+      ...base,
+      artists: ["Orbit Crew", "Long Way Back Collective", "Dust Lane"],
+      bpm: 174,
+      title: "Lift Off (Far Side Extended Rework)",
+    };
+    const description = logMetaDescription(longCredit);
+
+    expect(description.length).toBeLessThanOrEqual(META_DESCRIPTION_MAX);
+    expect(description).not.toContain("fluncle://");
+    expect(description.endsWith("found Jun 1, 2026.")).toBe(true);
+  });
+
+  it("never runs past the cut, however long the credit", () => {
+    const description = logMetaDescription({
+      ...base,
+      artists: Array.from({ length: 8 }, (_value, index) => `A Very Long Artist Name ${index}`),
+      bpm: 174,
+    });
+
+    expect(description.length).toBeLessThanOrEqual(META_DESCRIPTION_MAX);
   });
 });
