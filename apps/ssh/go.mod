@@ -2,6 +2,8 @@ module fluncle/apps/ssh
 
 go 1.26
 
+toolchain go1.26.10
+
 require (
 	charm.land/bubbletea/v2 v2.0.7
 	charm.land/lipgloss/v2 v2.0.3

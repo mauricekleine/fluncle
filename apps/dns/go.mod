@@ -2,6 +2,8 @@ module fluncle/apps/dns
 
 go 1.26
 
+toolchain go1.26.10
+
 require github.com/miekg/dns v1.1.66
 
 require (
