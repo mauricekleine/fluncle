@@ -6,11 +6,13 @@
   "workspaces": [],
   "type": "module",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.0",
     "deepsec": "^2.2.9"
   },
   "packageManager": "pnpm@9.15.9",
   "pnpm": {
     "overrides": {
+      "@modelcontextprotocol/sdk": "1.32.0",
       "@earendil-works/pi-coding-agent>undici": "~8.10.0"
     }
   }
