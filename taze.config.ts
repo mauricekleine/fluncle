@@ -43,7 +43,7 @@ const holds = [
   {
     exclude: ["shadcn", "@modelcontextprotocol/sdk"],
     reason:
-      "Shadcn currently resolves @modelcontextprotocol/sdk 1.31.0, patched because its published root export targets absent files (upstream #2273); a Shadcn or direct SDK bump must remove the patch if fixed upstream or re-key and revalidate it. Upgrade explicitly with the coupled group.",
+      "Shadcn currently resolves @modelcontextprotocol/sdk 1.32.0, patched because its published root export targets absent files (upstream #2273); a Shadcn or direct SDK bump must remove the patch if fixed upstream or re-key and revalidate it. Upgrade explicitly with the coupled group.",
   },
 ];
 
