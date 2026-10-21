@@ -28,7 +28,7 @@ RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 
 # uv — installs the standalone Python 3.11 the MuQ venv below needs (Debian trixie ships
 # only 3.13 in apt, and muq requires <3.12).
-COPY --from=ghcr.io/astral-sh/uv:0.12.21@sha256:a7aed3216253ee804de3e2d8afa5073baa1a177335345d43845cd4165e43b711 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b /uv /uvx /usr/local/bin/
 
 # Enrichment toolchain (docs/agents/hermes/cron/README.md): the
 # fluncle-track-enrichment skill's analyze-track.ts is `#!/usr/bin/env bun` and
