@@ -155,10 +155,10 @@ if is_enabled "${INSTALL_UV}"; then
 fi
 
 if is_enabled "${INSTALL_NODE_LTS}"; then
-  log "Installing current Node LTS user-locally"
+  log "Installing Node 24.22.1 user-locally"
   require_npm
   npm install -g n
-  n lts
+  n 24.22.1
   hash -r
 fi
 
