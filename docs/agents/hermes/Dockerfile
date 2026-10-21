@@ -54,10 +54,18 @@ COPY --from=ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f
 # curl, git, ripgrep, procps, less and python3 are the general shell tools the sweeps and the
 # nightly audit agent use; tini is PID 1 (the entrypoint at the bottom); libatomic1 is the one
 # shared library the copied node binary needs beyond the base.
+# ca-certificates is listed so apt upgrades the base's copy: curl, git, gh and python3 trust the
+# system bundle, and Debian 13 only stopped trusting the compromised eMudhra emSign ECC Root CA - G3
+# and AAA Certificate Services routes in 20250419+deb13u1. The version gate fails the build (and
+# pin-watch keeps the running image) if an older bundle would ship.
 # One layer, lists cleaned, no recommends.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg unzip openssh-client dnsutils fonts-dejavu-core libchromaprint-tools jq util-linux \
-       curl git ripgrep tini procps python3 less libatomic1 \
+       curl git ripgrep tini procps python3 less libatomic1 ca-certificates \
+  && ca_ver="$(dpkg-query -W -f='${Version}' ca-certificates)" \
+  && if ! dpkg --compare-versions "$ca_ver" ge 20250419+deb13u1; then \
+       echo "ca-certificates $ca_ver predates the eMudhra distrust (need >= 20250419+deb13u1)" >&2; exit 1; \
+     fi \
   && rm -rf /var/lib/apt/lists/* \
   && node --version && npm --version
 
