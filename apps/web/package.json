@@ -64,7 +64,7 @@
     "@fluncle/tokens": "workspace:*",
     "@fluncle/ui": "workspace:*",
     "@libsql/client": "catalog:",
-    "@modelcontextprotocol/server": "~2.2.0",
+    "@modelcontextprotocol/server": "~2.3.0",
     "@openrouter/ai-sdk-provider": "catalog:",
     "@orpc/openapi": "catalog:",
     "@orpc/server": "catalog:",
@@ -104,7 +104,7 @@
     "@effect/vitest": "catalog:",
     "@fluncle/test-support": "workspace:*",
     "@huggingface/transformers": "~4.3.0",
-    "@modelcontextprotocol/client": "~2.2.0",
+    "@modelcontextprotocol/client": "~2.3.0",
     "@playwright/test": "~1.63.0",
     "@sentry/vite-plugin": "~5.4.0",
     "@types/react": "catalog:",
@@ -116,7 +116,7 @@
     "oxc-parser": "~0.146.0",
     "playwright-core": "catalog:",
     "typescript": "catalog:",
-    "vite": "~8.3.1",
+    "vite": "~8.3.3",
     "vitest": "~5.0.3",
     "wrangler": "~4.145.0"
   }

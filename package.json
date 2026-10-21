@@ -95,7 +95,7 @@
     "yaml": "~2.9.1"
   },
   "overrides": {
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "compression": "1.8.2",
     "proxy-addr": "2.0.8",
     "sharp": "0.35.5",
@@ -109,7 +109,7 @@
   },
   "packageManager": "bun@1.4.3",
   "// overrides": {
-    "@modelcontextprotocol/sdk": "Drop when shadcn requires SDK 1.31.0 or newer; keep the root-export patch keyed to the resolved SDK version until upstream #2273 is fixed.",
+    "@modelcontextprotocol/sdk": "Drop when shadcn requires SDK 1.32.0 or newer; keep the root-export patch keyed to the resolved SDK version until upstream #2273 is fixed.",
     "compression": "Drop when Expo and React Native tooling require compression 1.8.2 or newer.",
     "proxy-addr": "Drop when every Express chain requires proxy-addr 2.0.8 or newer.",
     "sharp": "Drop when Transformers and every Miniflare chain require sharp 0.35.5 or newer, including exact pins.",
@@ -120,7 +120,7 @@
   },
   "patchedDependencies": {
     "@remotion/bundler@4.0.499": "patches/@remotion%2Fbundler@4.0.499.patch",
-    "@modelcontextprotocol/sdk@1.31.0": "patches/@modelcontextprotocol%2Fsdk@1.31.0.patch"
+    "@modelcontextprotocol/sdk@1.32.0": "patches/@modelcontextprotocol%2Fsdk@1.32.0.patch"
   },
   "trustedDependencies": [
     "@shopify/react-native-skia"
