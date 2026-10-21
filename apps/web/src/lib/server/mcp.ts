@@ -21,6 +21,8 @@ import { listTracks } from "./tracks";
 const SERVER_NAME = "com.fluncle/fluncle-api";
 const SERVER_VERSION = "1.0.0";
 const MCP_ENDPOINT = `${siteUrl}/mcp`;
+const MCP_MAX_TOOL_INPUT_ELEMENTS = 6;
+const MCP_MAX_REQUEST_BODY_SIZE = 16 * 1024;
 
 const maxRecentLimit = 48;
 const minQueryLength = 2;
@@ -245,6 +247,7 @@ function createServer(requestInfo?: Request): McpServer {
       },
       capabilities: MCP_CAPABILITIES,
       instructions: SERVER_INSTRUCTIONS,
+      maxToolInputElements: MCP_MAX_TOOL_INPUT_ELEMENTS,
     },
   );
 
@@ -345,6 +348,7 @@ function createServer(requestInfo?: Request): McpServer {
 
 const mcpHandler = createMcpHandler(({ requestInfo }) => createServer(requestInfo), {
   legacy: "reject",
+  maxRequestBodySize: MCP_MAX_REQUEST_BODY_SIZE,
   maxSubscriptions: 0,
   responseMode: "json",
 });
@@ -353,6 +357,7 @@ async function handleLegacyRequest(request: Request): Promise<Response> {
   const server = createServer(request);
   const transport = new WebStandardStreamableHTTPServerTransport({
     enableJsonResponse: true,
+    maxRequestBodySize: MCP_MAX_REQUEST_BODY_SIZE,
     sessionIdGenerator: undefined,
   });
   const headers = new Headers(request.headers);
@@ -413,7 +418,9 @@ export async function handleMcp(request: Request): Promise<Response | undefined>
   if (request.method !== "POST") {
     return withCors(methodNotAllowed("POST, OPTIONS"), request);
   }
-  const response = (await isLegacyRequest(request))
+  const response = (await isLegacyRequest(request, undefined, {
+    maxRequestBodySize: MCP_MAX_REQUEST_BODY_SIZE,
+  }))
     ? await handleLegacyRequest(request)
     : await mcpHandler.fetch(request);
   return withCors(response, request);

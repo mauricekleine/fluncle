@@ -661,6 +661,76 @@ describe("MCP SDK wire contract", () => {
   });
 });
 
+describe("MCP input limits", () => {
+  it("returns an isError result above the schema-derived tool argument element budget", async () => {
+    const argumentsWithTooManyElements = Object.fromEntries(
+      Array.from({ length: 7 }, (_, index) => [`field${index}`, true]),
+    );
+    const response = await handleMcp(
+      new Request("https://www.fluncle.com/mcp", {
+        body: JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: { arguments: argumentsWithTooManyElements, name: "get_random_track" },
+        }),
+        headers: {
+          Accept: "application/json, text/event-stream",
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      }),
+    );
+
+    if (!response) {
+      throw new Error("handleMcp returned no response");
+    }
+    const body = (await response.json()) as { result: { isError: boolean } };
+
+    expect(body.result.isError).toBe(true);
+  });
+
+  it("rejects oversized request bodies for modern and legacy protocol requests", async () => {
+    const body = JSON.stringify({
+      id: 1,
+      jsonrpc: "2.0",
+      method: "tools/list",
+      params: { padding: "x".repeat(16 * 1024) },
+    });
+    const modern = await handleMcp(
+      new Request("https://www.fluncle.com/mcp", {
+        body,
+        headers: {
+          Accept: "application/json, text/event-stream",
+          "Content-Type": "application/json",
+          "MCP-Protocol-Version": "2026-07-28",
+          "Mcp-Method": "tools/list",
+        },
+        method: "POST",
+      }),
+    );
+    const legacy = await handleMcp(
+      new Request("https://www.fluncle.com/mcp", {
+        body,
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+
+    expect(modern?.status).toBe(413);
+    expect(legacy?.status).toBe(413);
+  });
+
+  it("still serves a normal call within the schema-derived limits", async () => {
+    statuses.mockResolvedValue([]);
+
+    const { data, isError } = await callTool("get_status");
+
+    expect(isError).toBe(false);
+    expect(data.ok).toBe(false);
+  });
+});
+
 describe("MCP get_track tool", () => {
   beforeEach(() => {
     resolveTargetMock.mockReset();
