@@ -21,8 +21,8 @@ FROM oven/bun:1.4.3-debian@sha256:923bedb355f7746666659f71e724998159a5c8c54bd1cb
 # Node + npm — Claude Code installs through npm and runs on node, and the audit agent drives
 # the repo's node tooling. Copied from the matching Debian-trixie node image so the binary
 # links against the same glibc; digest-pinned for the same reason as the base.
-COPY --from=node:26.10.0-trixie-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e9615225ce4aaae1 /usr/local/bin/node /usr/local/bin/node
-COPY --from=node:26.10.0-trixie-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e9615225ce4aaae1 /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node:26.12.1-trixie-slim@sha256:1653c74b30c27b26f68c2d21279be12139d2ba723e3a682c425ec4bfb6070422 /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:26.12.1-trixie-slim@sha256:1653c74b30c27b26f68c2d21279be12139d2ba723e3a682c425ec4bfb6070422 /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
   && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
