@@ -83,12 +83,15 @@ test.describe("Marcus at 1440×900", () => {
     await hydrate(page, "/fresh");
     await expect(page.locator(".fresh-since-visit")).toHaveText("");
 
-    const stored = await page.evaluate(
-      (key) => JSON.parse(window.localStorage.getItem(key) ?? "null") as { seen: string[] } | null,
-      VISIT_KEY,
-    );
+    const readRecordedVisit = () =>
+      page.evaluate(
+        (key) =>
+          JSON.parse(window.localStorage.getItem(key) ?? "null") as { seen: string[] } | null,
+        VISIT_KEY,
+      );
 
-    expect(stored?.seen.length).toBeGreaterThan(0);
+    await expect.poll(async () => (await readRecordedVisit())?.seen.length ?? 0).toBeGreaterThan(0);
+    const stored = await readRecordedVisit();
 
     await page.evaluate(
       ({ key, seen }) =>
