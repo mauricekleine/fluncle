@@ -2108,6 +2108,57 @@ describe("sweep commands surface partial failure", () => {
     },
   );
 
+  testCli(
+    "backfills artist-edges runs on its default --limit within the list-limit range",
+    async () => {
+      const calls: Array<{ dryRun: string | null; limit: string | null }> = [];
+
+      await withStubApi(
+        (req, url) => {
+          if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/artist-edges") {
+            calls.push({
+              dryRun: url.searchParams.get("dryRun"),
+              limit: url.searchParams.get("limit"),
+            });
+
+            return Response.json({
+              dryRun: true,
+              edgesWritten: 0,
+              fullyMatched: [],
+              fullyMatchedCount: 0,
+              nextCursor: null,
+              ok: true,
+              partiallyMatched: [],
+              partiallyMatchedCount: 0,
+              queueDepth: 0,
+              scanned: 0,
+              unmatchedNames: 0,
+              zeroMatched: [],
+              zeroMatchedCount: 0,
+            });
+          }
+
+          return Response.json(
+            { code: "not_found", message: url.pathname, ok: false },
+            { status: 404 },
+          );
+        },
+        async (baseUrl) => {
+          const result = await runCli(
+            ["admin", "backfills", "artist-edges", "--dry-run", "--json"],
+            {
+              FLUNCLE_API_BASE_URL: baseUrl,
+              FLUNCLE_API_TOKEN: "test-token",
+            },
+          );
+
+          expect(result.exitCode).toBe(0);
+          expect(calls).toEqual([{ dryRun: "true", limit: "100" }]);
+        },
+      );
+    },
+  );
+
   testCli("backfills artist-images stops paging on throttle or budget exhaustion", async () => {
     for (const stopField of ["rateLimited", "budgetLimited"] as const) {
       let calls = 0;

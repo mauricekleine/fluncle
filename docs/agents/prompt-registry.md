@@ -44,7 +44,7 @@ So: `prompt_versions`, **one row per edit, append-only**. A row is never mutated
 
 ## The architecture is decided by the box
 
-Box sweeps fetch prompts over the API with their existing agent-scoped token, independently of pinned CLI and image releases.
+Box sweeps fetch prompts over the API with their existing agent-scoped token, independently of pinned CLI and image releases. The entity-bio sweep is the one exception: the Worker resolves and renders its `describe_*` prompt (`buildEntityBioPrompt`, `apps/web/src/lib/server/bio.ts`) and returns it with its version from the `draft-bio` read, so `entity-bio-sweep.ts` never calls `get_prompt` and carries no fallback builder — an entity whose draft has no prompt is skipped ([bio-agent.md](./bio-agent.md)).
 
 ```
   the operator                     the Worker                        the box
@@ -54,7 +54,7 @@ Box sweeps fetch prompts over the API with their existing agent-scoped token, in
  │   prompts …    │          │                       │          │ logbook-sweep.ts     │
  └────────────────┘          │ get_prompt  (AGENT)   │◀──GET────│ triage-sweep.ts      │
                              │   → override, else    │  each     │ newsletter-sweep.ts  │
-                             │     the baked default │  tick     │ entity-bio-sweep.ts  │
+                             │     the baked default │  tick     │                      │
                              │                       │          │  fetch fails?        │
                              │ context_distil  ─┐    │          │  → its own inlined   │
                              │ search_filter   ─┴─in-│          │    builder, v=null   │

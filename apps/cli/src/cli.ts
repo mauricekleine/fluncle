@@ -3557,7 +3557,7 @@ JSON field reference:
     .command("artist-edges")
     .description("Fold artists_json names onto existing artist identities → track_artists")
     .option("--dry-run", "Report the classification without writing edges or stamps", false)
-    .option("--limit <limit>", "Max tracks to visit", "200")
+    .option("--limit <limit>", "Max tracks to visit", "100")
     .option("--json", "Print JSON", false)
     .action(async (options: BackfillSyncOptions) => {
       const { backfillArtistEdgesCommand } = await import("./commands/admin-tracks");

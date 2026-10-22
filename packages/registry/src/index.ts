@@ -1534,7 +1534,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.label-triage",
     operatorNotes:
-      "06:40 Amsterdam daily, retry slot 07:50. The gate is one countless admin read and a sort; it fires only when 40+ NEVER-LOOKED labels with a MusicBrainz identity and no artist rules have accumulated, and stale ones ride along. A fired round runs one claude -p per batch of 10 labels (capped at 3 batches and 30 labels) whose only fetcher is `fluncle admin labels evidence`; the model holds no Fluncle token, and the script records each verdict with record_label_triage (agent tier). It cannot rule: update_label is operator tier and 403s the box token. Labels a round left unfinished (a failed batch, or past the cap) are carried and fire the next day. The model runs --restricted with dontAsk permissions, confined to its batch directory and the skill. A fired round that records zero proposals, or any failed batch, exits non-zero, reads failed on /status and posts to Discord. Source: docs/agents/hermes/scripts/{label-triage-sweep.ts,label-triage-sweep.sh}.",
+      "06:40 Amsterdam daily, retry slot 07:50. The gate is one countless admin read and a sort; it fires only when 40+ NEVER-LOOKED labels with a MusicBrainz identity and no artist rules have accumulated, and stale ones ride along. A fired round runs one claude -p per batch of 10 labels (capped at 3 batches and 30 labels) whose only fetcher is `fluncle admin labels evidence`; the model holds no Fluncle token, and the script records each verdict with record_label_triage (agent tier). It cannot rule: update_label is admin tier so the box may apply a ruling the operator ratified, but the sweep never calls it. Labels a round left unfinished (a failed batch, or past the cap) are carried and fire the next day. The model runs --restricted with dontAsk permissions, confined to its batch directory and the skill. A fired round that records zero proposals, or any failed batch, exits non-zero, reads failed on /status and posts to Discord. Source: docs/agents/hermes/scripts/{label-triage-sweep.ts,label-triage-sweep.sh}.",
     probeConfig: {
       cadenceMs: 24 * 60 * MINUTE_MS,
       cronName: "fluncle-label-triage",
@@ -1760,7 +1760,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.newsletter",
     operatorNotes:
-      "Fri 15:00 Amsterdam (cron `0 15 * * 5`, box pinned Europe/Amsterdam for DST). The only full-agent cron. Send is operator-gated (agent token 403s send_edition). Source: docs/agents/hermes/cron/jobs.json.",
+      "Fri 15:00 Amsterdam (cron `0 15 * * 5`, box pinned Europe/Amsterdam for DST). A hybrid --no-agent sweep with one claude -p authoring call. Send is operator-gated (agent token 403s send_edition). Source: docs/agents/hermes/newsletter-timer/README.md.",
     probeConfig: {
       cadenceMs: 7 * 24 * 60 * MINUTE_MS,
       cronName: "fluncle-newsletter",

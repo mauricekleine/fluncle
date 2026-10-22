@@ -22,7 +22,7 @@ fluncle admin backfills artist-credits --dry-run   # report the eligible worklis
 
 ## Why every 5m (not 60m like slice 0)
 
-Slice 0 makes no vendor call and drains its history in a handful of generous (200-row) ticks, so an hourly cadence suffices. This sweep is throttled to one MusicBrainz call per row, so a batch is small (40) — a 5-minute cadence drains the ~14.3k residual at ~40/tick over ~a day and a half without ever storming MusicBrainz (the 1-req/s pacing and the circuit breaker are the real backstops; the cadence only sets the drain rate). The `OnBootSec=4min` stagger sits on mod-5 residue 4, shared with projection-maintenance and clear of the other 5-minute sweeps (enrich=1, context-note=2, capture/embed=3).
+Slice 0 makes no vendor call and drains its history in a handful of generous (100-row) ticks, so an hourly cadence suffices. This sweep is throttled to one MusicBrainz call per row, so a batch is small (40) — a 5-minute cadence drains the ~14.3k residual at ~40/tick over ~a day and a half without ever storming MusicBrainz (the 1-req/s pacing and the circuit breaker are the real backstops; the cadence only sets the drain rate). The `OnBootSec=4min` stagger sits on mod-5 residue 4, shared with projection-maintenance and clear of the other 5-minute sweeps (enrich=1, context-note=2, capture/embed=3).
 
 ## Why a host timer + the /status marker
 
