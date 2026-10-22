@@ -28,7 +28,7 @@ fi
 
 echo "==> bun (the orchestrator's runtime)"
 if ! command -v bun >/dev/null 2>&1; then
-	curl -fsSL https://bun.sh/install | bash
+	curl -fsSL https://bun.sh/install | bash -s bun-v1.4.4
 	export PATH="${HOME}/.bun/bin:${PATH}"
 fi
 
