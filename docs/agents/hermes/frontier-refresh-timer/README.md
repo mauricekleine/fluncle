@@ -1,6 +1,6 @@
 # fluncle-frontier-refresh-timer — the paced Frontier playlist drain on a host timer
 
-The rave-02 host trigger for the `--no-agent` **Frontier refresh** drain. E2, the public recommendation machine (docs/planning/ROADMAP.md § the public recommendation machine). Every verified user can mint ONE public **"Fluncle's Frontier"** playlist on Fluncle's OWN Spotify account (no per-user OAuth), holding THEIR recommendations — the E1 blend: the findings nearest their seeds first, then the anchored catalogue recs. This cron keeps each playlist current. The full design is [docs/the-ear.md](../../../the-ear.md) § Fluncle's Frontier.
+The rave-02 host trigger for the `--no-agent` **Frontier refresh** drain. E2, the public recommendation machine. Every verified user can mint ONE public **"Fluncle's Frontier"** playlist on Fluncle's OWN Spotify account (no per-user OAuth), holding THEIR recommendations — the E1 blend: the findings nearest their seeds first, then the anchored catalogue recs. This cron keeps each playlist current. The full design is [docs/the-ear.md](../../../the-ear.md) § Fluncle's Frontier.
 
 ## The model: a paced, resumable drain (every ~15 min)
 
@@ -24,7 +24,7 @@ Every automation cron runs off repo-checked-in host timers so the SCHEDULE is co
 ## Install / operate (operator, on the box)
 
 ```bash
-sudo bash /opt/hermes-scripts/../agents/hermes/install-host-timers.sh   # installs every *-timer/, incl. this one
+sudo bash docs/agents/hermes/install-host-timers.sh                      # installs every *-timer/, incl. this one
 systemctl list-timers 'fluncle-frontier-refresh*'                        # confirm the slot
 sudo systemctl start fluncle-frontier-refresh.service                    # run one tick by hand
 journalctl -u fluncle-frontier-refresh.service -n 50                     # read the JSON summary line
