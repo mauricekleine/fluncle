@@ -10,6 +10,7 @@ import {
   seedTrack,
 } from "./integration-db";
 import { listArtistsByAlbum, listArtistsByLabel } from "./artists";
+import { findingToDiscoveryTrack } from "../discovery-tracks";
 import {
   getFindingsByAlbum,
   getFindingsByLabel,
@@ -206,7 +207,7 @@ describe("what a related findings band never shows", () => {
     expect(ids(related)).toStrictEqual(["kept"]);
   });
 
-  it("strips the private capture and analysis fields from every row", async () => {
+  it("reads related cards without their enrichment and production payloads", async () => {
     await catalogueTrack("seed", {});
     await finding("captured", "500.2.1A", "2026-07-01T00:00:00.000Z");
     await db.execute(
@@ -216,7 +217,29 @@ describe("what a related findings band never shows", () => {
        where track_id = 'captured'`,
     );
 
+    await db.execute({
+      args: ["unused note ".repeat(10_000), "unused video ".repeat(10_000)],
+      sql: `update findings set note = ?, video_structure = ? where track_id = 'captured'`,
+    });
+    let responseBytes = 0;
+    const execute = db.execute.bind(db);
+    vi.spyOn(db, "execute").mockImplementation(async (statement: InStatement) => {
+      const result = await execute(statement);
+      responseBytes += Buffer.byteLength(JSON.stringify(result.rows));
+      return result;
+    });
     const [row] = await listRelatedFindings({ kind: "track", trackId: "seed" });
+
+    expect(responseBytes).toBeLessThan(8_192);
+    expect(row && findingToDiscoveryTrack(row)).toMatchObject({
+      bpm: 174,
+      href: "/log/500.2.1A",
+      key: "8A",
+      lit: true,
+      logId: "500.2.1A",
+      title: "captured",
+      trackId: "captured",
+    });
 
     expect(row).toMatchObject({ trackId: "captured" });
     expect(row).not.toHaveProperty("sourceAudioKey", expect.anything());
