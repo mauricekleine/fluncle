@@ -8,6 +8,7 @@ import {
   MBID_ISRC_REFRESH_AFTER_MS,
   VENDOR_COOLDOWN_BASE_MS,
   dueWorkVendorSourceVersion,
+  evaluateCatalogueRankDueWork,
   evaluateDueWorkVendorQueue,
   type DueWorkVendorKind,
   type DueWorkVendorSource,
@@ -147,6 +148,52 @@ describe("due-work vendor definitions", () => {
       "v5:1",
     );
     expect(rows.map((row) => row.trackId)).toEqual(["a", "b", "re-embed"]);
+  });
+
+  it("evaluates a narrow catalogue-rank source exactly as the catalogue-rank queue does", () => {
+    const sources = [
+      source({ trackId: "fresh" }),
+      source({ catalogueRankCorpus: "v5:0", trackId: "stale-corpus" }),
+      source({ catalogueRankCorpus: "v5:1", trackId: "current" }),
+      source({
+        capturePriority: -1,
+        catalogueRankCorpus: "v5:1",
+        hasEmbedding: true,
+        trackId: "stable-negative",
+      }),
+      source({
+        capturePriority: 0,
+        catalogueRankCorpus: "v5:1",
+        hasEmbedding: true,
+        trackId: "re-embed",
+      }),
+      source({ dismissedAt: NOW, trackId: "dismissed" }),
+      source({ isCatalogue: false, trackId: "finding" }),
+    ];
+    const queued = new Map(
+      queue("catalogue-rank", sources, "v5:1").map((row) => [row.trackId, row]),
+    );
+    expect([...queued.keys()].sort()).toEqual(["fresh", "re-embed", "stale-corpus"]);
+
+    for (const full of sources) {
+      const narrow = Object.fromEntries(
+        CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS.map((column) => [column, full[column]]),
+      ) as Parameters<typeof evaluateCatalogueRankDueWork>[0];
+      const expected = queued.get(full.trackId);
+      expect(evaluateCatalogueRankDueWork(narrow, NOW, "v5:1"), full.trackId).toEqual(
+        expected === undefined
+          ? null
+          : {
+              nextDueAt: expected.nextDueAt,
+              orderKey: expected.orderKey,
+              sourceVersion: expected.sourceVersion,
+            },
+      );
+    }
+  });
+
+  it("refuses to evaluate the catalogue-rank queue without a rank corpus", () => {
+    expect(() => queue("catalogue-rank", [source()])).toThrow(RangeError);
   });
 
   it("keeps verification certification-neutral and excludes only quarantined captures", () => {

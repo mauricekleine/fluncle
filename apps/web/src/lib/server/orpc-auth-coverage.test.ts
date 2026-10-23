@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CONTRACT_OPERATION_ROUTES } from "@fluncle/contracts/orpc";
 import { dueWorkMaintenancePendingMiddleware } from "./orpc-backpressure";
 import { router } from "./orpc";
 import { adminAuth, operatorGuard, privateUserAuth } from "./orpc-auth";
@@ -435,6 +436,25 @@ describe("oRPC auth-tier coverage", () => {
       expect(known.has(name), `EXPECTED_TIERS entry "${name}" is not a real contract op`).toBe(
         true,
       );
+    }
+  });
+
+  it("guards every /admin-path op at the admin or operator tier", () => {
+    const adminPathOps = ops.filter((name) => {
+      const path = CONTRACT_OPERATION_ROUTES[name]?.path;
+
+      return path === "/admin" || path?.startsWith("/admin/") === true;
+    });
+
+    expect(adminPathOps.length).toBeGreaterThan(20);
+
+    for (const name of adminPathOps) {
+      const derived = deriveTier((router as Record<string, unknown>)[name]);
+
+      expect(
+        derived === "admin" || derived === "operator",
+        `op "${name}" sits on an /admin path but derives "${derived}" — an /admin op must carry adminAuth or operatorGuard`,
+      ).toBe(true);
     }
   });
 
