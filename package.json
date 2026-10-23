@@ -78,6 +78,7 @@
     "prepare": "command -v husky > /dev/null 2>&1 && husky || true",
     "pretypecheck": "node scripts/quality/workspace-install.mjs",
     "typecheck": "TURBO_CACHE_DIR=\"${TURBO_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/turbo/fluncle}\" turbo run typecheck",
+    "verify": "bun scripts/quality/verify.mjs",
     "ux:capture": "bun scripts/ux-capture.ts",
     "doctor": "react-doctor"
   },
