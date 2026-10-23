@@ -72,6 +72,11 @@ export const CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS = [
   "trackId",
 ] as const satisfies readonly (keyof DueWorkVendorSource)[];
 
+export type CatalogueRankDueWorkSource = Pick<
+  DueWorkVendorSource,
+  (typeof CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS)[number]
+>;
+
 export const DUE_WORK_VENDOR_WORK_KIND_INVENTORY = [
   { family: "catalogue", workKind: "catalogue-rank" },
   { family: "capture", workKind: "capture-verification" },
@@ -227,7 +232,7 @@ function findingOrder(
   ]);
 }
 
-function idOrder(source: DueWorkVendorSource): string {
+function idOrder(source: Pick<DueWorkVendorSource, "trackId">): string {
   return encodeDueWorkOrder([{ direction: "asc", kind: "text", value: source.trackId }]);
 }
 
@@ -236,22 +241,49 @@ export function dueWorkVendorSourceVersion(
   kind: DueWorkVendorKind,
   rankCorpus?: string,
 ): string {
-  const columns =
-    kind === "catalogue-rank"
-      ? CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS
-      : DUE_WORK_VENDOR_SOURCE_COLUMNS;
+  if (kind === "catalogue-rank") {
+    return dueWorkCatalogueRankSourceVersion(source, rankCorpus);
+  }
+  const columns = DUE_WORK_VENDOR_SOURCE_COLUMNS;
   const input = [
     `kind:${kind}`,
     ...columns.map((column) => `${column}:${JSON.stringify(source[column])}`),
-    ...(kind === "catalogue-rank" ? [`rankCorpus:${rankCorpus ?? ""}`] : []),
   ].join("\u001f");
   const hash = fnv1a64(input);
-  const prefix = kind === "catalogue-rank" ? "dw-rank1" : "dw1";
-  return `${prefix}-${hash.toString(16).padStart(16, "0")}`;
+  return `dw1-${hash.toString(16).padStart(16, "0")}`;
+}
+
+export function dueWorkCatalogueRankSourceVersion(
+  source: CatalogueRankDueWorkSource,
+  rankCorpus?: string,
+): string {
+  const input = [
+    "kind:catalogue-rank",
+    ...CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS.map(
+      (column) => `${column}:${JSON.stringify(source[column])}`,
+    ),
+    `rankCorpus:${rankCorpus ?? ""}`,
+  ].join("\u001f");
+  return `dw-rank1-${fnv1a64(input).toString(16).padStart(16, "0")}`;
+}
+
+export function evaluateCatalogueRankDueWork(
+  source: CatalogueRankDueWorkSource,
+  now: string,
+  rankCorpus: string,
+): { nextDueAt: string; orderKey: string; sourceVersion: string } | null {
+  const nextDueAt = catalogueRankDueAt(source, now, rankCorpus);
+  return nextDueAt === undefined
+    ? null
+    : {
+        nextDueAt,
+        orderKey: idOrder(source),
+        sourceVersion: dueWorkCatalogueRankSourceVersion(source, rankCorpus),
+      };
 }
 
 function catalogueRankDueAt(
-  source: DueWorkVendorSource,
+  source: CatalogueRankDueWorkSource,
   now: string,
   rankCorpus: string | undefined,
 ): string | undefined {

@@ -1,6 +1,7 @@
-import { type Row } from "@libsql/client";
+import { type InValue, type Row } from "@libsql/client";
 
 import { parseArtistsJson } from "./artist-names";
+import { typedRows } from "./db";
 import {
   CATALOGUE_RANK_MATERIAL_REVISION_INITIAL,
   CATALOGUE_RANK_MATERIAL_REVISION_KEY,
@@ -47,6 +48,9 @@ import {
 } from "./due-work-track-definitions";
 import {
   DUE_WORK_VENDOR_WORK_KIND_INVENTORY,
+  dueWorkCatalogueRankSourceVersion,
+  evaluateCatalogueRankDueWork,
+  type CatalogueRankDueWorkSource,
   dueWorkVendorSourceVersion,
   evaluateDueWorkVendorQueue,
   type DueWorkVendorKind,
@@ -559,8 +563,137 @@ function vendorBackfillDefinition(
   };
 }
 
-export const VENDOR_DUE_WORK_BACKFILLS =
-  DUE_WORK_VENDOR_WORK_KIND_INVENTORY.map(vendorBackfillDefinition);
+type CatalogueRankSource = CatalogueRankDueWorkSource &
+  DueWorkRebuildSource & {
+    rankCorpus: string;
+  };
+
+const CATALOGUE_RANK_SOURCE_SELECT = `select t.capture_priority, t.catalogue_rank_corpus,
+  t.dismissed_at, t.has_embedding, t.is_catalogue, t.track_id from tracks t`;
+
+async function readCatalogueRankSources(
+  client: DueWorkClient,
+  query: { args: InValue[]; sql: string },
+  ownedRankCorpus?: string,
+): Promise<CatalogueRankSource[]> {
+  const result = await client.execute({
+    args: query.args,
+    sql: `${CATALOGUE_RANK_SOURCE_SELECT} ${query.sql}`,
+  });
+  const currentRankCorpus = ownedRankCorpus ?? (await readCatalogueRankCorpus(client));
+  return typedRows<
+    Pick<
+      VendorSourceRow,
+      | "capture_priority"
+      | "catalogue_rank_corpus"
+      | "dismissed_at"
+      | "has_embedding"
+      | "is_catalogue"
+      | "track_id"
+    >
+  >(result.rows).map((row) => {
+    const hasEmbedding = booleanValue(row.has_embedding);
+    const rankCorpus = catalogueRankCorpusForTrack(currentRankCorpus, hasEmbedding);
+    const source: CatalogueRankDueWorkSource = {
+      capturePriority: numberOrNull(row.capture_priority),
+      catalogueRankCorpus:
+        row.catalogue_rank_corpus === null
+          ? null
+          : catalogueRankCorpusForTrack(row.catalogue_rank_corpus, hasEmbedding),
+      dismissedAt: row.dismissed_at,
+      hasEmbedding,
+      isCatalogue: booleanValue(row.is_catalogue),
+      trackId: row.track_id,
+    };
+    return {
+      ...source,
+      cursor: source.trackId,
+      rankCorpus,
+      sourceVersion: dueWorkCatalogueRankSourceVersion(source, rankCorpus),
+      subjectId: source.trackId,
+    };
+  });
+}
+
+function projectCatalogueRankSource(
+  source: CatalogueRankSource,
+  context: { generation: string; now: string },
+): DueWorkProjection<string> | null {
+  const row = evaluateCatalogueRankDueWork(source, context.now, source.rankCorpus);
+  return row === null
+    ? null
+    : projectionFromRow(
+        row,
+        {
+          generation: context.generation,
+          subjectId: source.trackId,
+          subjectType: "track",
+          workKind: "catalogue-rank",
+        },
+        context.now,
+      );
+}
+
+const CATALOGUE_RANK_BACKFILL: DueWorkRebuildDefinition<string, CatalogueRankSource> = {
+  get definitionVersion() {
+    return dueWorkDefinitionVersion("catalogue-rank");
+  },
+  project: projectCatalogueRankSource,
+  readSourceChunk: ({ after, client, generation, limit }) =>
+    readCatalogueRankSources(
+      client,
+      {
+        args: [after ?? "", limit],
+        sql: "where t.track_id > ? order by t.track_id limit ?",
+      },
+      generation,
+    ),
+  resolveGeneration: refreshDueWorkCatalogueRankCorpus,
+  subjectType: "track",
+  workKind: "catalogue-rank",
+};
+
+function catalogueRankRepairDefinition(client: DueWorkClient): DueWorkRepairDefinition<string> {
+  return {
+    project: async (marker) => {
+      const [source] = await readCatalogueRankSources(client, {
+        args: [marker.subjectId],
+        sql: "where t.track_id = ? limit 1",
+      });
+      return source === undefined
+        ? null
+        : projectCatalogueRankSource(source, markerContext(marker));
+    },
+    projectMany: async (markers) => {
+      if (markers.length === 0) {
+        return [];
+      }
+      const ids = markers.map((marker) => marker.subjectId);
+      const sources = new Map(
+        (
+          await readCatalogueRankSources(client, {
+            args: ids,
+            sql: `where t.track_id in (${ids.map(() => "?").join(", ")})`,
+          })
+        ).map((source) => [source.subjectId, source]),
+      );
+      return markers.map((marker) => {
+        const source = sources.get(marker.subjectId);
+        return source === undefined
+          ? null
+          : projectCatalogueRankSource(source, markerContext(marker));
+      });
+    },
+    subjectType: "track",
+    workKind: "catalogue-rank",
+  };
+}
+
+export const VENDOR_DUE_WORK_BACKFILLS = DUE_WORK_VENDOR_WORK_KIND_INVENTORY.map((entry) =>
+  entry.workKind === "catalogue-rank"
+    ? registeredDefinition(CATALOGUE_RANK_BACKFILL)
+    : registeredDefinition(vendorBackfillDefinition(entry)),
+);
 
 type FindingSourceSnapshot = FindingRenderSource & {
   enrichment_status: null | string;
@@ -1116,39 +1249,43 @@ export function trackDueWorkRepairDefinitions(
 export function vendorDueWorkRepairDefinitions(
   client: DueWorkClient,
 ): DueWorkRepairDefinition<string>[] {
-  return DUE_WORK_VENDOR_WORK_KIND_INVENTORY.map((entry) => ({
-    project: async (marker) => {
-      const source = await readVendorDueWorkSource(client, entry.workKind, marker.subjectId);
-      return source === undefined
-        ? null
-        : repairProjection(projectVendorSource(entry, source, markerContext(marker)));
-    },
-    projectMany: async (markers) => {
-      if (markers.length === 0) {
-        return [];
-      }
-      const trackIds = markers.map((marker) => marker.subjectId);
-      const placeholders = trackIds.map(() => "?").join(", ");
-      const result = await client.execute({
-        args: trackIds,
-        sql: `${VENDOR_SOURCE_SELECT} where t.track_id in (${placeholders})`,
-      });
-      const sources = new Map(
-        (await vendorSources(client, entry.workKind, result.rows)).map((source) => [
-          source.trackId,
-          source,
-        ]),
-      );
-      return markers.map((marker) => {
-        const source = sources.get(marker.subjectId);
-        return source === undefined
-          ? null
-          : repairProjection(projectVendorSource(entry, source, markerContext(marker)));
-      });
-    },
-    subjectType: "track",
-    workKind: entry.workKind,
-  }));
+  return DUE_WORK_VENDOR_WORK_KIND_INVENTORY.map((entry) =>
+    entry.workKind === "catalogue-rank"
+      ? catalogueRankRepairDefinition(client)
+      : {
+          project: async (marker) => {
+            const source = await readVendorDueWorkSource(client, entry.workKind, marker.subjectId);
+            return source === undefined
+              ? null
+              : repairProjection(projectVendorSource(entry, source, markerContext(marker)));
+          },
+          projectMany: async (markers) => {
+            if (markers.length === 0) {
+              return [];
+            }
+            const trackIds = markers.map((marker) => marker.subjectId);
+            const placeholders = trackIds.map(() => "?").join(", ");
+            const result = await client.execute({
+              args: trackIds,
+              sql: `${VENDOR_SOURCE_SELECT} where t.track_id in (${placeholders})`,
+            });
+            const sources = new Map(
+              (await vendorSources(client, entry.workKind, result.rows)).map((source) => [
+                source.trackId,
+                source,
+              ]),
+            );
+            return markers.map((marker) => {
+              const source = sources.get(marker.subjectId);
+              return source === undefined
+                ? null
+                : repairProjection(projectVendorSource(entry, source, markerContext(marker)));
+            });
+          },
+          subjectType: "track",
+          workKind: entry.workKind,
+        },
+  );
 }
 
 export function entityDueWorkRepairDefinitions(
