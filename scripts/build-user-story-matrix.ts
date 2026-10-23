@@ -220,9 +220,7 @@ console.log(
 Bun.spawnSync(
   [
     process.execPath,
-    join(ROOT, "scripts", "bun-canary.ts"),
     "fmt",
-    "--no-script",
     "--ignore-unknown",
     HTML_PATH,
     CSV_PATH,

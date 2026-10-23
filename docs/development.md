@@ -50,7 +50,7 @@ cd packages/ui && bunx --bun shadcn@latest add dialog
 - Edit hooks only format the touched file. Before a commit or handoff, run the checks for the packages you changed; `bun run quality:classify` names the affected leaves. Quality Checks runs the full matrix; `deploy:gate` checks what the Worker build deploys.
 - To inspect or verify a running UI, use the global `agent-browser` skill (the pinned `agent-browser` CLI); use Chrome DevTools MCP only for performance traces.
 - TypeScript: `bun run typecheck` from the repo root, or the nearest package `typecheck` for focused changes.
-- Lint and format: `bun run check` from the repo root for broad validation.
+- Lint and format: `bun run format` uses the pinned release's `bun fmt`; `bun run lint` still uses Bun canary through `scripts/bun-canary.ts`. Run `bun run check` from the repo root for broad validation.
 - Web changes: `bun run --cwd apps/web typecheck`, `bun run --cwd apps/web build`, and `bun run --cwd apps/web lint` when relevant.
 - Complete web tests in fleet runs (`FLEET_CPU_CAP=1`) use `hyperspeed-boat-check` when installed. The launcher runs public committed source in an isolated sandbox with coverage and returns the suite's exact result; unavailable infrastructure or uncommitted source falls back locally. Interactive and filtered tests run locally. Set `FLEET_BOAT_CHECK=0` to keep a fleet check local.
 - CLI changes: `bun run --cwd apps/cli typecheck` and focused CLI commands such as `bun run --cwd apps/cli fluncle recent --limit 1 --json` when behavior changes.

@@ -50,7 +50,7 @@ Example entries:
 { name: "cron.enrich", kind: "cron",      weights: { status: "hidden" },                  /* … */ }
 ```
 
-Keep object keys **alphabetically sorted** (`oxfmt`/`sort-keys` enforces it): `ssh` before `web`, `cli` before `web`, `status` before `web`.
+Keep object keys **alphabetically sorted** (the `sort-keys` lint rule enforces it): `ssh` before `web`, `cli` before `web`, `status` before `web`.
 
 ## 3. How the registry is CONSUMED (the fan-out)
 

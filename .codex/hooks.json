@@ -19,7 +19,7 @@
           {
             "type": "command",
             "command": ".codex/hooks/format-on-edit.sh",
-            "statusMessage": "Formatting with oxfmt"
+            "statusMessage": "Formatting with bun fmt"
           }
         ]
       }

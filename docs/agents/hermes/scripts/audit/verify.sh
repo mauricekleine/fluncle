@@ -115,7 +115,7 @@ else
 	log "${#CHANGED[@]} changed path(s)"
 
 	BUN_CANARY=(bun scripts/bun-canary.ts)
-	step format 256 -- "${BUN_CANARY[@]}" fmt --check --no-script --no-error-on-unmatched-pattern "${CHANGED[@]}"
+	step format 256 -- bun fmt --check --no-error-on-unmatched-pattern "${CHANGED[@]}"
 	step lint "${AUDIT_VERIFY_LINT_HEADROOM_MB}" -- "${BUN_CANARY[@]}" lint --no-script --no-type-aware --no-error-on-unmatched-pattern "${CHANGED[@]}"
 
 	PACKAGES=()

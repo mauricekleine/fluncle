@@ -81,7 +81,7 @@ Use the globally installed `mk-agent-orchestration` skill for provider, model, e
 - Edit hooks format the touched file. Quality Checks owns the full matrix; `deploy:gate` checks what the Worker build deploys. For docs-only changes, verify formatting, links, and readability.
 - Read [docs/development.md#quality-checks](./docs/development.md#quality-checks) for package-specific commands; read [docs/quality-system.md](./docs/quality-system.md) before changing CI, the classifier, or deploy verification.
 - Use guards, early returns, `??`, or `?.` instead of TypeScript non-null assertions, enforced by lint.
-- The repo trials Bun's formatter and linter from Bun canary: `bun run format`, `bun run lint` and the pre-commit hook run `bun-canary fmt` and `bun-canary lint` against `.oxfmtrc.json` and `.oxlintrc.json`. Dotfiles installs `bun-canary` locally; CI, `deploy:gate` and the audit box install it from npm through `scripts/bun-canary.ts`. Retire the trial once a Bun release ships both commands.
+- Formatting uses the pinned Bun release's `bun fmt`, with `flavor = "oxfmt"` in `bunfig.toml` and exclusions in `.oxfmtrc.json`. Lint still trials Bun canary through `scripts/bun-canary.ts` and `.oxlintrc.json`; CI, `deploy:gate` and the audit box install it from npm when absent. Retire the lint trial once a Bun release ships `bun lint`.
 - For browser inspection use the global `agent-browser` skill; use Chrome DevTools MCP for performance traces.
 
 ## Library and API Docs

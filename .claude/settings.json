@@ -8,7 +8,7 @@
       "Bash(bun run test)",
       "Bash(bun run format:check)",
       "Bash(bun run deploy:gate)",
-      "Bash(bunx oxfmt:*)",
+      "Bash(bun fmt:*)",
       "Bash(bunx oxlint:*)",
       "Bash(rg:*)",
       "Bash(git status:*)",
@@ -39,7 +39,7 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/format-on-edit.sh",
-            "statusMessage": "Formatting with oxfmt"
+            "statusMessage": "Formatting with bun fmt"
           }
         ]
       }
