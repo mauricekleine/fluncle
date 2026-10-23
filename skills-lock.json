@@ -70,7 +70,7 @@
     "fluncle-operator": {
       "source": "./packages/skills/fluncle-operator",
       "sourceType": "local",
-      "computedHash": "31b3c260f4e67e5b3220202ddbbaba34e895396ab835ab158d2d3bd88e29108b"
+      "computedHash": "cf74d1253fc8c4f2821154e4fdcccbcec2938404b8029e6bad9a4b9bf1e2c4f6"
     },
     "fluncle-publish": {
       "source": "./packages/skills/fluncle-publish",
@@ -95,7 +95,7 @@
     "fluncle-surfaces": {
       "source": "./packages/skills/fluncle-surfaces",
       "sourceType": "local",
-      "computedHash": "0c728a16cf628be12d98bf97eb1681add674e62d90733418a32f8b8e3dec0f1b"
+      "computedHash": "7e667fe730d6c38f09eb54a2a3c798756abcd67f71692f7293f9ca9520690fb1"
     },
     "fluncle-track-enrichment": {
       "source": "./packages/skills/fluncle-track-enrichment",

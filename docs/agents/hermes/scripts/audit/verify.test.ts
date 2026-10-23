@@ -156,14 +156,12 @@ describe("the audit verification ladder", () => {
     expect(status).toBe(0);
     expect(record).toMatchObject({ failed: 0, ran: 2 });
     const calls = fixture.calls();
-    expect(calls).toContain(
-      "bun scripts/bun-canary.ts fmt --check --no-script --no-error-on-unmatched-pattern touched.ts",
-    );
+    expect(calls).toContain("bun fmt --check --no-error-on-unmatched-pattern touched.ts");
     expect(
       calls.some((call) => /^bun scripts\/bun-canary\.ts lint .* touched\.ts$/.test(call)),
     ).toBe(true);
     expect(
-      calls.some((call) => /^bun scripts\/bun-canary\.ts (fmt|lint)( --\S+)*$/.test(call)),
+      calls.some((call) => /^bun (?:fmt|scripts\/bun-canary\.ts lint)( --\S+)*$/.test(call)),
     ).toBe(false);
     expect(calls.some((call) => call.includes("run check"))).toBe(false);
     expect(calls.some((call) => call.endsWith("typecheck") && !call.includes("--cwd"))).toBe(false);

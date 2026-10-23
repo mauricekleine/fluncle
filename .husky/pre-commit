@@ -1,1 +1,1 @@
-bun scripts/bun-canary.ts fmt --staged --no-script && bun scripts/bun-canary.ts lint --staged --no-script
+bun fmt --staged && bun scripts/bun-canary.ts lint --staged --no-script

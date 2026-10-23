@@ -79,7 +79,7 @@ bun run check
 bun run check:fix
 ```
 
-Root scripts are orchestrated with Turborepo. `bun lint` and `bun fmt` (from Bun canary, through `scripts/bun-canary.ts`) run from the root with the workspace-aware `.oxlintrc.json` and `.oxfmtrc.json` configs. `apps/raycast` is the exception: Raycast's CLI owns extension formatting, and `ray lint` runs its own Prettier check over `src/**`.
+Root scripts are orchestrated with Turborepo. `bun run lint` uses Bun canary through `scripts/bun-canary.ts`; `bun run format` uses the pinned release's `bun fmt` with `flavor = "oxfmt"` in `bunfig.toml`. Both run from the root with the workspace-aware `.oxlintrc.json` and `.oxfmtrc.json` configs. `apps/raycast` is the exception: Raycast's CLI owns extension formatting, and `ray lint` runs its own Prettier check over `src/**`.
 
 Hosted checks and deploy builds use `bun install --frozen-lockfile`, so a package manifest change without a matching `bun.lock` fails before it can ship.
 

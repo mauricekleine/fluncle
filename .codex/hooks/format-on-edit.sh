@@ -14,7 +14,7 @@ while IFS= read -r file; do
 	[ -f "$file" ] || continue
 	case "$file" in
 	*.ts | *.tsx | *.js | *.jsx | *.mjs | *.cjs)
-		bun-canary fmt --no-script "$file" >/dev/null 2>&1 || true
+		bun fmt "$file" >/dev/null 2>&1 || true
 		;;
 	*.go)
 		gofmt -w "$file" >/dev/null 2>&1 || true

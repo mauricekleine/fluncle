@@ -114,7 +114,7 @@ jobs:
             turbo-v2-${{ runner.os }}-${{ hashFiles('bun.lock', 'turbo.json') }}-
             turbo-v2-${{ runner.os }}-
 
-      - name: Install Bun canary for lint and format
+      - name: Install Bun canary for lint
         env:
           BUN_CANARY_DIR: ${{ runner.temp }}/bun-canary
         run: |

@@ -65,7 +65,7 @@ bun run --cwd apps/raycast build
 bun run --cwd apps/raycast lint
 ```
 
-Raycast is exempt from the repo-wide `oxfmt` formatting rule. The Raycast CLI owns extension formatting, and `ray lint` runs Prettier over `src/**`; when lint fails only on formatting, use `bun run --cwd apps/raycast lint -- --fix` and keep changes scoped to `apps/raycast`.
+Raycast is exempt from the repo-wide `bun fmt` formatting rule. The Raycast CLI owns extension formatting, and `ray lint` runs Prettier over `src/**`; when lint fails only on formatting, use `bun run --cwd apps/raycast lint -- --fix` and keep changes scoped to `apps/raycast`.
 
 After manifest command changes, refresh Raycast command indexing:
 
