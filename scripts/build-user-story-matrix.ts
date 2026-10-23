@@ -217,16 +217,8 @@ console.log(
   `stories: ${spec.stories.length} · cells: yes=${totals.yes} partial=${totals.partial} planned=${totals.planned} no=${totals.no} n/a=${totals["n/a"]}`,
 );
 
-Bun.spawnSync(
-  [
-    process.execPath,
-    "fmt",
-    "--ignore-unknown",
-    HTML_PATH,
-    CSV_PATH,
-    SPEC_PATH,
-  ],
-  { stdout: "ignore" },
-);
+Bun.spawnSync([process.execPath, "fmt", "--ignore-unknown", HTML_PATH, CSV_PATH, SPEC_PATH], {
+  stdout: "ignore",
+});
 
 console.log(`wrote ${HTML_PATH} + ${CSV_PATH} (bun fmt applied)`);
