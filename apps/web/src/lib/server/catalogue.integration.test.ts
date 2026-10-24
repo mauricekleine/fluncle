@@ -872,28 +872,60 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     }
   });
 
-  it("reads the archive affinity ONCE per tick — the pre-audio ladder feeds the display cache", async () => {
+  async function qualifiedArtistReadsDuring(run: () => Promise<unknown>): Promise<string[]> {
+    const executeSpy = vi.spyOn(db, "execute");
+    try {
+      await run();
+      return executeSpy.mock.calls
+        .map((call) => {
+          const arg = call[0] as string | { sql: string };
+
+          return typeof arg === "string" ? arg : arg.sql;
+        })
+        .filter((sql) => sql.includes("having sum(case when ta.role = 'remixer'"));
+    } finally {
+      executeSpy.mockRestore();
+    }
+  }
+
+  it("reads the qualified-artist set ONCE per batch — the rank corpus, the pre-audio ladder and the display cache share it", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
     await seedFinding("finding-a", { vector: axis(0) });
 
     await seedCatalogue("cat-unvectored");
 
-    const executeSpy = vi.spyOn(db, "execute");
+    const reads = await qualifiedArtistReadsDuring(() => rankCatalogue());
+
+    expect(reads).toHaveLength(1);
+    expect(reads.every((sql) => sql.includes("union"))).toBe(true);
+  });
+
+  it("reads the qualified-artist set ONCE for an all-vectored batch whose display cache still refreshes", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-a", { vector: axis(0) });
+    await seedCatalogue("cat-vectored", { vector: blend(axis(0), axis(1), 0.5) });
+
+    const reads = await qualifiedArtistReadsDuring(() => rankCatalogue());
+    const cache = await db.execute(
+      `select value from settings where key = 'catalogue_affinity_cache'`,
+    );
+
+    expect(reads).toHaveLength(1);
+    expect(cache.rows).toHaveLength(1);
+  });
+
+  it("reads the qualified-artist set ONCE when a batch finds nothing to rank", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-a", { vector: axis(0) });
+    await seedCatalogue("cat-vectored", { vector: blend(axis(0), axis(1), 0.5) });
     await rankCatalogue();
 
-    const calls = executeSpy.mock.calls.map((call) => {
-      const arg = call[0] as string | { sql: string };
+    const reads = await qualifiedArtistReadsDuring(() => rankCatalogue());
 
-      return typeof arg === "string" ? arg : arg.sql;
-    });
-    const weightedFragment = calls.filter((sql) =>
-      sql.includes("having sum(case when ta.role = 'remixer'"),
-    );
-    executeSpy.mockRestore();
-
-    expect(weightedFragment).toHaveLength(2);
-    expect(weightedFragment.every((sql) => sql.includes("union"))).toBe(true);
+    expect(reads).toHaveLength(1);
   });
 
   it("the pure bucket classifier agrees with the SQL aggregate, bucket-for-bucket (the delta drift guard)", async () => {

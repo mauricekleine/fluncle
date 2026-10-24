@@ -283,7 +283,9 @@ export function parseCatalogueRankState(value: string | undefined): CatalogueRan
   }
 }
 
-async function readLiveCatalogueRankState(): Promise<CatalogueRankState> {
+type LiveCatalogueRankState = CatalogueRankState & { qualifiedArtistIds: readonly string[] };
+
+async function readLiveCatalogueRankState(): Promise<LiveCatalogueRankState> {
   const db = await getDb();
   const countResult = await db.execute({
     args: [CATALOGUE_RANK_MATERIAL_REVISION_KEY],
@@ -315,14 +317,22 @@ async function readLiveCatalogueRankState(): Promise<CatalogueRankState> {
     ),
     embeddedFindings,
     findings,
+    qualifiedArtistIds,
   };
 }
 
 async function persistCatalogueRankState(state: CatalogueRankState): Promise<void> {
-  await setSetting(CATALOGUE_RANK_STATE_KEY, JSON.stringify(state));
+  await setSetting(
+    CATALOGUE_RANK_STATE_KEY,
+    JSON.stringify({
+      corpus: state.corpus,
+      embeddedFindings: state.embeddedFindings,
+      findings: state.findings,
+    }),
+  );
 }
 
-export async function refreshCatalogueRankStateCache(): Promise<CatalogueRankState> {
+export async function refreshCatalogueRankStateCache(): Promise<LiveCatalogueRankState> {
   const state = await readLiveCatalogueRankState();
   await persistCatalogueRankState(state);
   return state;
@@ -511,7 +521,9 @@ export const QUALIFIED_ARTISTS_SQL = `select artist_id from (${FINDING_QUALIFIED
       union
       select artist_id from (${WEIGHTED_QUALIFIED_ARTISTS_SQL})`;
 
-async function readArchiveAffinity(): Promise<ArchiveAffinity> {
+async function readArchiveAffinity(
+  knownQualifiedArtistIds?: readonly string[],
+): Promise<ArchiveAffinity> {
   const db = await getDb();
   const [artistResult, labelResult, seedResult, qualifiedArtistIds] = await Promise.all([
     db.execute({
@@ -531,7 +543,7 @@ async function readArchiveAffinity(): Promise<ArchiveAffinity> {
       sql: `select slug, seed_state from labels where seed_state in ('enabled', 'disabled')`,
     }),
 
-    readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL),
+    knownQualifiedArtistIds ?? readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL),
   ]);
 
   const findingArtists = new Set<string>();
@@ -821,9 +833,10 @@ async function emptyCatalogueRankSummary(options: {
   findings: number;
   limit: number;
   projectionHasMore: boolean;
+  qualifiedArtistIds?: readonly string[];
 }): Promise<RankCatalogueSummary> {
   if (!options.dueWorkCutoverEnabled) {
-    await persistCatalogueCaches();
+    await persistCatalogueCaches(options.qualifiedArtistIds);
   }
 
   let remaining = 0;
@@ -850,7 +863,7 @@ async function emptyCatalogueRankSummary(options: {
 async function readRankStateForCandidates(
   dueWorkCutoverEnabled: boolean,
   candidates: CandidateRow[],
-): Promise<CatalogueRankState> {
+): Promise<CatalogueRankState & { qualifiedArtistIds?: readonly string[] }> {
   if (!dueWorkCutoverEnabled || candidates.length > 0) {
     return refreshCatalogueRankStateCache();
   }
@@ -1025,8 +1038,11 @@ async function nearestFindingWinners(
   return winners;
 }
 
-async function readArchiveAffinityWhenNeeded(needsPreAudio: boolean) {
-  return needsPreAudio ? readArchiveAffinity() : undefined;
+async function readArchiveAffinityWhenNeeded(
+  needsPreAudio: boolean,
+  qualifiedArtistIds: readonly string[] | undefined,
+) {
+  return needsPreAudio ? readArchiveAffinity(qualifiedArtistIds) : undefined;
 }
 
 async function readFindingIsrcsWhenNeeded(needsPreAudio: boolean) {
@@ -1056,7 +1072,7 @@ async function rankCatalogueBatch(
   const selectedAt = new Date().toISOString();
 
   const rankState = await readRankStateForCandidates(dueWorkCutoverEnabled, candidates);
-  const { corpus, embeddedFindings, findings } = rankState;
+  const { corpus, embeddedFindings, findings, qualifiedArtistIds } = rankState;
 
   candidates = await legacyRankCandidates(db, dueWorkCutoverEnabled, candidates, corpus, limit);
 
@@ -1069,6 +1085,7 @@ async function rankCatalogueBatch(
       findings,
       limit,
       projectionHasMore,
+      qualifiedArtistIds,
     });
   }
 
@@ -1090,7 +1107,7 @@ async function rankCatalogueBatch(
   const [artistIdsByTrack, archive, findingIsrcs, findingIdentity, catalogueIdentity] =
     await Promise.all([
       readTrackArtistIds(preAudioTrackIds),
-      readArchiveAffinityWhenNeeded(needsPreAudio),
+      readArchiveAffinityWhenNeeded(needsPreAudio, qualifiedArtistIds),
       readFindingIsrcsWhenNeeded(needsPreAudio),
 
       readFindingIdentity(),
@@ -1373,7 +1390,7 @@ async function rankCatalogueBatch(
 
   await applyCatalogueSummaryBatchDelta(before, await readBatchRowBuckets(movedIds));
 
-  await refreshArchiveAffinityCache(archive);
+  await refreshArchiveAffinityCache(archive, qualifiedArtistIds);
 
   const remaining = await remainingCatalogueRankWork({
     candidateCount: candidates.length,
@@ -1823,8 +1840,11 @@ type CachedAffinity = {
   seedLabels: string[];
 };
 
-async function refreshArchiveAffinityCache(affinity?: ArchiveAffinity): Promise<void> {
-  const resolved = affinity ?? (await readArchiveAffinity());
+async function refreshArchiveAffinityCache(
+  affinity?: ArchiveAffinity,
+  qualifiedArtistIds?: readonly string[],
+): Promise<void> {
+  const resolved = affinity ?? (await readArchiveAffinity(qualifiedArtistIds));
   const cached: CachedAffinity = {
     disabledLabels: [...resolved.disabledLabels],
     findingArtists: [...resolved.findingArtists],
@@ -1885,8 +1905,11 @@ async function readCaptureLensAffinity(): Promise<ArchiveAffinity> {
   return readArchiveAffinity();
 }
 
-async function persistCatalogueCaches(): Promise<void> {
-  await Promise.all([refreshCatalogueSummary(), refreshArchiveAffinityCache()]);
+async function persistCatalogueCaches(qualifiedArtistIds?: readonly string[]): Promise<void> {
+  await Promise.all([
+    refreshCatalogueSummary(),
+    refreshArchiveAffinityCache(undefined, qualifiedArtistIds),
+  ]);
 }
 
 type CatalogueRow = {
