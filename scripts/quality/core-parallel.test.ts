@@ -10,8 +10,7 @@ const quality = parse(
   readFileSync(join(import.meta.dir, "../../.github/workflows/quality-checks.yml"), "utf8"),
 );
 
-function laneExecutions(leg: string) {
-  const steps: Step[] = quality.jobs.core_lanes?.steps ?? [];
+function enabled(step: Step, leg: string) {
   const outputs = Object.fromEntries(
     [
       "turbo",
@@ -24,18 +23,26 @@ function laneExecutions(leg: string) {
       "workflows",
     ].map((key) => [key, "true"]),
   );
+  return (
+    !step.if ||
+    runInNewContext(step.if.replace(/\.([\w]+-[\w-]+)/g, '["$1"]'), {
+      always: () => true,
+      github: { event_name: "push", ref: "refs/heads/main" },
+      matrix: { leg },
+      steps: {
+        cargo_cache: { outputs: { "cache-hit": "false" } },
+        classify: { outputs },
+        turbo_cache: { outputs: { "cache-hit": "false" } },
+      },
+      success: () => true,
+    })
+  );
+}
+
+function laneExecutions(leg: string) {
+  const steps: Step[] = quality.jobs.core_lanes?.steps ?? [];
   return steps
-    .filter(
-      (step) =>
-        step.run?.includes("--lane ") &&
-        (!step.if ||
-          runInNewContext(step.if, {
-            always: () => true,
-            matrix: { leg },
-            steps: { classify: { outputs } },
-            success: () => true,
-          })),
-    )
+    .filter((step) => step.run?.includes("--lane ") && enabled(step, leg))
     .map((step) => /--lane ([\w-]+)/.exec(step.run ?? "")?.[1])
     .sort((a, b) => (a ?? "").localeCompare(b ?? ""));
 }
@@ -50,6 +57,22 @@ describe("parallel core evidence", () => {
     expect(laneExecutions("packages")).toEqual(["packages", "static", "workflows"]);
     expect(laneExecutions("scripts")).toEqual(["label-triage-python", "scripts"]);
     expect(laneExecutions("native")).toEqual(["go-dns", "go-ssh", "sonar"]);
+  });
+
+  test.each([
+    ["Migrations are append-only", "packages"],
+    ["Restore bounded Turbo snapshot", "packages"],
+    ["Save bounded Turbo snapshot from main", "packages"],
+    ["Restore bounded Cargo snapshot", "native"],
+    ["Save bounded Cargo snapshot from main", "native"],
+  ])("%s has one owner on a full main validation", (name, owner) => {
+    const step: Step | undefined = quality.jobs.core_lanes?.steps.find(
+      (step: Step) => step.name === name,
+    );
+    expect(step).toBeDefined();
+    expect(["packages", "scripts", "native"].filter((leg) => step && enabled(step, leg))).toEqual([
+      owner,
+    ]);
   });
 
   test.each(["success", "failure", "cancelled", "skipped", ""])(
