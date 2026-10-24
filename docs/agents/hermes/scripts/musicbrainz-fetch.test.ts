@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { type Socket, createServer } from "node:net";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -315,6 +316,44 @@ describe("the issued fetch plan", () => {
 });
 
 describe("ipv6FirstFetch", () => {
+  it("falls back to the default fetch when IPv6 stalls, inside the caller's timeout", async () => {
+    const realFetch = globalThis.fetch;
+    const previous = process.env.HTTPS_PROXY;
+    delete process.env.HTTPS_PROXY;
+    const sockets: Socket[] = [];
+    const stalled = createServer((socket) => {
+      sockets.push(socket);
+    });
+    await new Promise<void>((resolvePromise) => stalled.listen(0, "::1", resolvePromise));
+    const address = stalled.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    let fellBack = false;
+    globalThis.fetch = (async () => {
+      fellBack = true;
+      return new Response("{}");
+    }) as unknown as typeof fetch;
+    try {
+      const startedAt = Date.now();
+      const response = await ipv6FirstFetch(
+        `https://[::1]:${port}/ws/2/label/x`,
+        { signal: AbortSignal.timeout(5_000) },
+        200,
+      );
+      expect(response.status).toBe(200);
+      expect(fellBack).toBe(true);
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+    } finally {
+      globalThis.fetch = realFetch;
+      if (previous !== undefined) {
+        process.env.HTTPS_PROXY = previous;
+      }
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      stalled.close();
+    }
+  });
+
   it("leaves a configured proxy in charge of the connection", async () => {
     const realFetch = globalThis.fetch;
     const previous = process.env.HTTPS_PROXY;
@@ -323,7 +362,7 @@ describe("ipv6FirstFetch", () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       seen.push(input instanceof Request ? input.url : input.toString());
       return new Response("{}");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     try {
       const response = await ipv6FirstFetch("https://musicbrainz.org/ws/2/label/x?fmt=json");
       expect(response.status).toBe(200);

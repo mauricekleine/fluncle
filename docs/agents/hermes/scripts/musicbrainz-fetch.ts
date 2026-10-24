@@ -22,6 +22,8 @@ const MB_REQUEST_TIMEOUT_MS = 15_000;
 
 const MB_ATTEMPTS = 3;
 
+const IPV6_RESPONSE_DEADLINE_MS = 5_000;
+
 export const MB_MAX_BODY_BYTES = 2 * 1024 * 1024;
 
 const LOCK_STALE_MS = 15_000;
@@ -146,7 +148,11 @@ export type MusicbrainzFetchOptions = {
   stateDir?: string;
 };
 
-function requestOverIpv6(url: string, init: RequestInit = {}): Promise<Response> {
+function requestOverIpv6(
+  url: string,
+  init: RequestInit,
+  responseDeadlineMs: number,
+): Promise<Response> {
   return new Promise((resolve, reject) => {
     const outgoing = request(
       url,
@@ -157,6 +163,7 @@ function requestOverIpv6(url: string, init: RequestInit = {}): Promise<Response>
         signal: init.signal ?? undefined,
       },
       (incoming) => {
+        clearTimeout(deadline);
         const headers = new Headers();
         for (const [name, value] of Object.entries(incoming.headers)) {
           for (const item of Array.isArray(value) ? value : value === undefined ? [] : [value]) {
@@ -171,7 +178,13 @@ function requestOverIpv6(url: string, init: RequestInit = {}): Promise<Response>
         resolve(new Response(body, { headers, status }));
       },
     );
-    outgoing.on("error", reject);
+    const deadline = setTimeout(() => {
+      outgoing.destroy(new Error("no IPv6 response before the deadline"));
+    }, responseDeadlineMs);
+    outgoing.on("error", (error) => {
+      clearTimeout(deadline);
+      reject(error);
+    });
     outgoing.end();
   });
 }
@@ -179,12 +192,17 @@ function requestOverIpv6(url: string, init: RequestInit = {}): Promise<Response>
 export async function ipv6FirstFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
+  ipv6ResponseDeadlineMs = IPV6_RESPONSE_DEADLINE_MS,
 ): Promise<Response> {
   if (process.env.HTTPS_PROXY || process.env.https_proxy) {
     return globalThis.fetch(input, init);
   }
   try {
-    return await requestOverIpv6(input instanceof Request ? input.url : input.toString(), init);
+    return await requestOverIpv6(
+      input instanceof Request ? input.url : input.toString(),
+      init ?? {},
+      ipv6ResponseDeadlineMs,
+    );
   } catch (error) {
     if (init?.signal?.aborted) {
       throw error;
