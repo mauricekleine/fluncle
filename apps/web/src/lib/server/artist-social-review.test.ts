@@ -12,8 +12,12 @@ vi.mock("./db", async (importOriginal) => {
 
 const {
   addArtistSocial,
+  ArtistSocialNotFoundError,
+  confirmArtistSocial,
   InvalidArtistSocialError,
   listArtistReviewRows,
+  listArtistSocialsQueue,
+  removeArtistSocial,
   reviewArtist,
   reviewArtistSocial,
   updateArtistSocial,
@@ -191,5 +195,64 @@ describe("per-link review writes + the fresh-links queue", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.pending).toBe(2);
     expect(rows[0]?.anchorAt).toBe("2026-07-02T00:00:00.000Z");
+  });
+
+  it("confirmArtistSocial promotes a candidate and leaves any other status alone", async () => {
+    await seedSocial(db, { id: "s-candidate", platform: "tiktok", status: "candidate" });
+    await seedSocial(db, { id: "s-auto", platform: "youtube", status: "auto" });
+
+    expect((await confirmArtistSocial("s-candidate")).status).toBe("confirmed");
+    expect((await confirmArtistSocial("s-auto")).status).toBe("auto");
+  });
+
+  it("confirmArtistSocial refuses a missing link and a stored non-http URL", async () => {
+    await db.execute({
+      args: ["s-bad", "a1", "instagram", "javascript:alert(1)"],
+      sql: `insert into artist_socials (id, artist_id, platform, url, source, status)
+            values (?, ?, ?, ?, 'firecrawl', 'candidate')`,
+    });
+
+    await expect(confirmArtistSocial("missing")).rejects.toBeInstanceOf(ArtistSocialNotFoundError);
+    await expect(confirmArtistSocial("s-bad")).rejects.toBeInstanceOf(InvalidArtistSocialError);
+    expect((await readSocial(db, "s-bad"))?.status).toBe("candidate");
+  });
+
+  it("removeArtistSocial deletes only the named link", async () => {
+    await seedSocial(db, { id: "s-gone", platform: "tiktok" });
+    await seedSocial(db, { id: "s-kept", platform: "youtube" });
+
+    await removeArtistSocial("s-gone");
+
+    expect(await readSocial(db, "s-gone")).toBeUndefined();
+    expect(await readSocial(db, "s-kept")).toBeDefined();
+  });
+
+  it("listArtistSocialsQueue picks artists by candidate, or by unreviewed link when fresh", async () => {
+    await db.execute({
+      args: ["a2", "Artist Two", "artist-two"],
+      sql: `insert into artists (id, name, slug) values (?, ?, ?)`,
+    });
+    await seedSocial(db, { id: "s-candidate", platform: "tiktok", status: "candidate" });
+    await seedSocial(db, {
+      id: "s-confirmed",
+      platform: "youtube",
+      reviewedAt: "2026-07-01T12:00:00.000Z",
+      status: "confirmed",
+    });
+    await db.execute({
+      args: ["s-fresh", "a2", "instagram", "https://example.com/instagram"],
+      sql: `insert into artist_socials (id, artist_id, platform, url, source, status)
+            values (?, ?, ?, ?, 'musicbrainz', 'auto')`,
+    });
+
+    const candidates = await listArtistSocialsQueue();
+    expect(candidates.map((artist) => artist.id)).toEqual(["a1"]);
+    expect(candidates[0]?.socials.map((social) => social.id)).toEqual([
+      "s-candidate",
+      "s-confirmed",
+    ]);
+
+    const fresh = await listArtistSocialsQueue(100, true);
+    expect(fresh.map((artist) => artist.id)).toEqual(["a1", "a2"]);
   });
 });
