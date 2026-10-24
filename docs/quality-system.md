@@ -59,7 +59,7 @@ The web suite uses Vitest 5 with the matching V8 coverage provider. `bun run --c
 
 ## CI topology and measurement
 
-Quality Checks runs `core` beside four hosted `e2e` shards. `core` owns static policy, migrations, affected TypeScript packages, scripts, label-triage Python, Go, Rust, and workflow topology. Each E2E shard either reports an intentional classifier skip or runs `--shard=N/4` of the complete public-flow contract with its own sqld, synthetic fixtures, and one Playwright worker. File-level sharding preserves within-file ordering and the existing zero-retry policy. `fail-fast: false` keeps evidence from the remaining shards after a failure. Journey artifacts and failure diagnostics carry the shard number; PR runs retain journeys so a reused main run can refer to its source run. Only shard 1 writes the main Playwright cache.
+Quality Checks runs three hosted `core_lanes` legs beside four hosted `e2e` shards. The packages leg owns static policy, append-only migrations, affected TypeScript build/typecheck/tests, and workflow topology. The scripts leg owns standalone scripts and label-triage Python. The native leg owns Go and Rust and needs no Bun install. The classifier plan and leaf commands are shared with serial local validation; selected evidence runs exactly once. `fail-fast: false` preserves the remaining legs after a failure. The small `core` job retains the existing `Selected quality lanes` context and accepts only a successful matrix result, including every leg. It starts after all core legs finish, while the early `Lint, Format, and Typecheck` gate continues to block merges during validation. No extra polling job or ruleset change is needed. Each E2E shard either reports an intentional classifier skip or runs `--shard=N/4` of the complete public-flow contract with its own sqld, synthetic fixtures, and one Playwright worker. File-level sharding preserves within-file ordering and the existing zero-retry policy. `fail-fast: false` keeps evidence from the remaining shards after a failure. Journey artifacts and failure diagnostics carry the shard number; PR runs retain journeys so a reused main run can refer to its source run. Only shard 1 writes the main Playwright cache.
 
 Each quality or security workflow starts with a small `PR readiness` job that reads the live PR state and logs payload and live draft values. Live drafts skip heavy jobs; ready PRs run them even when their event payload still says draft. `Lint, Format, and Typecheck` starts immediately after readiness and polls core plus all four shard owners in the exact workflow run attempt. It fails on any failed, cancelled, or skipped owner, and cannot pass with a missing or duplicate owner. Starting it before lane completion replaces an earlier same-head draft skip while validation is running and preserves the stable protected context without a ruleset change.
 
@@ -79,7 +79,7 @@ The `@fluncle/cli#build` task caches only `dist/cli.js`, the Bun bundle its `bui
 
 The Bun package cache is intentionally absent from every quality and live-evidence workflow. In the 27-step hosted sample produced by the live history report, restore p50/p90 was 53/64 seconds while frozen-install p50/p90 was 5/7 seconds, so it increased latency before any validation began.
 
-Turbo and Cargo use explicit restore/save actions. Pull-request merge refs restore only and never write. `setup-go`'s implicit cache is disabled so it cannot create a second, PR-writable cache owner; the selected Go checks run directly without a retained cache. Trusted `main` writes immutable snapshots keyed by dependency hash and UTC week, with prefix restore from the newest prior epoch. After both quality jobs succeed on a main push, a separate cache-maintenance job retains only the newest main snapshot in each of the `cargo-quality-v2-`, `turbo-v2-`, and `playwright-` families. It confirms the current key exists before deleting older entries, so an unsuccessful save preserves the prior snapshot. Only that maintenance job receives Actions write permission; PR jobs restore without deleting. The separate `cargo-musl-v2-` release cache and other cache owners are outside this cleanup.
+Turbo and Cargo use explicit restore/save actions. Pull-request merge refs restore only and never write. `setup-go`'s implicit cache is disabled so it cannot create a second, PR-writable cache owner; the selected Go checks run directly without a retained cache. Trusted `main` writes immutable snapshots keyed by dependency hash and UTC week, with prefix restore from the newest prior epoch. After the core and public-flow matrices succeed on a main push, a separate cache-maintenance job retains only the newest main snapshot in each of the `cargo-quality-v2-`, `turbo-v2-`, and `playwright-` families. It confirms the current key exists before deleting older entries, so an unsuccessful save preserves the prior snapshot. Only that maintenance job receives Actions write permission; PR jobs restore without deleting. The separate `cargo-musl-v2-` release cache and other cache owners are outside this cleanup.
 
 The live 2026-09-01 inventory contained 121 cache archives / 134,061,413,479 bytes, of which 113 / 128,525,098,920 bytes were Turbo archives. A fresh local CLI typecheck/test/build sample took 11.215 seconds cold and 0.366 seconds warm while producing a 225,547-byte Turbo snapshot. This confirms substantial reuse for the sampled lane, but the hosted restore/save metrics emitted by the new workflow remain the authority for whether the larger weekly snapshots have positive net benefit. Remove or narrow a snapshot class if its measured restore plus save cost exceeds the work avoided.
 
@@ -93,7 +93,7 @@ Release jobs do not call Quality again. The CLI release still compiles and ident
 
 ## Go ownership
 
-The selected core lane is the sole Quality owner for both Go applications. For each affected app, it executes `gofmt`, `go vet`, `go build`, and `go test` exactly once through direct Go commands. Turbo no longer runs Go build/test and Quality no longer repeats them explicitly. Cloudflare's deploy gate retains its independent production-deploy boundary; it is not part of the GitHub Actions duplication count.
+The selected native core leg is the sole Quality owner for both Go applications. For each affected app, it executes `gofmt`, `go vet`, `go build`, and `go test` exactly once through direct Go commands. Turbo no longer runs Go build/test and Quality no longer repeats them explicitly. Cloudflare's deploy gate retains its independent production-deploy boundary; it is not part of the GitHub Actions duplication count.
 
 ## Deploy completion and fallback
 
@@ -123,7 +123,7 @@ Add a surface by updating the classifier and its table-driven tests first. Decla
 
 ## Hosted sharding timing sample
 
-The 24 October 2026 pre-change sample is the latest 20 successful PR Quality runs whose deterministic public-web step executed, excluding draft and non-web skips. E2E durations below are the `QUALITY_METRIC` values that `measure.mjs` also writes to the step summary. Time to green is run creation to completion of `Lint, Format, and Typecheck`, including queue and setup. The E2E median is 1,039.1 seconds; protected time to green is 1,148 seconds (19.1 minutes). This confirms the serial baseline on main `406311bd0` rather than assuming the older 1,027-second measurement still applies. Main push [40057768362](https://github.com/mauricekleine/fluncle/actions/runs/40057768362) also reran both affected-package checks and the full E2E contract after its PR proof. The same sample has a core-job wall-time median of 857 seconds (14.3 minutes), including setup, so core has also outgrown the original 8.9-minute estimate. E2E sharding alone cannot guarantee 10-minute protected results on this workload; core parallelism needs a separate decision after the first sharded run.
+The 24 October 2026 pre-change sample is the latest 20 successful PR Quality runs whose deterministic public-web step executed, excluding draft and non-web skips. E2E durations below are the `QUALITY_METRIC` values that `measure.mjs` also writes to the step summary. Time to green is run creation to completion of `Lint, Format, and Typecheck`, including queue and setup. The E2E median is 1,039.1 seconds; protected time to green is 1,148 seconds (19.1 minutes). This confirms the serial baseline on main `406311bd0` rather than assuming the older 1,027-second measurement still applies. Main push [40057768362](https://github.com/mauricekleine/fluncle/actions/runs/40057768362) also reran both affected-package checks and the full E2E contract after its PR proof. The same sample has a core-job wall-time median of 857 seconds (14.3 minutes), including setup, so core has also outgrown the original 8.9-minute estimate. E2E sharding alone cannot guarantee 10-minute protected results on this workload; the three core legs below remove the serial dependency, and the 20-run hosted sample must still confirm the target.
 
 | PR run                                                                           | E2E seconds | Time to green seconds |
 | -------------------------------------------------------------------------------- | ----------: | --------------------: |
@@ -151,3 +151,56 @@ The 24 October 2026 pre-change sample is the latest 20 successful PR Quality run
 Local execution verified all 126 tests through the four real lane commands, sequentially in one worktree: 33 tests in 223.5 seconds, 39 in 330.6, 23 in 101.7, and 31 in 157.3. Those include each isolated stack's setup and teardown and are correctness smoke timings, not a hosted before/after comparison.
 
 The post-change hosted sample starts with this implementation's ready PR run. At publication there are no completed post-change runs; the four-shard median and the 10-minute target remain unproven. Next check: 27 October 2026, collect the first 20 successful PR pushes selecting E2E, compare the maximum shard metric and protected time to green per run against this sample, and record queue/setup separately if the median misses 10 minutes. Also inspect the first eligible ordinary merge's main summary for `matching-pr-tree-and-base`, skipped core/E2E jobs, and a successful exact-SHA main run. This CI-control change deliberately takes fresh main validation, so its own merge cannot demonstrate reuse. After merge run `node scripts/quality/deploy-verify.mjs <full-merge-sha>`.
+
+## Core critical path and projection
+
+The refreshed 24 October sample adds successful selected-E2E runs 40071743756 and 40071234417 and retains the latest 20. Core wall-time p50 is 870.5 seconds, compared with 857 seconds in the earlier sample above. Leaf durations below come from the `QUALITY_METRIC` records also written to step summaries. Cache/setup durations come from Actions step timestamps. Counts include only runs where that step executed; these conditional medians do not sum to the job median.
+
+| Core work                          | Samples | p50 seconds |
+| ---------------------------------- | ------: | ----------: |
+| TypeScript build, typecheck, tests |      20 |       407.6 |
+| Standalone script tests            |      15 |       269.7 |
+| Cargo cache restore                |      14 |       142.5 |
+| Rust Sonar checks                  |      14 |       132.9 |
+| Dependency install                 |      20 |        21.5 |
+| Go SSH checks                      |      14 |        20.9 |
+| Go toolchain setup                 |      14 |         7.5 |
+| Rust toolchain setup               |      14 |         7.5 |
+| Checkout                           |      20 |         6.0 |
+| Static policy                      |      20 |         6.0 |
+| Go DNS checks                      |      14 |         3.0 |
+| Label-triage Python tests          |      14 |         2.6 |
+| Turbo cache restore                |      20 |         2.0 |
+| Workflow topology tests            |      14 |         1.6 |
+| uv setup                           |      14 |         1.0 |
+
+The projection reassigns each run's observed step durations to the three legs, repeats its remaining common overhead for each job, and takes the maximum leg rather than adding medians. It retains each run's observed creation-to-core-start delay and adds a 20-second allowance for the matrix-result job and existing protected-gate poll. It conservatively retains the native leg's old dependency-install overhead even though that leg no longer installs Bun dependencies. A packages/rest split projects protected p50 at 605 seconds, so two legs miss the target in this replay. Packages/scripts/native projects core p50 at 457.5 seconds and protected p50 at 489 seconds (8.15 minutes), leaving about 111 seconds below the target. Independent runner queues, cold caches, changed workload, E2E shard imbalance, and other required checks remain unmeasured by this replay; these are projections, not hosted results after this change.
+
+| Source PR run                                                                    | Serial core seconds | Packages leg | Scripts leg | Native leg | Projected core seconds |
+| -------------------------------------------------------------------------------- | ------------------: | -----------: | ----------: | ---------: | ---------------------: |
+| [40071743756](https://github.com/mauricekleine/fluncle/actions/runs/40071743756) |                1069 |          526 |         307 |        294 |                    526 |
+| [40071234417](https://github.com/mauricekleine/fluncle/actions/runs/40071234417) |                 878 |          340 |         294 |        324 |                    340 |
+| [40069505701](https://github.com/mauricekleine/fluncle/actions/runs/40069505701) |                 851 |          324 |         292 |        319 |                    324 |
+| [40056647561](https://github.com/mauricekleine/fluncle/actions/runs/40056647561) |                 398 |          398 |          39 |         39 |                    398 |
+| [39988886189](https://github.com/mauricekleine/fluncle/actions/runs/39988886189) |                1013 |          406 |         319 |        368 |                    406 |
+| [39987807641](https://github.com/mauricekleine/fluncle/actions/runs/39987807641) |                 502 |          502 |          24 |         24 |                    502 |
+| [39900846662](https://github.com/mauricekleine/fluncle/actions/runs/39900846662) |                1049 |          514 |         299 |        286 |                    514 |
+| [39871183269](https://github.com/mauricekleine/fluncle/actions/runs/39871183269) |                 847 |          311 |         302 |        312 |                    312 |
+| [39791249913](https://github.com/mauricekleine/fluncle/actions/runs/39791249913) |                1234 |          572 |         341 |        397 |                    572 |
+| [39782743891](https://github.com/mauricekleine/fluncle/actions/runs/39782743891) |                1144 |          556 |         310 |        336 |                    556 |
+| [39777684818](https://github.com/mauricekleine/fluncle/actions/runs/39777684818) |                 535 |          535 |          35 |         35 |                    535 |
+| [39774247970](https://github.com/mauricekleine/fluncle/actions/runs/39774247970) |                1173 |          552 |         319 |        380 |                    552 |
+| [39739816336](https://github.com/mauricekleine/fluncle/actions/runs/39739816336) |                 863 |          327 |         290 |        324 |                    327 |
+| [39693041831](https://github.com/mauricekleine/fluncle/actions/runs/39693041831) |                 742 |          482 |         296 |         36 |                    482 |
+| [39595202170](https://github.com/mauricekleine/fluncle/actions/runs/39595202170) |                1154 |          531 |         317 |        390 |                    531 |
+| [39571410501](https://github.com/mauricekleine/fluncle/actions/runs/39571410501) |                 843 |          304 |         294 |        323 |                    323 |
+| [39569912437](https://github.com/mauricekleine/fluncle/actions/runs/39569912437) |                 306 |          306 |          45 |         45 |                    306 |
+| [39561566128](https://github.com/mauricekleine/fluncle/actions/runs/39561566128) |                1071 |          532 |         309 |        294 |                    532 |
+| [39553890895](https://github.com/mauricekleine/fluncle/actions/runs/39553890895) |                 994 |          433 |         302 |        347 |                    433 |
+| [39513694808](https://github.com/mauricekleine/fluncle/actions/runs/39513694808) |                 407 |          407 |          45 |         45 |                    407 |
+
+Each leg restores and saves only its existing cache family: packages owns Turbo, native owns Cargo, and E2E shard 1 owns Playwright. The matrix exposes distinct nonempty cache-key outputs from those owners to the existing main-only cleanup job, which waits for both matrices and retains its current failure behavior. Cache keys, pins, retention, test thresholds, coverage, retries, and public-flow assertions are unchanged.
+
+The account was rechecked as GitHub Pro on 24 October; its [standard hosted concurrency limit is 40](https://docs.github.com/en/actions/reference/limits#job-concurrency-limits-for-github-hosted-runners). A full PR reaches at most eight concurrent Quality jobs (three core legs, four E2E shards, one early gate), plus the two independent security jobs, for ten hosted jobs. The small core-result job waits for all three core legs and does not increase that peak. All jobs remain on Ubuntu hosted runners.
+
+CI-3 remains in review until the 27 October check collects 20 post-change selected-E2E PR pushes and proves protected p50 at or below 600 seconds. Record actual maximum core-leg and E2E-shard durations, queue/setup time, and gate completion; recalibrate the historical timing model from that sample. Also verify matching PR tree/base reuse on the first eligible ordinary main merge and run `node scripts/quality/deploy-verify.mjs <full-merge-sha>` after the implementation merges.
