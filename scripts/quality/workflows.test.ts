@@ -74,8 +74,10 @@ describe("quality topology", () => {
       expect(at(workflow(file), "on", "pull_request", "types")).toEqual(draftEvents);
     }
 
-    expect(at(quality, "jobs", "core", "if")).toBe(draftGuard);
-    expect(at(quality, "jobs", "e2e", "if")).toBe(draftGuard);
+    expect(at(quality, "jobs", "core", "if")).toBe(
+      "${{ !cancelled() && needs.pr_state.outputs.run != 'false' && needs.pr_state.outputs.reused != 'true' }}",
+    );
+    expect(at(quality, "jobs", "e2e", "if")).toBe(at(quality, "jobs", "core", "if"));
     expect(at(quality, "jobs", "gate", "if")).toBe(draftGuard);
     expect(at(workflow("gitleaks.yml"), "jobs", "scan", "if")).toBe(draftGuard);
     expect(at(workflow("dependency-audit.yml"), "jobs", "audit", "if")).toBe(draftGuard);
@@ -145,54 +147,61 @@ describe("quality topology", () => {
     );
   });
 
-  test("the early protected result refuses a failed, skipped, or incomplete owner set", () => {
+  const successfulOwner = { conclusion: "success", status: "completed" };
+  test.each([
+    [successfulOwner, successfulOwner, 0],
+    [{ conclusion: "failure", status: "completed" }, successfulOwner, 1],
+    [successfulOwner, { conclusion: "skipped", status: "completed" }, 1],
+    [successfulOwner, { conclusion: null, status: "in_progress" }, 1],
+    [successfulOwner, { conclusion: "failure", status: "completed" }, 1],
+  ])("the early protected result enforces every owner (case %#)", (core, e2e, expected) => {
     const steps = at(quality, "jobs", "gate", "steps") as Array<Record<string, unknown>>;
-    const script = steps[0]?.run as string;
+    const script = steps.find((step) => step.name === "Hold the stable protected result")
+      ?.run as string;
     const directory = mkdtempSync(join(tmpdir(), "quality-owners-"));
     try {
       writeFileSync(join(directory, "gh"), '#!/bin/sh\nprintf "%s\\n" "$OWNER_JOBS"\n', {
         mode: 0o755,
       });
-      writeFileSync(join(directory, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-      const success = { conclusion: "success", status: "completed" };
-      for (const [core, e2e, expected] of [
-        [success, success, 0],
-        [{ conclusion: "failure", status: "completed" }, success, 1],
-        [success, { conclusion: "skipped", status: "completed" }, 1],
-        [success, { conclusion: null, status: "in_progress" }, 1],
-      ] as const) {
-        const result = spawnSync("bash", ["-c", script], {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            GH_REPO: "owner/repo",
-            OWNER_JOBS: JSON.stringify([
-              {
-                jobs: [
-                  { ...core, name: "Selected quality lanes" },
-                  { ...e2e, name: "Public flows when selected" },
-                ],
-              },
-            ]),
-            PATH: `${directory}:${process.env.PATH ?? ""}`,
-            RUN_ATTEMPT: "2",
-            RUN_ID: "42",
-          },
-        });
-        expect(result.status, result.stderr).toBe(expected);
-      }
+      writeFileSync(join(directory, "sleep"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      const result = spawnSync("bash", ["-c", script], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GH_REPO: "owner/repo",
+          OWNER_JOBS: JSON.stringify([
+            {
+              jobs: [
+                { ...core, name: "Selected quality lanes" },
+                ...[1, 2, 3, 4].map((shard) => ({
+                  ...(shard === 4 ? e2e : successfulOwner),
+                  name: `Public flows when selected (${shard}/4)`,
+                })),
+              ],
+            },
+          ]),
+          PATH: `${directory}:${process.env.PATH ?? ""}`,
+          RUN_ATTEMPT: "2",
+          RUN_ID: "42",
+        },
+      });
+      expect(result.status, result.stderr).toBe(expected);
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }
   });
 
-  test("public E2E is classifier-selected but remains the complete suite", () => {
+  test("public E2E shards the complete suite on independent hosted runners", () => {
+    expect(at(quality, "jobs", "e2e", "strategy", "matrix", "shard")).toEqual([1, 2, 3, 4]);
+    expect(at(quality, "jobs", "e2e", "strategy", "fail-fast")).toBe(false);
+    expect(at(quality, "jobs", "e2e", "runs-on")).toBe("ubuntu-latest");
+    expect(qualitySource).toContain("--shard ${{ matrix.shard }}/4");
     expect(at(quality, "jobs", "e2e")).toBeDefined();
     expect(qualitySource).toContain("steps.classify.outputs.e2e == 'true'");
     expect(qualitySource).toContain("--lane e2e");
     expect(qualitySource).not.toContain("--only-changed");
     expect(workflowFiles()).not.toContain("e2e.yml");
-    expect(qualitySource).toContain("name: discovery-events");
+    expect(qualitySource).toContain("name: discovery-events-${{ matrix.shard }}");
     expect(qualitySource).toContain("path: apps/web/.dev/discovery-events/");
   });
 
@@ -214,9 +223,9 @@ describe("quality topology", () => {
       contents: "read",
     });
     expect(at(quality, "jobs", "cache_cleanup", "if")).toBe(
-      "github.event_name == 'push' && github.ref == 'refs/heads/main'",
+      "github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.pr_state.outputs.reused != 'true'",
     );
-    expect(at(quality, "jobs", "cache_cleanup", "needs")).toEqual(["core", "e2e"]);
+    expect(at(quality, "jobs", "cache_cleanup", "needs")).toEqual(["pr_state", "core", "e2e"]);
     expect(at(quality, "jobs", "cache_cleanup", "continue-on-error")).toBe(true);
     expect(at(quality, "jobs", "core", "outputs")).toEqual({
       cargo_cache_key: "${{ steps.cargo_cache.outputs.cache-primary-key }}",

@@ -59,7 +59,11 @@ The web suite uses Vitest 5 with the matching V8 coverage provider. `bun run --c
 
 ## CI topology and measurement
 
-Quality Checks has two parallel evidence jobs and one small aggregator. `core` owns static policy, migrations, affected TypeScript packages, scripts, label-triage Python, Go, Rust, and workflow topology. `e2e` either reports a cheap intentional skip or runs the complete isolated Turso-compatible public-flow contract. Each quality or security workflow starts with a small `PR readiness` job that reads the live PR state and logs payload and live draft values. Live drafts skip heavy jobs; ready PRs run them even when their event payload still says draft. On ready pull requests and every non-pull-request event, `Lint, Format, and Typecheck` starts immediately after live readiness, then polls the two owners in the exact workflow run attempt and passes only when both succeeded. It does not depend on their completion to allocate its check-run, so an earlier same-head draft skip is replaced while validation is running, so branch protection keeps a stable context even for non-web changes.
+Quality Checks runs `core` beside four hosted `e2e` shards. `core` owns static policy, migrations, affected TypeScript packages, scripts, label-triage Python, Go, Rust, and workflow topology. Each E2E shard either reports an intentional classifier skip or runs `--shard=N/4` of the complete public-flow contract with its own sqld, synthetic fixtures, and one Playwright worker. File-level sharding preserves within-file ordering and the existing zero-retry policy. `fail-fast: false` keeps evidence from the remaining shards after a failure. Journey artifacts and failure diagnostics carry the shard number; PR runs retain journeys so a reused main run can refer to its source run. Only shard 1 writes the main Playwright cache.
+
+Each quality or security workflow starts with a small `PR readiness` job that reads the live PR state and logs payload and live draft values. Live drafts skip heavy jobs; ready PRs run them even when their event payload still says draft. `Lint, Format, and Typecheck` starts immediately after readiness and polls core plus all four shard owners in the exact workflow run attempt. It fails on any failed, cancelled, or skipped owner, and cannot pass with a missing or duplicate owner. Starting it before lane completion replaces an earlier same-head draft skip while validation is running and preserves the stable protected context without a ruleset change.
+
+On a single-commit main push, readiness first resolves `quality-source-proof` from the merged same-repository PR. Reuse requires a successful first-attempt Quality run completed before merge and at most six hours old, successful core and all four shards plus their gate, and an artifact bound to that run, PR head, repository, and synthetic merge commit. GitHub's commit data must confirm the synthetic merge parents and its exact tree. The validated base must equal both the pushed commit's first parent and the push's previous main SHA. A moved base refuses reuse even if the final tree is unchanged. Validation-control changes, fork PRs, missing or ambiguous evidence, reruns, expired artifacts, and API errors fall back to fresh validation. Scheduled and manual runs always validate afresh. Reuse skips core, E2E, and cache maintenance, records its source run and tree in the readiness summary, and lets the stable gate finish immediately. Separate security workflows still run.
 
 Every selected lane writes its duration to a JSONL record and the Actions step summary through `measure.mjs` and `report-run.mjs`. The record includes the closure, first actionable failure, billed-minute projection, cache hit/bytes when available, and placeholders for confirmed real/flaky classification and full-backstop escapes. Post-deploy reporting separately records wait time and surface-sweep time. A future failure-triage automation may enrich the placeholders without changing lane authority.
 
@@ -83,7 +87,7 @@ The Playwright browser cache is dependency-keyed, restores on selected web jobs,
 
 ## Release validation reuse
 
-`cli-release.yml` starts after a successful push-triggered Quality Checks completion and checks out `workflow_run.head_sha`, not the default-branch `GITHUB_SHA`. The selector compares that exact validated SHA with the relevant latest release tag. Manual dispatch accepts only a full SHA that is an ancestor of pushed `origin/main` and already has a successful push-triggered Quality run for the exact SHA.
+`cli-release.yml` starts after a successful push-triggered Quality Checks completion and checks out `workflow_run.head_sha`, not the default-branch `GITHUB_SHA`. The selector compares that exact validated SHA with the relevant latest release tag. Manual dispatch accepts only a full SHA that is an ancestor of pushed `origin/main` and already has a successful push-triggered Quality run for the exact SHA. That main run may have executed its lanes or reused a matching PR tree proof; releases consume the same successful main completion in either case.
 
 Release jobs do not call Quality again. The CLI release still compiles and identifies four macOS/Linux arm64/x64 artifacts before publishing. The Sonar release still builds the locked `x86_64-unknown-linux-musl` target, proves the staged binary is static, and publishes its checksum and exact commit marker. Those are release-artifact proofs, not duplicated generic validation.
 
@@ -111,8 +115,39 @@ A budget generous enough to survive a legitimate vector scan would also swallow 
 
 ## Evidence retention
 
-Successful named journey evidence (`front-door-scroll`, `track-journey`, `search-surface`, and `discovery-events`) is uploaded only for selected `main` web runs and retained for 30 days. Failed selected runs upload the full Playwright report, traces/test results, and synthetic-stack log for seven days. Successful PR reports and the old second 31–90-day evidence copy are no longer retained: they duplicated shipped evidence or had no named failure to diagnose. No test or public-flow assertion was removed.
+Named journey evidence (`front-door-scroll-N`, `track-journey-N`, `search-surface-N`, and `discovery-events-N`, where N is the shard) is retained for 30 days on selected PR and main runs. Each shard uploads only the journeys it executed. Reused main validation points to its PR source run rather than generating duplicate journeys. Failed selected runs upload `playwright-report-N`, including traces/test results and the synthetic-stack log, for seven days. The compact `quality-source-proof` artifact is retained for seven days, with reuse bounded to six hours. Successful full Playwright reports are not retained.
 
 ## Extending the contract
 
 Add a surface by updating the classifier and its table-driven tests first. Declare its direct lane, dependent closure, deploy-watch behavior, release eligibility, and unknown-path fallback. Add a focused fixture demonstrating selection and a neighboring fixture demonstrating intentional exclusion, then compare the focused lane with a forced-full run. Update workflow topology tests whenever an owner, context, cache, artifact, or trigger changes. A reduction is acceptable only when the lost evidence is named here or covered by an equally strong owner; public-web, migrations, security, and release artifacts fail closed when ownership is ambiguous.
+
+## Hosted sharding timing sample
+
+The 24 October 2026 pre-change sample is the latest 20 successful PR Quality runs whose deterministic public-web step executed, excluding draft and non-web skips. E2E durations below are the `QUALITY_METRIC` values that `measure.mjs` also writes to the step summary. Time to green is run creation to completion of `Lint, Format, and Typecheck`, including queue and setup. The E2E median is 1,039.1 seconds; protected time to green is 1,148 seconds (19.1 minutes). This confirms the serial baseline on main `406311bd0` rather than assuming the older 1,027-second measurement still applies. Main push [40057768362](https://github.com/mauricekleine/fluncle/actions/runs/40057768362) also reran both affected-package checks and the full E2E contract after its PR proof. The same sample has a core-job wall-time median of 857 seconds (14.3 minutes), including setup, so core has also outgrown the original 8.9-minute estimate. E2E sharding alone cannot guarantee 10-minute protected results on this workload; core parallelism needs a separate decision after the first sharded run.
+
+| PR run                                                                           | E2E seconds | Time to green seconds |
+| -------------------------------------------------------------------------------- | ----------: | --------------------: |
+| [40069505701](https://github.com/mauricekleine/fluncle/actions/runs/40069505701) |      1028.7 |                  1099 |
+| [40056647561](https://github.com/mauricekleine/fluncle/actions/runs/40056647561) |       834.2 |                   918 |
+| [39988886189](https://github.com/mauricekleine/fluncle/actions/runs/39988886189) |       618.3 |                  1032 |
+| [39987807641](https://github.com/mauricekleine/fluncle/actions/runs/39987807641) |       928.8 |                  1724 |
+| [39900846662](https://github.com/mauricekleine/fluncle/actions/runs/39900846662) |      1046.3 |                  1114 |
+| [39871183269](https://github.com/mauricekleine/fluncle/actions/runs/39871183269) |       646.5 |                   867 |
+| [39791249913](https://github.com/mauricekleine/fluncle/actions/runs/39791249913) |      1100.5 |                  1746 |
+| [39782743891](https://github.com/mauricekleine/fluncle/actions/runs/39782743891) |       896.9 |                  1845 |
+| [39777684818](https://github.com/mauricekleine/fluncle/actions/runs/39777684818) |      1091.4 |                  1169 |
+| [39774247970](https://github.com/mauricekleine/fluncle/actions/runs/39774247970) |      1057.8 |                  1288 |
+| [39739816336](https://github.com/mauricekleine/fluncle/actions/runs/39739816336) |      1096.4 |                  1166 |
+| [39693041831](https://github.com/mauricekleine/fluncle/actions/runs/39693041831) |      1097.1 |                  1171 |
+| [39595202170](https://github.com/mauricekleine/fluncle/actions/runs/39595202170) |      1045.1 |                  1186 |
+| [39571410501](https://github.com/mauricekleine/fluncle/actions/runs/39571410501) |      1073.1 |                  1141 |
+| [39569912437](https://github.com/mauricekleine/fluncle/actions/runs/39569912437) |       750.4 |                   832 |
+| [39561566128](https://github.com/mauricekleine/fluncle/actions/runs/39561566128) |      1018.9 |                  1114 |
+| [39553890895](https://github.com/mauricekleine/fluncle/actions/runs/39553890895) |      1099.5 |                  1177 |
+| [39513694808](https://github.com/mauricekleine/fluncle/actions/runs/39513694808) |       715.6 |                   784 |
+| [39376773032](https://github.com/mauricekleine/fluncle/actions/runs/39376773032) |      1033.2 |                  1126 |
+| [39339696248](https://github.com/mauricekleine/fluncle/actions/runs/39339696248) |      1084.6 |                  1155 |
+
+Local execution verified all 126 tests through the four real lane commands, sequentially in one worktree: 33 tests in 223.5 seconds, 39 in 330.6, 23 in 101.7, and 31 in 157.3. Those include each isolated stack's setup and teardown and are correctness smoke timings, not a hosted before/after comparison.
+
+The post-change hosted sample starts with this implementation's ready PR run. At publication there are no completed post-change runs; the four-shard median and the 10-minute target remain unproven. Next check: 27 October 2026, collect the first 20 successful PR pushes selecting E2E, compare the maximum shard metric and protected time to green per run against this sample, and record queue/setup separately if the median misses 10 minutes. Also inspect the first eligible ordinary merge's main summary for `matching-pr-tree-and-base`, skipped core/E2E jobs, and a successful exact-SHA main run. This CI-control change deliberately takes fresh main validation, so its own merge cannot demonstrate reuse. After merge run `node scripts/quality/deploy-verify.mjs <full-merge-sha>`.

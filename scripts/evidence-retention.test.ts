@@ -39,7 +39,7 @@ function uploads(file: string): Upload[] {
 
 describe("retained browser evidence", () => {
   test.each([...SHIPPED_EVIDENCE])(
-    "%s is retained for selected shipped-main runs and never empty",
+    "%s retains named shard evidence for both PR proof and fresh main validation",
     (path) => {
       const file = "quality-checks.yml";
       const upload = uploads(file).find((candidate) => candidate.path === path);
@@ -47,10 +47,9 @@ describe("retained browser evidence", () => {
       expect(upload, `${file} uploads ${String(path)}`).toBeDefined();
       expect(upload?.retention).toBe(30);
       expect(upload?.always).toBe(true);
-      expect(upload?.condition).toContain("github.event_name == 'push'");
-      expect(upload?.condition).toContain("github.ref == 'refs/heads/main'");
+      expect(upload?.condition).not.toContain("github.event_name");
       expect(upload?.condition).toContain("steps.classify.outputs.e2e == 'true'");
-      expect(upload?.ifNoFiles).toBe("error");
+      expect(upload?.ifNoFiles).toBe("ignore");
     },
   );
 });

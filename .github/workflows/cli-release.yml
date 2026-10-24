@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   select:
-    name: Reuse exact-SHA validation and select releases
+    name: Reuse exact-SHA main validation and select releases
     if: >-
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.event == 'push' &&
