@@ -78,6 +78,7 @@ describe("quality topology", () => {
       "${{ !cancelled() && needs.pr_state.outputs.run != 'false' && needs.pr_state.outputs.reused != 'true' }}",
     );
     expect(at(quality, "jobs", "e2e", "if")).toBe(at(quality, "jobs", "core", "if"));
+    expect(at(quality, "jobs", "core_lanes", "if")).toBe(at(quality, "jobs", "core", "if"));
     expect(at(quality, "jobs", "gate", "if")).toBe(draftGuard);
     expect(at(workflow("gitleaks.yml"), "jobs", "scan", "if")).toBe(draftGuard);
     expect(at(workflow("dependency-audit.yml"), "jobs", "audit", "if")).toBe(draftGuard);
@@ -212,7 +213,7 @@ describe("quality topology", () => {
     expect(qualitySource).toContain("actions/cache/save@");
     expect(qualitySource).toContain("github.event_name == 'push'");
     expect(qualitySource).toContain("github.ref == 'refs/heads/main'");
-    const coreSteps = at(quality, "jobs", "core", "steps") as Array<Record<string, unknown>>;
+    const coreSteps = at(quality, "jobs", "core_lanes", "steps") as Array<Record<string, unknown>>;
     const setupGo = coreSteps.find((step) => step.name === "Setup Go");
     expect(at(setupGo, "with", "cache")).toBe(false);
     expect(at(quality, "permissions")).toEqual({ contents: "read" });
@@ -225,9 +226,14 @@ describe("quality topology", () => {
     expect(at(quality, "jobs", "cache_cleanup", "if")).toBe(
       "github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.pr_state.outputs.reused != 'true'",
     );
-    expect(at(quality, "jobs", "cache_cleanup", "needs")).toEqual(["pr_state", "core", "e2e"]);
+    expect(at(quality, "jobs", "cache_cleanup", "needs")).toEqual([
+      "pr_state",
+      "core_lanes",
+      "core",
+      "e2e",
+    ]);
     expect(at(quality, "jobs", "cache_cleanup", "continue-on-error")).toBe(true);
-    expect(at(quality, "jobs", "core", "outputs")).toEqual({
+    expect(at(quality, "jobs", "core_lanes", "outputs")).toEqual({
       cargo_cache_key: "${{ steps.cargo_cache.outputs.cache-primary-key }}",
       turbo_cache_key: "${{ steps.turbo_cache.outputs.cache-primary-key }}",
     });
@@ -240,18 +246,19 @@ describe("quality topology", () => {
     expect(
       cleanupSteps.find((step) => step.run === "node scripts/quality/cache-prune.mjs")?.env,
     ).toEqual({
-      CARGO_CACHE_KEY: "${{ needs.core.outputs.cargo_cache_key }}",
+      CARGO_CACHE_KEY: "${{ needs.core_lanes.outputs.cargo_cache_key }}",
       GH_TOKEN: "${{ github.token }}",
       PLAYWRIGHT_CACHE_KEY: "${{ needs.e2e.outputs.playwright_cache_key }}",
-      TURBO_CACHE_KEY: "${{ needs.core.outputs.turbo_cache_key }}",
+      TURBO_CACHE_KEY: "${{ needs.core_lanes.outputs.turbo_cache_key }}",
     });
   });
 
   test("Python setup and evidence use the classifier-selected lane", () => {
-    const coreSteps = at(quality, "jobs", "core", "steps") as Array<Record<string, unknown>>;
+    const coreSteps = at(quality, "jobs", "core_lanes", "steps") as Array<Record<string, unknown>>;
     const setup = coreSteps.find((step) => step.name === "Setup uv for label-triage Python tests");
     const run = coreSteps.find((step) => step.name === "Run label-triage Python tests");
-    const guard = "steps.classify.outputs.label_triage_python == 'true'";
+    const guard =
+      "matrix.leg == 'scripts' && (steps.classify.outputs.label_triage_python == 'true')";
     expect(at(setup, "if")).toBe(guard);
     expect(at(setup, "with", "version")).toMatch(/^\d+\.\d+\.\d+$/);
     expect(at(setup, "with", "enable-cache")).toBe(false);

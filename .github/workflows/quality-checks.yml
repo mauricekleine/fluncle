@@ -73,8 +73,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/quality/source-proof.mjs assess
 
-  core:
-    name: Selected quality lanes
+  core_lanes:
+    name: Core quality lanes (${{ matrix.leg }})
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [packages, scripts, native]
     outputs:
       turbo_cache_key: ${{ steps.turbo_cache.outputs.cache-primary-key }}
       cargo_cache_key: ${{ steps.cargo_cache.outputs.cache-primary-key }}
@@ -108,21 +112,23 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup Bun
+        if: matrix.leg != 'native'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: package.json
 
       - name: Install dependencies
+        if: matrix.leg != 'native'
         run: bun install --frozen-lockfile
 
       - name: Calculate rotating cache epoch
         id: cache_epoch
-        if: steps.classify.outputs.turbo == 'true' || steps.classify.outputs.sonar == 'true'
+        if: (matrix.leg == 'packages' && steps.classify.outputs.turbo == 'true') || (matrix.leg == 'native' && steps.classify.outputs.sonar == 'true')
         run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
 
       - name: Restore bounded Turbo snapshot
         id: turbo_cache
-        if: steps.classify.outputs.turbo == 'true'
+        if: matrix.leg == 'packages' && (steps.classify.outputs.turbo == 'true')
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .turbo/cache
@@ -132,6 +138,7 @@ jobs:
             turbo-v2-${{ runner.os }}-
 
       - name: Install Bun canary for lint
+        if: matrix.leg == 'packages'
         env:
           BUN_CANARY_DIR: ${{ runner.temp }}/bun-canary
         run: |
@@ -139,10 +146,11 @@ jobs:
           echo "$BUN_CANARY_DIR" >> "$GITHUB_PATH"
 
       - name: Run static policy
+        if: matrix.leg == 'packages'
         run: node scripts/quality/measure.mjs --lane static --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane static
 
       - name: Migrations are append-only
-        if: steps.classify.outputs.migrations == 'true'
+        if: matrix.leg == 'packages' && (steps.classify.outputs.migrations == 'true')
         env:
           BASE_SHA: ${{ steps.classify.outputs.base }}
           HEAD_SHA: ${{ steps.classify.outputs.head }}
@@ -155,26 +163,26 @@ jobs:
           fi
 
       - name: Run affected TypeScript build, typecheck, and tests
-        if: steps.classify.outputs.turbo == 'true'
+        if: matrix.leg == 'packages' && (steps.classify.outputs.turbo == 'true')
         run: node scripts/quality/measure.mjs --lane packages --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane packages
 
       - name: Setup uv for label-triage Python tests
-        if: steps.classify.outputs.label_triage_python == 'true'
+        if: matrix.leg == 'scripts' && (steps.classify.outputs.label_triage_python == 'true')
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: false
           version: "0.13.5"
 
       - name: Run label-triage Python tests
-        if: steps.classify.outputs.label_triage_python == 'true'
+        if: matrix.leg == 'scripts' && (steps.classify.outputs.label_triage_python == 'true')
         run: node scripts/quality/measure.mjs --lane label-triage-python --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane label-triage-python
 
       - name: Run standalone script tests
-        if: steps.classify.outputs.scripts == 'true'
+        if: matrix.leg == 'scripts' && (steps.classify.outputs.scripts == 'true')
         run: node scripts/quality/measure.mjs --lane scripts --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane scripts
 
       - name: Setup Go
-        if: steps.classify.outputs.go_ssh == 'true' || steps.classify.outputs.go_dns == 'true'
+        if: matrix.leg == 'native' && (steps.classify.outputs.go_ssh == 'true' || steps.classify.outputs.go_dns == 'true')
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           cache: false
@@ -184,15 +192,15 @@ jobs:
           go-version-file: apps/ssh/go.mod
 
       - name: Check Go SSH once
-        if: steps.classify.outputs.go_ssh == 'true'
+        if: matrix.leg == 'native' && (steps.classify.outputs.go_ssh == 'true')
         run: node scripts/quality/measure.mjs --lane go-ssh --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane go-ssh
 
       - name: Check Go DNS once
-        if: steps.classify.outputs.go_dns == 'true'
+        if: matrix.leg == 'native' && (steps.classify.outputs.go_dns == 'true')
         run: node scripts/quality/measure.mjs --lane go-dns --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane go-dns
 
       - name: Setup Rust
-        if: steps.classify.outputs.sonar == 'true'
+        if: matrix.leg == 'native' && (steps.classify.outputs.sonar == 'true')
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: clippy, rustfmt
@@ -200,7 +208,7 @@ jobs:
 
       - name: Restore bounded Cargo snapshot
         id: cargo_cache
-        if: steps.classify.outputs.sonar == 'true'
+        if: matrix.leg == 'native' && (steps.classify.outputs.sonar == 'true')
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
@@ -213,22 +221,22 @@ jobs:
             cargo-quality-v2-${{ runner.os }}-
 
       - name: Check Rust Sonar
-        if: steps.classify.outputs.sonar == 'true'
+        if: matrix.leg == 'native' && (steps.classify.outputs.sonar == 'true')
         run: node scripts/quality/measure.mjs --lane sonar --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane sonar
 
       - name: Validate workflow syntax and topology
-        if: steps.classify.outputs.workflows == 'true'
+        if: matrix.leg == 'packages' && (steps.classify.outputs.workflows == 'true')
         run: node scripts/quality/measure.mjs --lane workflows --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane workflows
 
       - name: Save bounded Turbo snapshot from main
-        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.turbo == 'true' && steps.turbo_cache.outputs.cache-hit != 'true'
+        if: matrix.leg == 'packages' && (success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.turbo == 'true' && steps.turbo_cache.outputs.cache-hit != 'true')
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           key: ${{ steps.turbo_cache.outputs.cache-primary-key }}
           path: .turbo/cache
 
       - name: Save bounded Cargo snapshot from main
-        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.sonar == 'true' && steps.cargo_cache.outputs.cache-hit != 'true'
+        if: matrix.leg == 'native' && (success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.sonar == 'true' && steps.cargo_cache.outputs.cache-hit != 'true')
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           key: ${{ steps.cargo_cache.outputs.cache-primary-key }}
@@ -240,8 +248,22 @@ jobs:
       - name: Report selected closure and cost projection
         if: always()
         env:
-          CACHE_HIT: ${{ steps.turbo_cache.outputs.cache-hit || 'not-selected' }}
-        run: node scripts/quality/report-run.mjs --plan "$RUNNER_TEMP/quality-plan.json" --metrics "$RUNNER_TEMP/quality-metrics.jsonl" --job core --cache-hit "$CACHE_HIT"
+          CACHE_HIT: ${{ steps.turbo_cache.outputs.cache-hit || steps.cargo_cache.outputs.cache-hit || 'not-selected' }}
+        run: node scripts/quality/report-run.mjs --plan "$RUNNER_TEMP/quality-plan.json" --metrics "$RUNNER_TEMP/quality-metrics.jsonl" --job core-${{ matrix.leg }} --cache-hit "$CACHE_HIT"
+
+  core:
+    name: Selected quality lanes
+    needs: [pr_state, core_lanes]
+    if: ${{ !cancelled() && needs.pr_state.outputs.run != 'false' && needs.pr_state.outputs.reused != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Conclude selected core lanes
+        env:
+          CORE_RESULT: ${{ needs.core_lanes.result }}
+        run: |
+          echo "Core matrix result: $CORE_RESULT"
+          test "$CORE_RESULT" = success
 
   e2e:
     name: Public flows when selected (${{ matrix.shard }}/4)
@@ -399,7 +421,7 @@ jobs:
     name: Retain current main cache snapshots
     continue-on-error: true
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.pr_state.outputs.reused != 'true'
-    needs: [pr_state, core, e2e]
+    needs: [pr_state, core_lanes, core, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -414,8 +436,8 @@ jobs:
       - name: Remove older quality snapshots after successful saves
         env:
           GH_TOKEN: ${{ github.token }}
-          TURBO_CACHE_KEY: ${{ needs.core.outputs.turbo_cache_key }}
-          CARGO_CACHE_KEY: ${{ needs.core.outputs.cargo_cache_key }}
+          TURBO_CACHE_KEY: ${{ needs.core_lanes.outputs.turbo_cache_key }}
+          CARGO_CACHE_KEY: ${{ needs.core_lanes.outputs.cargo_cache_key }}
           PLAYWRIGHT_CACHE_KEY: ${{ needs.e2e.outputs.playwright_cache_key }}
         run: node scripts/quality/cache-prune.mjs
 
