@@ -1,4 +1,4 @@
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
@@ -281,6 +281,59 @@ describe("due-work registry", () => {
       return source.sourceVersion;
     };
     const baseline = await sourceVersion();
+    await db.execute({
+      args: [
+        "unused title ".repeat(10_000),
+        JSON.stringify(["unused artist ".repeat(10_000)]),
+        "unused verification ".repeat(10_000),
+      ],
+      sql: `update tracks set title = ?, artists_json = ?, capture_verification = ?
+        where track_id = 'catalogue-1'`,
+    });
+    let responseBytes = 0;
+    const execute = db.execute.bind(db);
+    const client = {
+      batch: db.batch.bind(db),
+      execute: async (statement: InStatement) => {
+        const result = await execute(statement);
+        responseBytes += Buffer.byteLength(JSON.stringify(result.rows));
+        return result;
+      },
+    };
+    const [source] = await definition.readSourceChunk({ after: "catalogue-", client, limit: 1 });
+    expect(source?.sourceVersion).toBe(baseline);
+    const repair = dueWorkRepairDefinitions(client).find(
+      (candidate) => candidate.workKind === "catalogue-rank",
+    );
+    if (repair === undefined) {
+      throw new Error("catalogue-rank repair definition is missing");
+    }
+    const marker = {
+      claimExpiresAt: null,
+      claimToken: null,
+      claimedBy: null,
+      generation: "rank-repair",
+      nextDueAt: NOW.toISOString(),
+      sortKey: "",
+      sourceVersion: "repair-marker",
+      state: "repair" as const,
+      subjectId: "catalogue-1",
+      subjectType: "track" as const,
+      updatedAt: NOW.toISOString(),
+      workKind: "catalogue-rank",
+    };
+    expect(await repair.project(marker)).toMatchObject({
+      generation: "rank-repair",
+      sourceVersion: baseline,
+      state: "ready",
+      subjectId: "catalogue-1",
+    });
+    const repaired = await repair.projectMany?.([marker, { ...marker, subjectId: "missing" }]);
+    expect(repaired).toEqual([
+      expect.objectContaining({ sourceVersion: baseline, state: "ready" }),
+      null,
+    ]);
+    expect(responseBytes).toBeLessThan(8_192);
 
     await db.execute(`update tracks set backfill_apple_music_failures = 7
       where track_id = 'catalogue-1'`);

@@ -684,6 +684,72 @@ async function findingsByEntity(
   );
 }
 
+type RelatedFindingRow = Pick<
+  TrackRow,
+  | "added_at"
+  | "added_to_spotify"
+  | "album_image_key"
+  | "album_image_state"
+  | "album_image_updated_at"
+  | "album_image_url"
+  | "apple_music_url"
+  | "artists_json"
+  | "bpm"
+  | "duration_ms"
+  | "enrichment_status"
+  | "isrc"
+  | "key"
+  | "label"
+  | "log_id"
+  | "posted_to_telegram"
+  | "preview_url"
+  | "release_date"
+  | "sonic_seed"
+  | "spotify_url"
+  | "title"
+  | "track_id"
+>;
+
+const RELATED_FINDING_SELECT = `tracks.track_id, tracks.title, tracks.artists_json,
+  tracks.spotify_url, tracks.apple_music_url, tracks.album_image_url, tracks.bpm, tracks.key,
+  tracks.duration_ms, tracks.isrc, tracks.preview_url, tracks.release_date, tracks.label,
+  findings.log_id, findings.added_at, findings.enrichment_status,
+  findings.added_to_spotify, findings.posted_to_telegram,
+  (select image_key from albums where albums.id = tracks.album_id) as album_image_key,
+  (select image_state from albums where albums.id = tracks.album_id) as album_image_state,
+  (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at,
+  ${SONIC_SEED_SELECT}`;
+
+function toRelatedFindingItem(row: RelatedFindingRow): GraphFindingItem {
+  return {
+    addedAt: row.added_at,
+    addedToSpotify: Boolean(row.added_to_spotify),
+    albumImageUrl: bestAlbumCoverUrl({
+      imageKey: row.album_image_key,
+      imageState: row.album_image_state,
+      imageUpdatedAt: row.album_image_updated_at,
+      spotifyUrl: row.album_image_url,
+    }),
+    appleMusicUrl: row.apple_music_url ?? undefined,
+    artists: parseArtistsJson(row.artists_json),
+    bpm: row.bpm ?? undefined,
+    durationMs: row.duration_ms,
+    enrichmentStatus: row.enrichment_status,
+    isrc: row.isrc ?? undefined,
+    key: row.key ?? undefined,
+    label: row.label ?? undefined,
+    logId: row.log_id ?? undefined,
+    logPageUrl: row.log_id ? logPageUrl(row.log_id) : undefined,
+    postedToTelegram: Boolean(row.posted_to_telegram),
+    previewUrl: row.preview_url ?? undefined,
+    releaseDate: row.release_date ?? undefined,
+    similar: sonicSeedFlag(row.sonic_seed),
+    spotifyUrl: row.spotify_url,
+    title: row.title,
+    trackId: row.track_id,
+  };
+}
+
 export const RELATED_FINDINGS_LIMIT = 4;
 
 export type RelatedFindingsScope =
@@ -785,7 +851,7 @@ export async function listRelatedFindings(
       ...tiers.flatMap((tier) => tier.args),
       limit,
     ],
-    sql: `select ${GRAPH_TRACK_SELECT}
+    sql: `select ${RELATED_FINDING_SELECT}
           from findings cross join tracks on tracks.track_id = findings.track_id
           where findings.log_id is not null
             and tracks.dismissed_at is null and tracks.duplicate_of_track_id is null
@@ -795,9 +861,7 @@ export async function listRelatedFindings(
           limit ?`,
   });
 
-  return typedRows<TrackRow>(result.rows).map((row) =>
-    toPublicTrackListItem(toGraphFindingItem(row)),
-  );
+  return typedRows<RelatedFindingRow>(result.rows).map(toRelatedFindingItem);
 }
 
 export type LogIndexEntry = {
