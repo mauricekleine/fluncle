@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { type Socket, createServer } from "node:net";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -11,6 +12,7 @@ import {
   MB_USER_AGENT,
   deferMusicbrainzBudget,
   fetchMusicbrainz,
+  ipv6FirstFetch,
   musicbrainzStateDir,
   reserveMusicbrainzSlot,
   runCrawlFetchPlan,
@@ -217,14 +219,44 @@ describe("what one read comes back as", () => {
     }
   });
 
-  it("reports a network error as empty rather than a throttle", async () => {
+  it("retries a network error and reports a persistent one as unreachable, never as empty", async () => {
+    const outcomes: string[] = [];
+    let calls = 0;
     expect(
       await fetchMusicbrainz("https://musicbrainz.org/ws/2/release/x?fmt=json", {
-        fetch: () => Promise.reject(new Error("socket closed")),
+        fetch: () => {
+          calls += 1;
+          return Promise.reject(new Error("socket closed"));
+        },
+        intervalMs: 0,
+        onAttempt: (attempt) => outcomes.push(attempt.outcome),
+        stateDir,
+      }),
+    ).toMatchObject({ outcome: "unreachable" });
+    expect(calls).toBe(3);
+    expect(outcomes).toEqual(["network_error", "network_error", "unreachable"]);
+  });
+
+  it("recovers when a retried network error is followed by a body", async () => {
+    let calls = 0;
+    expect(
+      await fetchMusicbrainz("https://musicbrainz.org/ws/2/release/x?fmt=json", {
+        fetch: () => {
+          calls += 1;
+          return calls === 1
+            ? Promise.reject(new Error("socket closed"))
+            : Promise.resolve(jsonResponse({ id: "x" }));
+        },
         intervalMs: 0,
         stateDir,
       }),
-    ).toMatchObject({ outcome: "empty" });
+    ).toMatchObject({ body: { id: "x" }, outcome: "body" });
+  });
+
+  it("reports a persistent server error as unreachable, never as empty", async () => {
+    expect(await read(new Response("", { status: 502 }))).toMatchObject({
+      outcome: "unreachable",
+    });
   });
 });
 
@@ -280,5 +312,68 @@ describe("the issued fetch plan", () => {
       stateDir,
     });
     expect(supplied).toEqual([{ outcome: "throttled", url: tail.probeUrl }]);
+  });
+});
+
+describe("ipv6FirstFetch", () => {
+  it("falls back to the default fetch when IPv6 stalls, inside the caller's timeout", async () => {
+    const realFetch = globalThis.fetch;
+    const previous = process.env.HTTPS_PROXY;
+    delete process.env.HTTPS_PROXY;
+    const sockets: Socket[] = [];
+    const stalled = createServer((socket) => {
+      sockets.push(socket);
+    });
+    await new Promise<void>((resolvePromise) => stalled.listen(0, "::1", resolvePromise));
+    const address = stalled.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    let fellBack = false;
+    globalThis.fetch = (async () => {
+      fellBack = true;
+      return new Response("{}");
+    }) as unknown as typeof fetch;
+    try {
+      const startedAt = Date.now();
+      const response = await ipv6FirstFetch(
+        `https://[::1]:${port}/ws/2/label/x`,
+        { signal: AbortSignal.timeout(5_000) },
+        200,
+      );
+      expect(response.status).toBe(200);
+      expect(fellBack).toBe(true);
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+    } finally {
+      globalThis.fetch = realFetch;
+      if (previous !== undefined) {
+        process.env.HTTPS_PROXY = previous;
+      }
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      stalled.close();
+    }
+  });
+
+  it("leaves a configured proxy in charge of the connection", async () => {
+    const realFetch = globalThis.fetch;
+    const previous = process.env.HTTPS_PROXY;
+    const seen: string[] = [];
+    process.env.HTTPS_PROXY = "http://127.0.0.1:1";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      seen.push(input instanceof Request ? input.url : input.toString());
+      return new Response("{}");
+    }) as unknown as typeof fetch;
+    try {
+      const response = await ipv6FirstFetch("https://musicbrainz.org/ws/2/label/x?fmt=json");
+      expect(response.status).toBe(200);
+      expect(seen).toEqual(["https://musicbrainz.org/ws/2/label/x?fmt=json"]);
+    } finally {
+      globalThis.fetch = realFetch;
+      if (previous === undefined) {
+        delete process.env.HTTPS_PROXY;
+      } else {
+        process.env.HTTPS_PROXY = previous;
+      }
+    }
   });
 });

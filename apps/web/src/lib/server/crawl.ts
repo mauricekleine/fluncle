@@ -1139,10 +1139,13 @@ export type CrawlProviderTransport = <T>(
 ) => Promise<T | null>;
 
 async function mb<T>(path: string, context?: MbRequestContext): Promise<T | null> {
-  const { data, rateLimited } = await mbFetch<T>(path, context);
+  const { data, rateLimited, unreachable } = await mbFetch<T>(path, context);
 
   if (rateLimited) {
     throw new ThrottledError(`MusicBrainz is rate-limiting (${path})`);
+  }
+  if (unreachable) {
+    throw new ThrottledError(`MusicBrainz is unreachable (${path})`);
   }
 
   return data;

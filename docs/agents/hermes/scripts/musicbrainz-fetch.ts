@@ -7,8 +7,10 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { request } from "node:https";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 
 export const MB_USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
 
@@ -20,6 +22,8 @@ const MB_REQUEST_TIMEOUT_MS = 15_000;
 
 const MB_ATTEMPTS = 3;
 
+const IPV6_RESPONSE_DEADLINE_MS = 5_000;
+
 export const MB_MAX_BODY_BYTES = 2 * 1024 * 1024;
 
 const LOCK_STALE_MS = 15_000;
@@ -27,6 +31,8 @@ const LOCK_STALE_MS = 15_000;
 const LOCK_WAIT_MS = 10_000;
 
 const MAX_RETRY_AFTER_MS = 60_000;
+
+const UNREACHABLE_RETRY_INTERVALS = 2;
 
 export function musicbrainzStateDir(): string {
   return process.env.FLUNCLE_MUSICBRAINZ_STATE_DIR ?? join(homedir(), ".musicbrainz");
@@ -131,7 +137,7 @@ export async function deferMusicbrainzBudget(
 
 export type MusicbrainzFetchResult = {
   body?: unknown;
-  outcome: "body" | "empty" | "invalid" | "oversize" | "throttled";
+  outcome: "body" | "empty" | "invalid" | "oversize" | "throttled" | "unreachable";
   url: string;
 };
 
@@ -141,6 +147,69 @@ export type MusicbrainzFetchOptions = {
   onAttempt?: (attempt: { outcome: string; url: string }) => void;
   stateDir?: string;
 };
+
+function requestOverIpv6(
+  url: string,
+  init: RequestInit,
+  responseDeadlineMs: number,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const outgoing = request(
+      url,
+      {
+        family: 6,
+        headers: Object.fromEntries(new Headers(init.headers)),
+        method: init.method ?? "GET",
+        signal: init.signal ?? undefined,
+      },
+      (incoming) => {
+        clearTimeout(deadline);
+        const headers = new Headers();
+        for (const [name, value] of Object.entries(incoming.headers)) {
+          for (const item of Array.isArray(value) ? value : value === undefined ? [] : [value]) {
+            headers.append(name, item);
+          }
+        }
+        const status = incoming.statusCode ?? 502;
+        const body =
+          status === 204 || status === 304
+            ? null
+            : (Readable.toWeb(incoming) as unknown as ReadableStream<Uint8Array>);
+        resolve(new Response(body, { headers, status }));
+      },
+    );
+    const deadline = setTimeout(() => {
+      outgoing.destroy(new Error("no IPv6 response before the deadline"));
+    }, responseDeadlineMs);
+    outgoing.on("error", (error) => {
+      clearTimeout(deadline);
+      reject(error);
+    });
+    outgoing.end();
+  });
+}
+
+export async function ipv6FirstFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  ipv6ResponseDeadlineMs = IPV6_RESPONSE_DEADLINE_MS,
+): Promise<Response> {
+  if (process.env.HTTPS_PROXY || process.env.https_proxy) {
+    return globalThis.fetch(input, init);
+  }
+  try {
+    return await requestOverIpv6(
+      input instanceof Request ? input.url : input.toString(),
+      init ?? {},
+      ipv6ResponseDeadlineMs,
+    );
+  } catch (error) {
+    if (init?.signal?.aborted) {
+      throw error;
+    }
+    return globalThis.fetch(input, init);
+  }
+}
 
 function retryAfterMs(header: null | string): number {
   const seconds = Number(header);
@@ -158,7 +227,19 @@ export async function fetchMusicbrainz(
   }
   const stateDir = options.stateDir ?? musicbrainzStateDir();
   const intervalMs = options.intervalMs ?? MB_MIN_REQUEST_INTERVAL_MS;
-  const fetchFn = options.fetch ?? globalThis.fetch;
+  const fetchFn = options.fetch ?? ipv6FirstFetch;
+  const retryUnreachable = async (
+    attempt: number,
+    retryOutcome: string,
+  ): Promise<MusicbrainzFetchResult | undefined> => {
+    if (attempt === MB_ATTEMPTS - 1) {
+      options.onAttempt?.({ outcome: "unreachable", url });
+      return { outcome: "unreachable", url };
+    }
+    options.onAttempt?.({ outcome: retryOutcome, url });
+    await sleep(intervalMs * UNREACHABLE_RETRY_INTERVALS);
+    return undefined;
+  };
 
   for (let attempt = 0; attempt < MB_ATTEMPTS; attempt += 1) {
     await reserveMusicbrainzSlot(stateDir, intervalMs);
@@ -171,8 +252,11 @@ export async function fetchMusicbrainz(
         signal: AbortSignal.timeout(MB_REQUEST_TIMEOUT_MS),
       });
     } catch {
-      options.onAttempt?.({ outcome: "network_error", url });
-      return { outcome: "empty", url };
+      const gaveUp = await retryUnreachable(attempt, "network_error");
+      if (gaveUp) {
+        return gaveUp;
+      }
+      continue;
     }
 
     if (response.status >= 300 && response.status < 400) {
@@ -195,6 +279,14 @@ export async function fetchMusicbrainz(
       continue;
     }
 
+    if (response.status >= 500) {
+      const gaveUp = await retryUnreachable(attempt, `retry_${response.status}`);
+      if (gaveUp) {
+        return gaveUp;
+      }
+      continue;
+    }
+
     if (!response.ok) {
       options.onAttempt?.({ outcome: `http_${response.status}`, url });
       return { outcome: "empty", url };
@@ -204,8 +296,8 @@ export async function fetchMusicbrainz(
     try {
       text = await response.text();
     } catch {
-      options.onAttempt?.({ outcome: "network_error", url });
-      return { outcome: "empty", url };
+      options.onAttempt?.({ outcome: "unreachable", url });
+      return { outcome: "unreachable", url };
     }
     if (Buffer.byteLength(text, "utf8") > MB_MAX_BODY_BYTES) {
       options.onAttempt?.({ outcome: "oversize", url });
