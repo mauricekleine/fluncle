@@ -38,6 +38,16 @@ function fixture() {
     cpSync(join(source, "scripts/quality", file), target);
   }
   write(root, "scripts/quality/workspace-install.mjs", "process.exitCode = 0;\n");
+  cpSync(join(source, ".oxfmtrc.json"), join(root, ".oxfmtrc.json"));
+  cpSync(join(source, ".prettierignore"), join(root, ".prettierignore"));
+  write(
+    root,
+    ".oxlintrc.json",
+    JSON.stringify({
+      ignorePatterns: JSON.parse(readFileSync(join(source, ".oxlintrc.json"), "utf8"))
+        .ignorePatterns,
+    }),
+  );
   write(root, ".gitignore", ".turbo/\nbin/\n");
   write(root, "package.json", JSON.stringify({ scripts: {}, workspaces: ["apps/*"] }));
   for (const app of ["cli", "web"]) {
@@ -64,6 +74,13 @@ const path = require("node:path");
 const args = process.argv.slice(2);
 const stage = args[0] === "test" ? "test" : args[1];
 const root = process.env.FIXTURE_ROOT;
+if (["format:check", "lint"].includes(stage) && (args.includes("--list-files") || fs.existsSync(path.join(root, ".turbo/real-static")))) {
+  const argv = stage === "format:check"
+    ? ["fmt", "--check", ...args.slice(2)]
+    : [process.env.FIXTURE_LINT_SCRIPT, "lint", "--no-script", ...args.slice(2)];
+  const result = require("node:child_process").spawnSync(process.env.FIXTURE_BUN, argv, { stdio: "inherit" });
+  process.exit(result.status ?? 1);
+}
 if (stage === "format:check" && args.slice(2).some(file => fs.readFileSync(file, "utf8").includes("BAD_FORMAT"))) {
   console.error("format sentinel"); process.exit(17);
 }
@@ -99,6 +116,8 @@ function verify(root: string, ...args: string[]) {
     encoding: "utf8",
     env: {
       ...process.env,
+      FIXTURE_BUN: process.execPath,
+      FIXTURE_LINT_SCRIPT: join(source, "scripts/bun-canary.ts"),
       FIXTURE_ROOT: root,
       FLUNCLE_VITEST_COVERAGE: "true",
       PATH: `${root}/bin:${process.env.PATH}`,
@@ -140,6 +159,70 @@ test("an explicit web test reaches the coverage-free package runner", () => {
   expect(status).toBe(0);
   expect(readFileSync(receipt.logPath, "utf8")).toContain("fixture passed");
   expect(receipt.lanes.at(-1).lane).toBe("test:apps/web");
+});
+
+for (const [label, path, content, owner] of [
+  ["Go", "apps/ssh/main.go", "package main\n", "go-ssh"],
+  ["Rust", "apps/sonar/src/main.rs", "fn main() {}\n", "sonar"],
+  [
+    "Python",
+    "packages/skills/fluncle-label-triage/scripts/helper.py",
+    "value = 1\n",
+    "label-triage-python",
+  ],
+  ["Raycast", "apps/raycast/src/example.ts", "export const value = 1;\n", "lint:apps/raycast"],
+  [
+    "ignored skills",
+    ".agents/skills/fluncle-example/scripts/helper.ts",
+    "export const value = 1;\n",
+    null,
+  ],
+] as const) {
+  test(`${label}-only paths reach their owner without a mismatched formatter`, () => {
+    const root = fixture();
+    write(root, ".turbo/real-static", "enabled");
+    write(root, path, content);
+    if (label === "Raycast") {
+      write(
+        root,
+        "apps/raycast/package.json",
+        JSON.stringify({
+          name: "@fluncle/raycast",
+          scripts: { lint: "ray lint" },
+        }),
+      );
+    }
+    for (const program of ["go", "gofmt", "cargo"]) {
+      write(root, `bin/${program}`, "#!/usr/bin/env node\nprocess.exitCode = 0;\n");
+      spawnSync("chmod", ["+x", join(root, "bin", program)]);
+    }
+    const { output, receipt, status } = verify(root, path);
+    expect(status, output + JSON.stringify(receipt.firstFailure)).toBe(0);
+    const lanes = receipt.lanes.map((lane: { lane: string }) => lane.lane);
+    expect(lanes).not.toContain("format");
+    if (label !== "Raycast") {
+      expect(lanes).not.toContain("lint");
+    }
+    if (owner) {
+      expect(lanes).toContain(owner);
+    }
+  });
+}
+
+test("default selection excludes commits added only to origin/main", () => {
+  const root = fixture();
+  const branch = git(root, "branch", "--show-current");
+  git(root, "switch", "-c", "upstream");
+  write(root, "apps/web/src/upstream.ts", "export const upstream = 1;\n");
+  git(root, "add", ".");
+  git(root, "-c", "commit.gpgsign=false", "commit", "-m", "upstream change");
+  git(root, "update-ref", "refs/remotes/origin/main", "HEAD");
+  git(root, "switch", branch);
+  write(root, "apps/cli/src/value.ts", "export const value = 2;\n");
+  const { receipt, status } = verify(root);
+  expect(status).toBe(0);
+  expect(receipt.plan.changedFiles).toEqual(["apps/cli/src/value.ts"]);
+  expect(receipt.base).toBe(git(root, "merge-base", "origin/main", "HEAD"));
 });
 
 test("the default comparison includes committed, staged, unstaged, untracked and deleted paths", () => {

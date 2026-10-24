@@ -179,14 +179,39 @@ function webTests(paths, changed, all) {
   );
 }
 
+function toolPaths(script, paths, flags = []) {
+  if (paths.length === 0) {
+    return [];
+  }
+  const result = spawnSync(
+    "bun",
+    ["run", script, "--list-files", "--no-error-on-unmatched-pattern", ...flags, ...paths],
+    { cwd: root, encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    throw new Error(`Could not select ${script} files: ${result.stderr || result.error?.message}`);
+  }
+  const selected = new Set(
+    result.stdout
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((path) => relative(root, resolve(root, path))),
+  );
+  return paths.filter((path) => selected.has(path));
+}
+
 function focusedSteps(plan, changed) {
   const paths = plan.changedFiles;
   const live = paths.filter((path) => existsSync(join(root, path)));
   const steps = [];
-  if (live.length > 0) {
-    steps.push(step("format", "bun", ["run", "format:check", ...live]));
+  const formatted = toolPaths("format:check", live, ["--ignore-unknown"]);
+  if (formatted.length > 0) {
+    steps.push(step("format", "bun", ["run", "format:check", ...formatted]));
   }
-  const js = live.filter((path) => javascriptPath.test(path));
+  const js = toolPaths(
+    "lint",
+    live.filter((path) => javascriptPath.test(path)),
+  );
   if (js.length > 0) {
     steps.push(step("lint", "bun", ["run", "lint", ...js]));
   }
@@ -339,10 +364,10 @@ function main() {
     if (full) {
       commands = [step("check", "bun", ["run", "check"])];
     } else {
-      const base = git("rev-parse", "--verify", "origin/main^{commit}").trim();
+      const base = git("merge-base", "origin/main", "HEAD").trim();
       const changed = [
         ...new Set([
-          ...list(git("diff", "--no-renames", "--name-only", "-z", "origin/main", "--")),
+          ...list(git("diff", "--no-renames", "--name-only", "-z", base, "--")),
           ...list(git("ls-files", "--others", "--exclude-standard", "-z")),
         ]),
       ];
