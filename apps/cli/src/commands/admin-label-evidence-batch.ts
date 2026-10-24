@@ -50,7 +50,7 @@ export async function gatherLabelEvidenceBatch(
     record({ input, state: "pending" });
   }
 
-  for (const [index, input] of labels.entries()) {
+  for (const input of labels) {
     let evidence: LabelEvidence;
     try {
       evidence = await gatherLabelEvidence(input, options, deps);
@@ -70,8 +70,9 @@ export async function gatherLabelEvidenceBatch(
       continue;
     }
 
-    const path = join(out, `${index}.json`);
-    const summaryPath = join(out, `${index}.txt`);
+    const key = encodeURIComponent(evidence.label.mbLabelId);
+    const path = join(out, `${key}.json`);
+    const summaryPath = join(out, `${key}.txt`);
     const summary = labelEvidenceLines(evidence);
     atomicWrite(path, `${JSON.stringify(evidence, null, 2)}\n`);
     atomicWrite(summaryPath, `${summary.join("\n")}\n`);

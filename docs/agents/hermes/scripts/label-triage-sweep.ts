@@ -538,6 +538,8 @@ export const RESEARCH_SCHEMA = JSON.stringify({
 export const EVIDENCE_TOOL = "Bash(fluncle admin labels evidence:*)";
 
 export function buildResearchPrompt(batch: TriageLabel[], config: ResearchConfig): string {
+  const rulingsPath = join(dirname(config.skillPath), "references", "worker-rulings.md");
+  const evidenceTimeout = Math.min(540, 240 * batch.length);
   const labels = batch.map(
     (label) =>
       `- slug \`${label.slug}\` · name "${label.name}" · mb_label_id \`${label.mbLabelId}\``,
@@ -546,7 +548,7 @@ export function buildResearchPrompt(batch: TriageLabel[], config: ResearchConfig
   return `You are triaging crawl-seed labels for **Fluncle**, a drum & bass archive. Fluncle's catalogue crawler only STORES tracks from labels the operator marks \`enabled\`, so your verdict is a PROPOSAL the operator rules on by hand. A wrong "dnb" pollutes the catalogue with off-genre music; a wrong "not_dnb" silently loses good music. Be accurate over decisive.
 
 ## Read first
-Read \`${config.skillPath}\` before your first label. Its four standing rulings, its DSP oracle ladder, its calibration shape and its 15 % census rule bind this pass and are not repeated in full here.
+Read \`${rulingsPath}\` once with the file-read tool before your first label. Its four standing rulings, DSP oracle ladder and 15 % census rule bind this pass.
 
 Then read the operator's LIVE ruling boundary in your working directory: \`calib-enabled.txt\` (labels he enabled), \`calib-disabled.txt\` (labels he disabled) and \`calib-rules.txt\` (the GLOBAL artist rules already in force). Majors, subsidiaries, distributors and aggregators are OUT even when they carry DnB; DnB-specific media brands are IN; genre-adjacent scenes (dubstep, grime, UKG, jungle-adjacent electronica) are OUT.
 
@@ -556,7 +558,9 @@ ${labels.join("\n")}
 Research the EXACT MusicBrainz entity named by each \`mb_label_id\`, never a same-named label.
 
 ## Evidence
-Your ONLY fetcher is \`fluncle admin labels evidence <mb_label_id> --json\`. It returns the MusicBrainz label and a first-credit release sample, Discogs per-release styles, Beatport's genre facet and Apple's genre for sampled barcodes, each with its own \`status\` and \`errors\` (\`not_configured\` or \`no_link\` means that rung is silent, not negative). Run it once per label. For a label that is genuinely two-sided, run \`fluncle admin labels evidence <mb_label_id> --census --json\` once more for the first-credit census. **Do not write fetchers** and do not try any other command: you have no other network access. Read the ladder in the skill and record which rung answered and the exact string it returned.
+Collect all MBIDs in this batch with ONE foreground command: \`fluncle admin labels evidence <mb_label_id> [<mb_label_id> ...] --out evidence/research --manifest evidence/manifest.jsonl --timeout ${evidenceTimeout}\`. For genuinely two-sided labels, collect the mixed-label subset together with \`fluncle admin labels evidence <mb_label_id> [<mb_label_id> ...] --census --out evidence/census --manifest evidence/manifest.jsonl --timeout ${evidenceTimeout}\`. Set the Bash tool timeout 600000; the CLI deadline is capped at 540 s so its exit-124 message ends the call first. The CLI fetches serially under shared source limiters and writes complete JSON and text files atomically, named by resolved MBID so a failed-label retry preserves successful labels' files.
+
+Read the printed text summaries first. Open saved JSON with the file-read tool only for ruling-specific fields, using the manifest paths. JSON has top-level \`label\`, \`fetchedAt\`, \`ok\`, \`partial\`, \`requests\`, \`errors\`, \`sources\`; each \`sources.<name>\` (musicbrainz, discogs, beatport, apple) has \`status\` (ok, partial, error, no_link, not_configured, skipped), and may omit \`data\`, \`errors\`, \`note\` or \`cached\`. Census counts live at \`sources.musicbrainz.data.census\`; imprint relations at \`sources.musicbrainz.data.label.labelRelations\`. Silent sources are not negative genre evidence. A collection failure is not an \`unclear\` genre ruling. Leave that label out of the verdicts so the sweep carries it to the next natural round. **Do not write fetchers.** You have no other network command. Read the ladder in the rulings reference and record which rung answered and its exact genre string.
 
 ## Buckets
 - **dnb** — predominantly drum & bass or jungle (any subgenre), or a mixed label whose census RAW off-lane first-credit share is ≤ 0.15, with \`block\` rules for the off-lane acts.
@@ -574,7 +578,7 @@ Your ONLY fetcher is \`fluncle admin labels evidence <mb_label_id> --json\`. It 
 7. Copy the census \`caveat\` verbatim into \`censusSummary\` when set, and drop your confidence a step.
 
 ## Output
-Return exactly one verdict per label above, keyed by its \`slug\`, through the structured schema. \`evidence\` is one or two lines citing what you actually saw (artists, styles, genre strings, the rung that answered). Do not write any files.`;
+Return one verdict per label whose collection completed, keyed by its \`slug\`, through the structured schema. Omit labels with collection failures so they are carried to the next natural round. \`evidence\` is one or two lines citing what you actually saw (artists, styles, genre strings, the rung that answered). Do not write any files.`;
 }
 
 export function claudeArgs(config: ResearchConfig): string[] {

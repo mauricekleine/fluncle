@@ -93,6 +93,8 @@ describe("worker briefs", () => {
         expect(brief).toContain("--manifest '/state/label-triage/round-42/manifest.jsonl'");
         expect(brief).toContain("Read the printed text summaries first");
         expect(brief).toContain("blocking completion tool");
+        expect(brief).toContain("Do not write fetchers.");
+        expect(brief).toContain("A collection failure is not an `unclear` genre ruling.");
         expect(brief).toContain("sources.<name>");
         expect(brief).toContain("ok|partial|error|no_link|not_configured|skipped");
         expect(brief).toContain("Nullable:");
@@ -100,6 +102,32 @@ describe("worker briefs", () => {
         expect(brief).not.toContain("ws/2/release?label=");
       }
       expect(briefs.at(-1)).toContain("--census");
+    });
+  }
+
+  for (const script of ["triage-workflow.js", "verify-workflow.js"]) {
+    test(`${script} requires a durable roundDir`, async () => {
+      await expect(runWorkflow(script, [], { roundDir: undefined })).rejects.toThrow(
+        "roundDir must name a durable round directory outside session scratch",
+      );
+    });
+
+    test(`${script} scales each slice deadline below the Bash tool timeout`, async () => {
+      const research = Array.from({ length: 6 }, (_, index) => ({
+        ...mixed,
+        slug: `mixed-${index}`,
+      }));
+      const { briefs } = await runWorkflow(script, research, {
+        batch: 10,
+        censusBatch: 5,
+        total: 12,
+      });
+      expect(briefs.map((brief) => Number(/--timeout (\d+)/.exec(brief)?.[1]))).toEqual(
+        script === "triage-workflow.js" ? [540, 480, 540, 240] : [540, 480],
+      );
+      for (const brief of briefs) {
+        expect(brief).toContain("Bash tool timeout 600000");
+      }
     });
   }
 

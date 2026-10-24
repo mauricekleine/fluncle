@@ -700,6 +700,38 @@ describe("parsers", () => {
 });
 
 describe("batch evidence files", () => {
+  test("retrying only failed labels preserves the earlier successful label's manifest targets", async () => {
+    const out = mkdtempSync(join(tmpdir(), "fluncle-evidence-retry-"));
+    dirs.push(out);
+    const manifest = join(out, "manifest.jsonl");
+    const options = { ...ALL, manifest, out, refresh: false, sources: ["musicbrainz"] as const };
+    const first = await gatherLabelEvidenceBatch([LABEL_MBID, DNB_ACT], options, setup().deps);
+    expect(first.ok).toBe(false);
+    const entries = readFileSync(manifest, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const success = entries.find((entry) => entry.id === LABEL_MBID && entry.state === "ready");
+    const original = readFileSync(success.path, "utf8");
+    const summary = readFileSync(success.summaryPath, "utf8");
+    const routes = defaultRoutes();
+    for (const [key, route] of Object.entries(routes)) {
+      if (key.includes(LABEL_MBID)) {
+        routes[key.replaceAll(LABEL_MBID, DNB_ACT)] = route;
+      }
+    }
+    const retried = await gatherLabelEvidenceBatch([DNB_ACT], options, setup(routes).deps);
+    expect(retried.ok).toBe(true);
+    expect(readFileSync(success.path, "utf8")).toBe(original);
+    expect(readFileSync(success.summaryPath, "utf8")).toBe(summary);
+    const updated = readFileSync(manifest, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const last = updated.filter((entry) => entry.id === DNB_ACT && entry.state === "ready").at(-1);
+    expect(JSON.parse(readFileSync(last.path, "utf8")).label.mbLabelId).toBe(DNB_ACT);
+  });
+
   test("publishes complete summaries and JSON per label, continues after failure, and journals slice completion", async () => {
     const out = mkdtempSync(join(tmpdir(), "fluncle-evidence-batch-"));
     dirs.push(out);
@@ -748,7 +780,7 @@ describe("batch evidence files", () => {
     }
     expect(readdirSync(out).some((name) => name.endsWith(".tmp"))).toBe(false);
     expect(
-      JSON.parse(readFileSync(join(out, "2.json"), "utf8")).requests.cacheHits,
+      JSON.parse(readFileSync(join(out, `${DNB_ACT}.json`), "utf8")).requests.cacheHits,
     ).toBeGreaterThan(0);
   });
 });

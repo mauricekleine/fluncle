@@ -30,7 +30,9 @@ test("batch collection reports blocked external evidence as a failed terminal la
       },
     );
     expect(result.ok).toBe(false);
-    const evidence = JSON.parse(readFileSync(join(dir, "0.json"), "utf8"));
+    const evidence = JSON.parse(
+      readFileSync(join(dir, "11111111-1111-1111-1111-111111111111.json"), "utf8"),
+    );
     expect(evidence.sources.musicbrainz.status).toBe("error");
     expect(evidence.errors[0].message).toContain("Blocked outbound request");
     const events = readFileSync(join(dir, "manifest.jsonl"), "utf8")
