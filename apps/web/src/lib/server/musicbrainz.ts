@@ -40,7 +40,12 @@ class MusicbrainzRejected extends Data.TaggedError("MusicbrainzRejected")<{
   statusText: string;
 }> {}
 
-export type MbResult<T> = { data: T | null; rateLimited: boolean; status?: number };
+export type MbResult<T> = {
+  data: T | null;
+  rateLimited: boolean;
+  status?: number;
+  unreachable?: boolean;
+};
 
 export type MbRequestContext = {
   nodeKind: "artist" | "label" | "release";
@@ -165,7 +170,7 @@ function mbRequest<T>(path: string, context?: MbRequestContext): Effect.Effect<M
                 Effect.annotateLogs({ error: error.cause, path }),
               ),
             ),
-            Effect.as<MbResult<T>>({ data: null, rateLimited: false }),
+            Effect.as<MbResult<T>>({ data: null, rateLimited: false, unreachable: true }),
           ),
       }),
     ),

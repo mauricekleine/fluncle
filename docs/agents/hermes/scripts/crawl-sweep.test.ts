@@ -53,6 +53,20 @@ test("request kinds count every box attempt, including retries, and identify a l
   ).toBe("label_gate");
   expect(
     blockedReason({
+      error: "MusicBrainz unreachable from the box (3 read(s) failed after retries)",
+      failed: 0,
+      ok: false,
+      pending: 1,
+      reason: "musicbrainz_unreachable",
+      storableReady: false,
+      throttled: true,
+      tracksFound: 0,
+      tracksSkippedLabelGate: 0,
+      tracksWritten: 0,
+    }),
+  ).toBe("mb_unreachable");
+  expect(
+    blockedReason({
       error: "MusicBrainz request failed",
       failed: 1,
       ok: false,
@@ -232,6 +246,8 @@ function fixture(): Fixture {
     '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token-1"},{"nodeId":"node-2","preparedToken":"prepared-token-2"}],"frontierPending":2}\' ;;',
     "    prepare:box-fetch-batch)",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","boxFetch":true,"capabilities":{"commitBatchLimit":6,"commitBatchMaxTotalBytes":8388608},"items":[{"nodeId":"node-1","preparedToken":"prepared-token-1","fetchPlan":{"kind":"none"}},{"nodeId":"node-2","preparedToken":"prepared-token-2","fetchPlan":{"kind":"none"}}],"frontierPending":2}\' ;;',
+    "    prepare:box-unreachable)",
+    '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token","fetchPlan":{"kind":"single","url":"https://musicbrainz.org/ws/2/release/unreachable?fmt=json"}}],"frontierPending":1,"boxFetch":true}\' ;;',
     "    prepare:box-fetch|prepare:box-fetch-off)",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token","fetchPlan":{"kind":"none"}}],"frontierPending":1,"boxFetch":true}\' ;;',
     '    prepare:*) printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token"}],"frontierPending":1}\' ;;',
@@ -252,7 +268,7 @@ function fixture(): Fixture {
     "      else",
     '        printf \'%s\\n\' \'{"ok":true,"phase":"commit","receipt":{"outcome":"committed","state":"committed","result":{"expanded":1,"failed":0,"tracksFound":5,"tracksWritten":2,"tracksSkipped":3,"tracksSkippedHeld":1,"tracksSkippedLabelGate":1,"tracksSkippedArtistRule":1,"rateLimited":false}}}\'',
     "      fi ;;",
-    "    commit:always-throttled)",
+    "    commit:always-throttled|commit:box-unreachable)",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"commit","receipt":{"outcome":"committed","state":"committed","result":{"expanded":0,"failed":1,"tracksFound":0,"tracksWritten":0,"tracksSkipped":0,"rateLimited":true}}}\' ;;',
     "    commit:slow)",
     "      sleep 1.2",
@@ -1181,6 +1197,40 @@ describe("crawl-sweep phase protocol", () => {
       expect(readFileSync(data.fetchBody, "utf8")).not.toContain('"supplied"');
     },
     TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "fails the tick and keeps the node pending when MusicBrainz is unreachable from the box",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: {
+            ...sweepEnvironment(data, "box-unreachable"),
+            FLUNCLE_CRAWL_THROTTLE_PAUSE_MS: "0",
+            FLUNCLE_MUSICBRAINZ_STATE_DIR: join(data.directory, "musicbrainz"),
+            HTTPS_PROXY: "http://127.0.0.1:1",
+          },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+        CHOREOGRAPHY_TEST_TIMEOUT_MS,
+      );
+
+      expect(result.exitCode, result.stderr).toBe(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        blockedReason: "mb_unreachable",
+        errors: 1,
+        ok: false,
+        reason: "musicbrainz_unreachable",
+        unreachable: 1,
+      });
+      const fetchBodies = readFileSync(data.fetchBody, "utf8");
+      expect(fetchBodies).toContain('"outcome":"throttled"');
+      expect(fetchBodies).not.toContain('"outcome":"empty"');
+    },
+    CHOREOGRAPHY_TEST_TIMEOUT_MS,
   );
 
   test(

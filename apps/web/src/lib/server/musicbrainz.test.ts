@@ -130,7 +130,8 @@ describe("mbFetch outcome", () => {
     const unavailable = await mbFetch("/artist/unavailable");
 
     expect(missing).toMatchObject({ data: null, rateLimited: false, status: 404 });
-    expect(unavailable).toMatchObject({ data: null, rateLimited: false });
+    expect(missing.unreachable).toBeUndefined();
+    expect(unavailable).toMatchObject({ data: null, rateLimited: false, unreachable: true });
     expect(unavailable.status).toBeUndefined();
   });
 });
@@ -209,7 +210,7 @@ describe("mbFetch 503 handling", () => {
     const pending = mbFetch("/label/hung", context);
     await vi.advanceTimersByTimeAsync(15_000);
 
-    await expect(pending).resolves.toEqual({ data: null, rateLimited: false });
+    await expect(pending).resolves.toEqual({ data: null, rateLimited: false, unreachable: true });
     expect(loggedEvents()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ event: "crawl.musicbrainz-request", outcome: "network_error" }),
