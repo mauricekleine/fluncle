@@ -145,6 +145,14 @@ if (!file || !total) {
   throw new Error(`args did not resolve: ${JSON.stringify(cfg)?.slice(0, 200)}`);
 }
 const CENSUS_BATCH = Number(cfg.censusBatch) || 5;
+if (!cfg.roundDir) {
+  throw new Error("roundDir must name a durable round directory outside session scratch");
+}
+const manifest = `${cfg.roundDir}/manifest.jsonl`;
+const shellPath = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+const evidenceCommand = (slice, count, census = false) =>
+  `\`fluncle admin labels evidence <mb_label_id> [<mb_label_id> ...]${census ? " --census" : ""} --out ${shellPath(`${cfg.roundDir}/${slice}`)} --manifest ${shellPath(manifest)} --timeout ${240 * count}\` (repo root; use \`bun apps/cli/src/cli.ts admin labels evidence …\` when the installed CLI predates batch evidence)`;
+
 const starts = [];
 for (let s = 0; s < total; s += batch) {
   starts.push(s);
@@ -165,16 +173,16 @@ const pooled = async (thunks) => {
   return out;
 };
 
-const SKILL_PATH = ".agents/skills/fluncle-label-triage/SKILL.md";
+const SKILL_PATH = ".agents/skills/fluncle-label-triage/references/worker-rulings.md";
 
 const READ_FIRST = `## Read first
-Read \`${SKILL_PATH}\` (repo-relative) before your first label. Its standing rulings and its DSP oracle ladder bind this pass and are not repeated here.`;
+Read \`${SKILL_PATH}\` (repo-relative) once with the file-read tool before your first label. It contains the standing rulings and DSP oracle ladder for this pass.`;
 
-const EVIDENCE_COMMAND = `\`fluncle admin labels evidence <mb_label_id> --json\` (run from the repo root; when the installed \`fluncle\` lacks the command, use \`bun apps/cli/src/cli.ts admin labels evidence …\`)`;
+const EVIDENCE_PATIENCE = `Run ONE command for all MBIDs in your slice, in the foreground, with the Bash tool timeout 600000. The CLI fetches labels serially under shared source limiters and writes complete evidence files atomically. If the tool hands back a running task, use its blocking completion tool until it ends. Read the printed text summaries first; open a saved JSON with the file-read tool only for fields your ruling needs. Use the printed manifest paths, not jq/Python shape exploration or evidence-file polling. Single-label calls default to 240 s; this batch explicitly allows 240 s per label. Exit 124 or a failed manifest entry means collection is incomplete: return that fact to the coordinator to resume from cache at lower concurrency before any verdict. A collection failure is not an \`unclear\` genre ruling.`;
 
-const EVIDENCE_PATIENCE = `The command waits its turn on MusicBrainz, Discogs and Apple rate limits shared by every worker on this machine, so one call can take a minute or two while other workers are busy. Run the calls one after another, never several at once: parallel calls only lengthen the shared queue. Outside a terminal the command stops itself after 240 s with exit code 124 and a message naming the queue it was waiting on; set the Bash tool's \`timeout\` to 300000 so that message, not the tool, ends the call. A call that stops at its deadline is a queue, not evidence: re-run it, and every source it already fetched comes back from cache. Never rule a label \`unclear\` because the command had not returned.`;
+const EVIDENCE_SHAPE = `JSON shape: top-level \`label\`, \`fetchedAt\`, \`ok\`, \`partial\`, \`requests\`, \`errors\`, \`sources\`. Source reports live at \`sources.<name>\` for \`apple\`, \`beatport\`, \`discogs\`, \`musicbrainz\`; status is \`ok|partial|error|no_link|not_configured|skipped\`. \`data\`, \`errors\`, \`note\`, \`cached\` may be absent. Nullable: MB label area/country/disambiguation/type/labelCode and lifeSpan begin/end; MB release barcode/catno/date/format/status; census caveat; Discogs parentLabel and release catno/format/year. Unmatched Apple releases omit genre/artist/title fields. Read \`sources.musicbrainz.data.census.firstCredits\` for counts, \`recordingsCounted\` for the denominator, and \`sources.musicbrainz.data.label.labelRelations\` for imprints.`;
 
-const NO_FETCHERS = `**Do not write fetchers.** Never curl MusicBrainz, Discogs, Beatport or Apple for what the evidence command returns: it shares rate limits across workers, retries and caches. Re-run it instead (\`--refresh\` skips the cache).`;
+const NO_FETCHERS = `**Do not write fetchers.** Never curl MusicBrainz, Discogs, Beatport or Apple for what the evidence command returns: it shares rate limits across workers, retries and caches. Use the saved batch evidence for covered sources; the coordinator resumes incomplete collection (\`--refresh\` skips the cache).`;
 
 const RULE_PRECEDENT = rules
   ? `- Artist rules already RATIFIED (the precedent for any rule you propose): read \`${rules}\`\n`
@@ -206,7 +214,9 @@ Fluncle can now carve a mixed label with per-artist FIRST-CREDIT exceptions: kee
 Set \`needsCensus: true\` when the label is genuinely two-sided: mostly DnB with a recurring off-lane act (provisional \`dnb\`), or mostly off-lane with a real DnB minority worth taking (provisional \`dnb_partial\`). Do NOT set it for a clean call either way, for a conflated MBID (ruled by the conflation bullet above), or for a label with too little evidence to count.
 
 ## Method (in order, stop when confident)
-1. **The evidence command, once per label**: ${EVIDENCE_COMMAND}. It returns the MusicBrainz label and a first-credit release sample (the ARTISTS are the strongest genre signal; MB \`tags\`/\`genres\` are usually empty), Discogs per-release styles, Beatport's genre facet and Apple's genre for sampled barcodes. ${EVIDENCE_PATIENCE} Each source carries a \`status\` and its own \`errors\`; \`no_link\` means the MB entity links no page on that site, and Discogs \`candidates\` there are unverified name matches.
+1. **The evidence command, once for your batch**: ${evidenceCommand(`research-${start}`, Math.min(batch, total - start))}. It returns the MusicBrainz label and a first-credit release sample (the ARTISTS are the strongest genre signal; MB \`tags\`/\`genres\` are usually empty), Discogs per-release styles, Beatport's genre facet and Apple's genre for sampled barcodes. ${EVIDENCE_PATIENCE}
+
+${EVIDENCE_SHAPE} Each source carries a \`status\` and its own \`errors\`; \`no_link\` means the MB entity links no page on that site, and Discogs \`candidates\` there are unverified name matches.
 2. ${NO_FETCHERS}
 3. **Web** only for what the evidence leaves open: \`firecrawl search "<label name> drum and bass label"\` or WebSearch, the label's own site, Bandcamp, RA, Juno.
 
@@ -215,6 +225,7 @@ Return one entry per label in your slice via the structured schema. \`evidence\`
 
 const censusBrief = (
   slice,
+  start,
 ) => `You are running the **first-credit census** on mixed crawl-seed labels for **Fluncle**, a drum & bass archive. Phase 1 flagged these labels as two-sided: part in lane, part out. Your job is to count the label exactly and decide whether per-artist exceptions can carve the boundary — or whether it stays a judgment call for the operator.
 
 ## Your labels
@@ -231,7 +242,9 @@ Look each slug up in the JSON array at \`${file}\` for its \`mb_label_id\` (the 
 ${READ_FIRST}
 
 ## Evidence
-Run ${EVIDENCE_COMMAND.replace("--json", "--census --json")} once per label. ${EVIDENCE_PATIENCE} \`musicbrainz.data.census\` counts FIRST credits per artist MBID over DISTINCT recordings exactly as the crawler's artist rules read them (the recording's credit, else the release's; the first entry with an MBID that is not Various Artists), 5-page cap, sampling caveat in \`caveat\`; \`musicbrainz.data.label.labelRelations\` is the imprint check. ${NO_FETCHERS} Artist-level lookups the command does not cover (an act's own catalogue, its Spotify url-rel) may call MusicBrainz directly: \`sleep 1.2\` between calls and always send \`User-Agent: FluncleLabelTriage/1.0 ( https://www.fluncle.com )\`.
+Run ${evidenceCommand(`census-${start}`, slice.length, true)} once for this batch. ${EVIDENCE_PATIENCE}
+
+${EVIDENCE_SHAPE} \`sources.musicbrainz.data.census\` counts FIRST credits per artist MBID over DISTINCT recordings exactly as the crawler's artist rules read them (the recording's credit, else the release's; the first entry with an MBID that is not Various Artists), 5-page cap, sampling caveat in \`caveat\`; \`sources.musicbrainz.data.label.labelRelations\` is the imprint check. ${NO_FETCHERS} Artist-level lookups the command does not cover (an act's own catalogue, its Spotify url-rel) may call MusicBrainz directly: \`sleep 1.2\` between calls and always send \`User-Agent: FluncleLabelTriage/1.0 ( https://www.fluncle.com )\`.
 
 ## Non-negotiable rails
 1. **Imprint child first.** Read \`labelRelations\` in the evidence. If MusicBrainz already models the boundary as a child imprint / sub-label (a DnB imprint of a bigger house), say so in \`imprintChild\` and **propose no rules** — the right move is to rule that MB entity, not to hand-carve artists. Otherwise \`imprintChild: "none"\`.
@@ -282,7 +295,7 @@ if (mixed.length > 0) {
       const slice = mixed.slice(start, start + CENSUS_BATCH);
 
       return () =>
-        agent(censusBrief(slice), {
+        agent(censusBrief(slice, start), {
           effort: "high",
           label: `census ${slice.map((v) => v.slug).join(", ")}`,
           model: "opus",

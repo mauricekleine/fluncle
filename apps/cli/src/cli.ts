@@ -3920,32 +3920,57 @@ JSON field reference:
     .description(
       "Gather a label's MusicBrainz, Discogs, Beatport and Apple evidence for triage (cached, rate-limited)",
     )
-    .argument("<label>", "The label's MusicBrainz MBID, slug, or lbl_… id")
+    .argument("<labels...>", "MusicBrainz MBIDs, slugs, or lbl_… ids (several require --out)")
     .option("--census", "Also count FIRST credits per recording over the label's releases", false)
     .option("--census-pages <n>", "MusicBrainz pages the census may read, 1-5", "5")
     .option("--sources <list>", "Comma list of musicbrainz,discogs,beatport,apple (default all)")
     .option("--refresh", "Ignore cached responses and fetch fresh", false)
-    .option("--json", "Print JSON", false)
+    .option("--out <directory>", "Write each label JSON and summary atomically; print summaries")
+    .option("--manifest <file>", "Append slice states to a shared round JSONL manifest")
+    .option("--json", "Print JSON (single label without --out)", false)
     .action(
       async (
-        input: string,
+        inputs: string[],
         options: {
           census: boolean;
           censusPages: string;
           json: boolean;
           refresh: boolean;
+          out?: string;
+          manifest?: string;
           sources?: string;
         },
       ) => {
         const { labelEvidenceCommand, labelEvidenceLines, parseCensusPages, parseEvidenceSources } =
           await import("./commands/admin-label-evidence");
         const censusPages = parseCensusPages(options.censusPages);
-        const evidence = await labelEvidenceCommand(input, {
+        const evidenceOptions = {
           census: options.census,
           censusPages,
           refresh: options.refresh,
           sources: parseEvidenceSources(options.sources),
-        });
+        };
+        if (options.out) {
+          if (options.json) {
+            throw new Error("Use --out for batch summaries and saved JSON; omit --json");
+          }
+          const { labelEvidenceBatchCommand } =
+            await import("./commands/admin-label-evidence-batch");
+          const result = await labelEvidenceBatchCommand(inputs, {
+            ...evidenceOptions,
+            manifest: options.manifest,
+            out: options.out,
+          });
+          if (!result.ok) {
+            process.exitCode = 1;
+          }
+          console.log(result.lines.join("\n"));
+          return;
+        }
+        if (inputs.length !== 1 || options.manifest) {
+          throw new Error("Several labels or --manifest require --out <directory>");
+        }
+        const evidence = await labelEvidenceCommand(inputs[0] ?? "", evidenceOptions);
 
         if (!evidence.ok) {
           process.exitCode = 1;
@@ -8652,6 +8677,8 @@ function normalizeCommanderError(error: unknown): unknown {
 }
 
 const stringOptions = new Set([
+  "--manifest",
+  "--out",
   "--timeout",
   "--isrc-refresh-limit",
   "--action",

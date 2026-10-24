@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type LabelAdminItem } from "@fluncle/contracts";
@@ -19,6 +19,8 @@ import {
   parseCensusPages,
   parseEvidenceSources,
 } from "./admin-label-evidence";
+
+import { gatherLabelEvidenceBatch } from "./admin-label-evidence-batch";
 
 const LABEL_MBID = "11111111-1111-1111-1111-111111111111";
 const DNB_ACT = "22222222-2222-2222-2222-222222222222";
@@ -692,5 +694,61 @@ describe("parsers", () => {
     expect(lines[0]).toBe(`Test Beats (${LABEL_MBID})`);
     expect(lines.find((line) => line.startsWith("  beatport:"))).toContain("not_configured");
     expect(lines.find((line) => line.startsWith("  discogs:"))).toContain("Drum n Bass 2");
+    expect(lines.join("\n")).toContain("label relations: label ownership: Test Beats Dubs");
+    expect(lines.join("\n")).toContain("release: Roller — Amen Science; catno TB001; 2020-01-01");
+  });
+});
+
+describe("batch evidence files", () => {
+  test("publishes complete summaries and JSON per label, continues after failure, and journals slice completion", async () => {
+    const out = mkdtempSync(join(tmpdir(), "fluncle-evidence-batch-"));
+    dirs.push(out);
+    const manifest = join(out, "round", "manifest.jsonl");
+    const routes = defaultRoutes();
+    for (const [key, route] of Object.entries(routes)) {
+      if (key.includes(LABEL_MBID)) {
+        routes[key.replaceAll(LABEL_MBID, DNB_ACT)] = route;
+      }
+    }
+    const { deps } = setup(routes);
+    const result = await gatherLabelEvidenceBatch(
+      [LABEL_MBID, "missing-label", DNB_ACT],
+      { ...ALL, manifest, out, refresh: false },
+      deps,
+    );
+    expect(result.ok).toBe(false);
+    const events = readFileSync(manifest, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events[0]).toMatchObject({
+      labels: [LABEL_MBID, "missing-label", DNB_ACT],
+      runId: "round",
+      slice: out,
+      state: "started",
+    });
+    expect(events.at(-1)).toMatchObject({ ok: false, state: "completed" });
+    const terminal = events.filter((event) => ["ready", "failed"].includes(event.state));
+    expect(terminal.map((event) => [event.input, event.state])).toEqual([
+      [LABEL_MBID, "ready"],
+      ["missing-label", "failed"],
+      [DNB_ACT, "ready"],
+    ]);
+    expect(terminal[1]).toMatchObject({ path: null });
+    for (const entry of [terminal[0], terminal[2]]) {
+      const evidence = JSON.parse(readFileSync(entry.path, "utf8"));
+      expect(evidence.label.mbLabelId).toBe(entry.id);
+      expect(readFileSync(entry.summaryPath, "utf8")).toContain("Test Beats");
+      expect(entry.sources).toEqual({
+        apple: "ok",
+        beatport: "ok",
+        discogs: "ok",
+        musicbrainz: "ok",
+      });
+    }
+    expect(readdirSync(out).some((name) => name.endsWith(".tmp"))).toBe(false);
+    expect(
+      JSON.parse(readFileSync(join(out, "2.json"), "utf8")).requests.cacheHits,
+    ).toBeGreaterThan(0);
   });
 });
