@@ -250,15 +250,36 @@ describe("the research process", () => {
     expect(args).toContain("--max-turns");
   });
 
-  test("the brief names the skill, the evidence command and every label's exact MBID", () => {
-    const prompt = buildResearchPrompt([label("hospital")], researchConfig({}));
-
-    expect(prompt).toContain(RESEARCH_DEFAULTS.skillPath);
-    expect(prompt).toContain("fluncle admin labels evidence <mb_label_id> --json");
-    expect(prompt).toContain("--census --json");
-    expect(prompt).toContain("Do not write fetchers");
-    expect(prompt).toContain("`mbid-hospital`");
-  });
+  test.each([
+    { count: 1, timeout: 240 },
+    { count: 2, timeout: 480 },
+    { count: 10, timeout: 540 },
+  ])(
+    "the $count-label brief loads readable rulings and collects a bounded batch",
+    ({ count, timeout }) => {
+      const config = researchConfig({});
+      const prompt = buildResearchPrompt(neverLooked(count), config);
+      const skillDir = claudeArgs(config)[claudeArgs(config).indexOf("--add-dir") + 1];
+      expect(prompt).toContain(`${skillDir}/references/worker-rulings.md`);
+      expect(prompt).toContain("once with the file-read tool");
+      expect(prompt).not.toContain(config.skillPath);
+      expect(prompt).toContain("fluncle admin labels evidence <mb_label_id> [<mb_label_id> ...]");
+      expect(prompt).toContain("--out evidence/research --manifest evidence/manifest.jsonl");
+      expect(prompt).toContain("--census --out evidence/census --manifest evidence/manifest.jsonl");
+      expect(prompt.match(/--timeout \d+/g)).toEqual([
+        `--timeout ${timeout}`,
+        `--timeout ${timeout}`,
+      ]);
+      expect(prompt).toContain("Bash tool timeout 600000");
+      expect(prompt).toContain("Read the printed text summaries first");
+      expect(prompt).toContain("Do not write fetchers.");
+      expect(prompt).toContain("A collection failure is not an `unclear` genre ruling.");
+      expect(prompt).not.toContain("--json");
+      for (const item of neverLooked(count)) {
+        expect(prompt).toContain(`\`${item.mbLabelId}\``);
+      }
+    },
+  );
 
   test("reads the structured verdicts and drops malformed rows", () => {
     const reply = parseResearchReply(

@@ -1114,6 +1114,7 @@ export async function gatherLabelEvidence(
   options: LabelEvidenceOptions,
   deps: LabelEvidenceDeps,
 ): Promise<LabelEvidence> {
+  const before = { cacheHits: deps.http.stats.cacheHits, network: deps.http.stats.requests };
   const label = await resolveTarget(input, deps);
   const wants = (source: EvidenceSource) => options.sources.includes(source);
   const needsMb = wants("musicbrainz") || wants("discogs") || wants("beatport") || wants("apple");
@@ -1144,7 +1145,10 @@ export async function gatherLabelEvidence(
     label: { ...label, name: label.name ?? mb.label?.name },
     ok: answered.length > 0,
     partial: answered.length < requested.length || errors.length > 0,
-    requests: { cacheHits: deps.http.stats.cacheHits, network: deps.http.stats.requests },
+    requests: {
+      cacheHits: deps.http.stats.cacheHits - before.cacheHits,
+      network: deps.http.stats.requests - before.network,
+    },
     sources,
   };
 }
@@ -1213,22 +1217,19 @@ export function defaultBeatportScraper(
   return env.firecrawlBinary ? firecrawlCliScraper(env.firecrawlBinary) : null;
 }
 
-export async function labelEvidenceCommand(
-  input: string,
-  options: LabelEvidenceOptions & { refresh: boolean },
-): Promise<LabelEvidence> {
+export async function createLabelEvidenceDeps(refresh: boolean): Promise<LabelEvidenceDeps> {
   const [{ readOptionalEnv }, { resolveLabel }] = await Promise.all([
     import("../env"),
     import("./admin-labels"),
   ]);
-  const http = createEvidenceHttp({ deadline: deadlineAt(), refresh: options.refresh });
+  const http = createEvidenceHttp({ deadline: deadlineAt(), refresh });
   const discogsToken = readOptionalEnv("DISCOGS_USER_TOKEN");
 
   if (discogsToken) {
     http.policies = { ...http.policies, discogs: { ...http.policies.discogs, intervalMs: 1_100 } };
   }
 
-  return gatherLabelEvidence(input, options, {
+  return {
     discogsToken,
     http,
     resolveLabel,
@@ -1239,7 +1240,14 @@ export async function labelEvidenceCommand(
       },
       http,
     ),
-  });
+  };
+}
+
+export async function labelEvidenceCommand(
+  input: string,
+  options: LabelEvidenceOptions & { refresh: boolean },
+): Promise<LabelEvidence> {
+  return gatherLabelEvidence(input, options, await createLabelEvidenceDeps(options.refresh));
 }
 
 function countLine(counts: Count[], limit: number): string {
@@ -1247,6 +1255,27 @@ function countLine(counts: Count[], limit: number): string {
     .slice(0, limit)
     .map((entry) => `${entry.name} ${entry.count}`)
     .join(", ");
+}
+
+function musicbrainzDetailLines(mb: MusicBrainzEvidence | undefined): string[] {
+  const lines: string[] = [];
+  if (mb?.label?.labelRelations.length) {
+    lines.push(
+      `    label relations: ${mb.label.labelRelations.map((relation) => `${relation.type}: ${relation.name} (${relation.mbid})`).join("; ")}`,
+    );
+  }
+  if (mb?.census) {
+    lines.push(
+      `    first credits: ${mb.census.firstCredits.map((credit) => `${credit.artistName} (${credit.artistMbid}) ${credit.recordings}`).join("; ")}; uncredited ${mb.census.uncreditedRecordings}`,
+    );
+  }
+  for (const release of mb?.releases?.releases ?? []) {
+    lines.push(
+      `    release: ${release.artist} — ${release.title}; catno ${release.catno ?? "none"}; ${release.date ?? "undated"}`,
+    );
+  }
+
+  return lines;
 }
 
 export function labelEvidenceLines(evidence: LabelEvidence): string[] {
@@ -1263,7 +1292,7 @@ export function labelEvidenceLines(evidence: LabelEvidence): string[] {
   }
   if (mb?.releases) {
     const top = mb.releases.firstCreditArtists
-      .slice(0, 6)
+      .slice(0, FIRST_CREDIT_ARTISTS)
       .map((artist) => `${artist.name} ${artist.releases}`)
       .join(", ");
     mbParts.push(`${mb.releases.releaseCount} releases; first credits: ${top || "none"}`);
@@ -1276,6 +1305,8 @@ export function labelEvidenceLines(evidence: LabelEvidence): string[] {
   lines.push(
     `  musicbrainz: ${musicbrainz.status}${mbParts.length ? ` — ${mbParts.join("; ")}` : ""}`,
   );
+
+  lines.push(...musicbrainzDetailLines(mb));
 
   const dg = discogs.data;
   const dgDetail = dg?.styles

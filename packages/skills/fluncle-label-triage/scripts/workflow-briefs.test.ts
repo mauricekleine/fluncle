@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SKILL_PATH = ".agents/skills/fluncle-label-triage/SKILL.md";
+const SKILL_PATH = ".agents/skills/fluncle-label-triage/references/worker-rulings.md";
 
 type Verdict = Record<string, unknown>;
 
@@ -55,6 +55,7 @@ async function runWorkflow(
     disabled: "/d.txt",
     enabled: "/e.txt",
     file: "/u.json",
+    roundDir: "/state/label-triage/round-42",
     rules: "/r.txt",
     total: 3,
     ...extra,
@@ -79,38 +80,62 @@ const mixed: Verdict = {
 };
 
 describe("worker briefs", () => {
-  test("every research and census brief names the skill by path and hands out the evidence command", async () => {
-    const briefs = await renderBriefs("triage-workflow.js", [mixed]);
+  for (const script of ["triage-workflow.js", "verify-workflow.js"]) {
+    test(`${script} supplies one batch command, a durable manifest and a short rulings reference`, async () => {
+      const briefs = await renderBriefs(script, [mixed]);
+      expect(briefs).toHaveLength(script === "triage-workflow.js" ? 3 : 2);
+      for (const brief of briefs) {
+        expect(brief).toContain(SKILL_PATH);
+        expect(brief).toContain("once with the file-read tool");
+        expect(brief).not.toContain("fluncle-label-triage/SKILL.md");
+        expect(brief).toContain("fluncle admin labels evidence <mb_label_id> [<mb_label_id> ...]");
+        expect(brief).toContain("--out '/state/label-triage/round-42/");
+        expect(brief).toContain("--manifest '/state/label-triage/round-42/manifest.jsonl'");
+        expect(brief).toContain("Read the printed text summaries first");
+        expect(brief).toContain("blocking completion tool");
+        expect(brief).toContain("Do not write fetchers.");
+        expect(brief).toContain("A collection failure is not an `unclear` genre ruling.");
+        expect(brief).toContain("sources.<name>");
+        expect(brief).toContain("ok|partial|error|no_link|not_configured|skipped");
+        expect(brief).toContain("Nullable:");
+        expect(brief).not.toContain("--json");
+        expect(brief).not.toContain("ws/2/release?label=");
+      }
+      expect(briefs.at(-1)).toContain("--census");
+    });
+  }
 
-    expect(briefs.length).toBe(3);
-    for (const brief of briefs) {
-      expect(brief).toContain(SKILL_PATH);
-      expect(brief).toContain("fluncle admin labels evidence <mb_label_id>");
-      expect(brief).toContain("Do not write fetchers.");
-      expect(brief).toContain("A call that stops at its deadline is a queue, not evidence");
-      expect(brief).toContain("`timeout` to 300000");
-      expect(brief).toContain("one after another, never several at once");
-      expect(brief).toContain("stops itself after 240 s with exit code 124");
-      expect(brief).toContain("Never rule a label `unclear` because the command had not returned.");
-      expect(brief).not.toContain("ws/2/release?label=");
-    }
-    expect(briefs.at(-1)).toContain("--census --json");
-  });
+  for (const script of ["triage-workflow.js", "verify-workflow.js"]) {
+    test(`${script} requires a durable roundDir`, async () => {
+      await expect(runWorkflow(script, [], { roundDir: undefined })).rejects.toThrow(
+        "roundDir must name a durable round directory outside session scratch",
+      );
+    });
 
-  test("every verify brief names the skill by path and hands out the evidence command", async () => {
-    const briefs = await renderBriefs("verify-workflow.js", []);
+    test(`${script} scales each slice deadline below the Bash tool timeout`, async () => {
+      const research = Array.from({ length: 6 }, (_, index) => ({
+        ...mixed,
+        slug: `mixed-${index}`,
+      }));
+      const { briefs } = await runWorkflow(script, research, {
+        batch: 10,
+        censusBatch: 5,
+        total: 12,
+      });
+      expect(briefs.map((brief) => Number(/--timeout (\d+)/.exec(brief)?.[1]))).toEqual(
+        script === "triage-workflow.js" ? [540, 480, 540, 240] : [540, 480],
+      );
+      for (const brief of briefs) {
+        expect(brief).toContain("Bash tool timeout 600000");
+      }
+    });
+  }
 
-    expect(briefs.length).toBe(2);
-    for (const brief of briefs) {
-      expect(brief).toContain(SKILL_PATH);
-      expect(brief).toContain("fluncle admin labels evidence <mb_label_id> --census --json");
-      expect(brief).toContain("A call that stops at its deadline is a queue, not evidence");
-      expect(brief).toContain("`timeout` to 300000");
-      expect(brief).toContain("one after another, never several at once");
-      expect(brief).toContain("stops itself after 240 s with exit code 124");
-      expect(brief).toContain("Never rule a label `unclear` because the command had not returned.");
-      expect(brief).not.toContain("ws/2/release?label=");
-    }
+  test("the worker rulings fit in one short file read", () => {
+    const text = readFileSync(join(import.meta.dir, "../references/worker-rulings.md"), "utf8");
+    expect(Buffer.byteLength(text)).toBeLessThan(5000);
+    expect(text).toContain("## Standing boundary");
+    expect(text).toContain("## Oracle ladder");
   });
 
   for (const script of ["triage-workflow.js", "verify-workflow.js"]) {
