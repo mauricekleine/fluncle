@@ -47,7 +47,14 @@ describe("follow digest contract", () => {
       await import("./follow-digest-tokens");
     const { handleOrpc } = await import("./orpc");
     await seedUser(db, { email: "one@example.com", id: "one" });
-    const user = { createdAt: "2026-01-01T00:00:00.000Z", id: "one", username: "one" };
+    const user = {
+      createdAt: "2026-01-01T00:00:00.000Z",
+      email: "one@example.com",
+      emailVerified: true,
+      id: "one",
+      name: "one",
+      username: "one",
+    };
     requirePublicUser.mockResolvedValue(user);
     const oldManage = await createFollowDigestToken("one", "manage");
     const response = await handleOrpc(
