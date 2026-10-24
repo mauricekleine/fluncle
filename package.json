@@ -110,10 +110,6 @@
     "bun": ">=1.4.4"
   },
   "packageManager": "bun@1.4.4",
-  "// audit": {
-    "GHSA-27r3-jxmh-p828": "Temporary: body-parser 2.3.0 is only used by Shadcn development tooling through @modelcontextprotocol/sdk and Express, not the production Worker. Update body-parser within Express's range and remove this ignore after 2.4.0 (and 1.20.9 if needed) pass the three-day release-age gate on 2026-10-25 at 11:40 UTC.",
-    "GHSA-mrhx-c7xc-m3w5": "Only Zod 3.25.76 remains affected, through @expo/cli and Shadcn development tooling; there is no patched 3.x release. All Zod 4 copies resolve to 4.6.7. Remove this ignore when both consumers accept patched Zod or a patched 3.x release is available and mature."
-  },
   "// overrides": {
     "@cloudflare/config>zod": "Drop when @cloudflare/config requires Zod 4.6.6 or newer instead of pinning 4.4.3.",
     "@modelcontextprotocol/sdk": "Drop when shadcn requires SDK 1.32.0 or newer; keep the root-export patch keyed to the resolved SDK version until upstream #2273 is fixed.",
