@@ -78,6 +78,7 @@ Use the globally installed `mk-agent-orchestration` skill for provider, model, e
 ## Quality Checks
 
 - Before a commit or handoff, use `bun run quality:classify -- --base <sha> --head <sha>` to identify affected leaves and run their checks. Unknown paths, lockfiles, root configuration, workflow topology, and scheduled/manual runs select the full matrix; worktree setup selects static policy only.
+- MUST: Start long local gates once in the harness background, wait on their job handle or completion event, then read the receipt; use that result for unchanged source instead of supervising logs or processes.
 - Edit hooks format the touched file. Quality Checks owns the full matrix; `deploy:gate` checks what the Worker build deploys. For docs-only changes, verify formatting, links, and readability.
 - Read [docs/development.md#quality-checks](./docs/development.md#quality-checks) for package-specific commands; read [docs/quality-system.md](./docs/quality-system.md) before changing CI, the classifier, or deploy verification.
 - Use guards, early returns, `??`, or `?.` instead of TypeScript non-null assertions, enforced by lint.
