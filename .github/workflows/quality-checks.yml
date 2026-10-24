@@ -27,11 +27,14 @@ jobs:
   pr_state:
     name: PR readiness
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     permissions:
       pull-requests: read
+      contents: read
+      actions: read
     outputs:
       run: ${{ steps.live.outputs.run }}
+      reused: ${{ steps.reuse.outputs.reused }}
     steps:
       - name: Read live PR draft state
         id: live
@@ -56,13 +59,27 @@ jobs:
           echo "payload_draft=$PAYLOAD_DRAFT live_draft=$live_draft run=$run"
           echo "run=$run" >> "$GITHUB_OUTPUT"
 
+      - name: Checkout main proof resolver
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reuse successful PR tree proof on main
+        id: reuse
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/quality/source-proof.mjs assess
+
   core:
     name: Selected quality lanes
     outputs:
       turbo_cache_key: ${{ steps.turbo_cache.outputs.cache-primary-key }}
       cargo_cache_key: ${{ steps.cargo_cache.outputs.cache-primary-key }}
     needs: pr_state
-    if: ${{ !cancelled() && needs.pr_state.outputs.run != 'false' }}
+    if: ${{ !cancelled() && needs.pr_state.outputs.run != 'false' && needs.pr_state.outputs.reused != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -227,11 +244,15 @@ jobs:
         run: node scripts/quality/report-run.mjs --plan "$RUNNER_TEMP/quality-plan.json" --metrics "$RUNNER_TEMP/quality-metrics.jsonl" --job core --cache-hit "$CACHE_HIT"
 
   e2e:
-    name: Public flows when selected
+    name: Public flows when selected (${{ matrix.shard }}/4)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     outputs:
       playwright_cache_key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
     needs: pr_state
-    if: ${{ !cancelled() && needs.pr_state.outputs.run != 'false' }}
+    if: ${{ !cancelled() && needs.pr_state.outputs.run != 'false' && needs.pr_state.outputs.reused != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -258,6 +279,11 @@ jobs:
       - name: Skip non-web changes
         if: steps.classify.outputs.e2e != 'true'
         run: echo "Public-web E2E is outside this dependency closure."
+
+      - name: Start E2E shard report
+        if: steps.classify.outputs.e2e == 'true'
+        run: |
+          printf '%s\n' "## Public flow shard ${{ matrix.shard }}/4" "" "| Lane | Outcome | Duration |" "| --- | --- | ---: |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup Bun
         if: steps.classify.outputs.e2e == 'true'
@@ -304,52 +330,52 @@ jobs:
 
       - name: Run the full deterministic public-web contract
         if: steps.classify.outputs.e2e == 'true'
-        run: node scripts/quality/measure.mjs --lane e2e --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane e2e
+        run: node scripts/quality/measure.mjs --lane e2e-${{ matrix.shard }}/4 --metrics "$RUNNER_TEMP/quality-metrics.jsonl" -- node scripts/quality/run-lane.mjs --plan "$RUNNER_TEMP/quality-plan.json" --lane e2e --shard ${{ matrix.shard }}/4
 
       - name: Save Playwright browsers from main
-        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true' && steps.playwright_cache.outputs.cache-hit != 'true'
+        if: success() && matrix.shard == 1 && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true' && steps.playwright_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
           path: ~/.cache/ms-playwright
 
       - name: Upload front-door journey evidence
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true'
+        if: always() && steps.classify.outputs.e2e == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          if-no-files-found: error
+          if-no-files-found: ignore
           include-hidden-files: true
-          name: front-door-scroll
+          name: front-door-scroll-${{ matrix.shard }}
           path: apps/web/.dev/front-door/
           retention-days: 30
 
       - name: Upload track journey evidence
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true'
+        if: always() && steps.classify.outputs.e2e == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          if-no-files-found: error
+          if-no-files-found: ignore
           include-hidden-files: true
-          name: track-journey
+          name: track-journey-${{ matrix.shard }}
           path: apps/web/.dev/track-journey/
           retention-days: 30
 
       - name: Upload search journey evidence
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true'
+        if: always() && steps.classify.outputs.e2e == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          if-no-files-found: error
+          if-no-files-found: ignore
           include-hidden-files: true
-          name: search-surface
+          name: search-surface-${{ matrix.shard }}
           path: apps/web/.dev/search/
           retention-days: 30
 
       - name: Upload discovery event evidence
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.e2e == 'true'
+        if: always() && steps.classify.outputs.e2e == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          if-no-files-found: error
+          if-no-files-found: ignore
           include-hidden-files: true
-          name: discovery-events
+          name: discovery-events-${{ matrix.shard }}
           path: apps/web/.dev/discovery-events/
           retention-days: 30
 
@@ -358,7 +384,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           include-hidden-files: true
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: |
             apps/web/playwright-report/
             apps/web/test-results/
@@ -367,13 +393,13 @@ jobs:
 
       - name: Report E2E duration and projection
         if: always() && steps.classify.outputs.e2e == 'true'
-        run: node scripts/quality/report-run.mjs --plan "$RUNNER_TEMP/quality-plan.json" --metrics "$RUNNER_TEMP/quality-metrics.jsonl" --job e2e --cache-hit "${{ steps.playwright_cache.outputs.cache-hit || 'miss' }}"
+        run: node scripts/quality/report-run.mjs --plan "$RUNNER_TEMP/quality-plan.json" --metrics "$RUNNER_TEMP/quality-metrics.jsonl" --job e2e-${{ matrix.shard }}/4 --cache-hit "${{ steps.playwright_cache.outputs.cache-hit || 'miss' }}"
 
   cache_cleanup:
     name: Retain current main cache snapshots
     continue-on-error: true
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [core, e2e]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.pr_state.outputs.reused != 'true'
+    needs: [pr_state, core, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -405,8 +431,10 @@ jobs:
     timeout-minutes: 35
     permissions:
       actions: read
+      contents: read
     steps:
       - name: Hold the stable protected result
+        if: needs.pr_state.outputs.reused != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -416,13 +444,13 @@ jobs:
           set -euo pipefail
           for ((attempt = 0; attempt < 120; attempt++)); do
             jobs=$(gh api --paginate --slurp "repos/$GH_REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100")
-            lanes=$(jq '[.[].jobs[] | select(.name == "Selected quality lanes" or .name == "Public flows when selected")]' <<< "$jobs")
+            lanes=$(jq '[.[].jobs[] | select(.name == "Selected quality lanes" or (.name | test("^Public flows when selected \\([1-4]/4\\)$")))]' <<< "$jobs")
             if jq -e 'any(.[]; .status == "completed" and .conclusion != "success")' <<< "$lanes" > /dev/null; then
-              echo "::error::Selected quality lanes did not both succeed: $lanes"
+              echo "::error::Selected quality lanes did not all succeed: $lanes"
               exit 1
             fi
-            if jq -e 'length == 2 and ([.[].name] | unique | length == 2) and all(.[]; .status == "completed" and .conclusion == "success")' <<< "$lanes" > /dev/null; then
-              echo "Both selected quality owners succeeded in run $RUN_ID attempt $RUN_ATTEMPT."
+            if jq -e 'length == 5 and ([.[].name] | unique | length == 5) and all(.[]; .status == "completed" and .conclusion == "success")' <<< "$lanes" > /dev/null; then
+              echo "Core and all four E2E owners succeeded in run $RUN_ID attempt $RUN_ATTEMPT."
               exit 0
             fi
             echo "Waiting for selected quality owners: $lanes"
@@ -430,3 +458,28 @@ jobs:
           done
           echo "::error::Timed out waiting for selected quality owners."
           exit 1
+
+      - name: Report reused PR validation
+        if: needs.pr_state.outputs.reused == 'true'
+        run: echo "Core and E2E reuse the matching PR tree proof reported by PR readiness."
+
+      - name: Checkout executed PR tree
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind successful lanes to the executed PR tree
+        id: proof
+        if: github.event_name == 'pull_request'
+        run: node scripts/quality/source-proof.mjs create "$RUNNER_TEMP/quality-source-proof.json"
+
+      - name: Upload PR tree proof
+        if: steps.proof.outputs.created == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: quality-source-proof
+          path: ${{ runner.temp }}/quality-source-proof.json
+          retention-days: 7
+          if-no-files-found: error

@@ -12,6 +12,8 @@ function parseArguments(argv) {
     const argument = argv[index];
     if (argument === "--lane") {
       parsed.lane = argv[++index];
+    } else if (argument === "--shard") {
+      parsed.shard = argv[++index] ?? "";
     } else if (argument === "--plan") {
       parsed.planPath = argv[++index];
     } else {
@@ -21,14 +23,35 @@ function parseArguments(argv) {
   if (!parsed.lane || !parsed.planPath) {
     throw new Error("Usage: run-lane.mjs --plan <plan.json> --lane <lane>");
   }
+  validateShard(parsed.lane, parsed.shard);
   return parsed;
+}
+
+function validateShard(lane, shard) {
+  if (shard === undefined) {
+    return;
+  }
+  const match = /^(\d+)\/(\d+)$/.exec(shard);
+  if (
+    lane !== "e2e" ||
+    !match ||
+    Number(match[1]) < 1 ||
+    Number(match[1]) > Number(match[2]) ||
+    !Number.isSafeInteger(Number(match[1])) ||
+    !Number.isSafeInteger(Number(match[2]))
+  ) {
+    throw new Error(
+      "--shard must be N/total with positive safe integers and N <= total, for e2e only",
+    );
+  }
 }
 
 function command(program, args, options = {}) {
   return { args, options, program };
 }
 
-export function commandsForLane(plan, lane) {
+export function commandsForLane(plan, lane, shard) {
+  validateShard(lane, shard);
   if (lane === "static") {
     return plan.lanes.static
       ? [command("bun", ["run", "lint"]), command("bun", ["run", "format:check"])]
@@ -116,7 +139,17 @@ export function commandsForLane(plan, lane) {
   }
 
   if (lane === "e2e") {
-    return plan.lanes.e2e ? [command("bun", ["run", "--cwd", "apps/web", "test:e2e"])] : [];
+    return plan.lanes.e2e
+      ? [
+          command("bun", [
+            "run",
+            "--cwd",
+            "apps/web",
+            "test:e2e",
+            ...(shard ? [`--shard=${shard}`] : []),
+          ]),
+        ]
+      : [];
   }
 
   throw new Error(`Unknown lane: ${lane}`);
@@ -164,8 +197,8 @@ function run(commandDefinition) {
   });
 }
 
-export async function runLane(plan, lane) {
-  const commands = commandsForLane(plan, lane);
+export async function runLane(plan, lane, shard) {
+  const commands = commandsForLane(plan, lane, shard);
   if (commands.length === 0) {
     process.stdout.write(`quality lane ${lane}: not selected\n`);
     return 0;
@@ -187,7 +220,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   try {
     const options = parseArguments(process.argv.slice(2));
     const plan = JSON.parse(readFileSync(options.planPath, "utf8"));
-    process.exitCode = await runLane(plan, options.lane);
+    process.exitCode = await runLane(plan, options.lane, options.shard);
   } catch (error) {
     process.stderr.write(
       `quality lane: ${error instanceof Error ? error.message : String(error)}\n`,

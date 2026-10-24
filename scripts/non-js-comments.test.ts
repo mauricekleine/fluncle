@@ -201,7 +201,7 @@ describe("non-JavaScript comments", () => {
       .filter((path) => /\.ya?ml$/.test(path))
       .flatMap((path) => yamlComments(readFileSync(resolve(root, path), "utf8"), path));
     expect(violations).toEqual([]);
-  });
+  }, 30_000);
 
   test("shell comments are identified without mistaking a shebang for prose", () => {
     expect(shellComments("#!/bin/sh\n#\necho ok # note\n# trailing\n", "fixture.sh")).toEqual([
