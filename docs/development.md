@@ -59,7 +59,7 @@ cd packages/ui && bunx --bun shadcn@latest add dialog
 - Rust app changes (`apps/sonar` the vector engine): `cargo fmt --manifest-path apps/sonar/Cargo.toml --check`, `cargo clippy --manifest-path apps/sonar/Cargo.toml --all-targets -- -D warnings`, and `cargo test --manifest-path apps/sonar/Cargo.toml`.
 - Video package changes: `bun run --cwd packages/video typecheck`.
 - NEVER: Use the TypeScript non-null assertion operator (`!`). Narrow with a guard, early return, `??`, or `?.`. Enforced as an error by oxlint (`typescript/no-non-null-assertion`).
-- SHOULD: Run focused checks first, then broader root checks when the change has cross-package or user-facing risk.
+- SHOULD: Start with `bun run verify [paths...]` from the root; omit paths for the diff against `origin/main`, or use `--full` for the existing `check` gate. See [local checks](./quality-system.md#local-checks) for affected-test selection and the completion receipt.
 - SHOULD: For docs-only changes, verify formatting/readability instead of running full test suites unless docs generation is affected.
 
 ## Dependencies
