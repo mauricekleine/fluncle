@@ -967,6 +967,26 @@ describe("crawl admission phases", () => {
     expect(row.rows[0]?.note).toBe("musicbrainz rate-limited");
   });
 
+  it("keeps an unreachable release pending rather than skipping it as absent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("socket closed"))),
+    );
+
+    const fetched = await prepareAndFetch();
+    const receipt = await commitCrawlPhase(fetched);
+
+    expect(receipt).toMatchObject({
+      outcome: "committed",
+      result: { failed: 1, rateLimited: true },
+    });
+    const row = await db.execute(
+      "select state, failures from crawl_frontier where id = 'musicbrainz:release:release-phase'",
+    );
+    expect(row.rows[0]?.state).toBe("pending");
+    expect(Number(row.rows[0]?.failures)).toBe(0);
+  });
+
   it("charges a failure for a provider failure that is not a throttle", async () => {
     vi.stubGlobal(
       "fetch",

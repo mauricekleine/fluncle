@@ -217,14 +217,44 @@ describe("what one read comes back as", () => {
     }
   });
 
-  it("reports a network error as empty rather than a throttle", async () => {
+  it("retries a network error and reports a persistent one as unreachable, never as empty", async () => {
+    const outcomes: string[] = [];
+    let calls = 0;
     expect(
       await fetchMusicbrainz("https://musicbrainz.org/ws/2/release/x?fmt=json", {
-        fetch: () => Promise.reject(new Error("socket closed")),
+        fetch: () => {
+          calls += 1;
+          return Promise.reject(new Error("socket closed"));
+        },
+        intervalMs: 0,
+        onAttempt: (attempt) => outcomes.push(attempt.outcome),
+        stateDir,
+      }),
+    ).toMatchObject({ outcome: "unreachable" });
+    expect(calls).toBe(3);
+    expect(outcomes).toEqual(["network_error", "network_error", "unreachable"]);
+  });
+
+  it("recovers when a retried network error is followed by a body", async () => {
+    let calls = 0;
+    expect(
+      await fetchMusicbrainz("https://musicbrainz.org/ws/2/release/x?fmt=json", {
+        fetch: () => {
+          calls += 1;
+          return calls === 1
+            ? Promise.reject(new Error("socket closed"))
+            : Promise.resolve(jsonResponse({ id: "x" }));
+        },
         intervalMs: 0,
         stateDir,
       }),
-    ).toMatchObject({ outcome: "empty" });
+    ).toMatchObject({ body: { id: "x" }, outcome: "body" });
+  });
+
+  it("reports a persistent server error as unreachable, never as empty", async () => {
+    expect(await read(new Response("", { status: 502 }))).toMatchObject({
+      outcome: "unreachable",
+    });
   });
 });
 

@@ -144,6 +144,7 @@ const NAMED_CAUSE: Record<string, string> = {
   friday_window: "friday_window",
   label_gate: "label_gate",
   mb_throttled: "vendor_gate",
+  mb_unreachable: "vendor_unreachable",
   no_storable_work: "no_storable_work",
   paid_result_recovery: "paid_result_recovery",
   quota_hold: "quota_hold",

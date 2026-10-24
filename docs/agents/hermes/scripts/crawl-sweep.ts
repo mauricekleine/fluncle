@@ -98,6 +98,7 @@ type SweepSummary = {
     | "due_work_repair_pending"
     | "label_gate"
     | "mb_throttled"
+    | "mb_unreachable"
     | "no_storable_work"
     | null;
 
@@ -134,6 +135,7 @@ type SweepSummary = {
   throttled: boolean;
 
   throttles: number;
+  unreachable: number;
   tracksFound: number;
 
   tracksHeldImplausible: number;
@@ -394,6 +396,7 @@ function createSummary(): SweepSummary {
     tracksSkippedHeld: 0,
     tracksSkippedLabelGate: 0,
     tracksWritten: 0,
+    unreachable: 0,
   };
 }
 
@@ -421,6 +424,9 @@ export function blockedReason(
   if (summary.reason === "database_admission") {
     return "database_admission";
   }
+  if (summary.reason === "musicbrainz_unreachable") {
+    return "mb_unreachable";
+  }
   if (summary.reason === "musicbrainz_throttle" || summary.throttled) {
     return "mb_throttled";
   }
@@ -434,6 +440,7 @@ export function blockedReason(
 }
 
 function finishSummary(summary: SweepSummary): void {
+  recordUnreachableFailure(summary);
   summary.blockedReason = blockedReason(summary);
   summary.leases = admittedPhaseCount;
   Object.assign(summary, summariseItemTiming(itemTiming) ?? {});
@@ -483,6 +490,17 @@ function recordRepairPending(summary: SweepSummary): void {
   summary.reason = gate.reason;
   summary.throttled = gate.throttled;
   log("crawl pass paused: due-work repair is still converging");
+}
+
+function recordUnreachableFailure(summary: SweepSummary): void {
+  if (summary.unreachable === 0 || summary.expanded > 0 || summary.error !== null) {
+    return;
+  }
+  summary.reason = "musicbrainz_unreachable";
+  summary.ok = false;
+  summary.errors = 1;
+  summary.error = `MusicBrainz unreachable from the box (${summary.unreachable} read(s) failed after retries)`;
+  log(`crawl pass failed: ${summary.error}`);
 }
 
 function recordThrottleBudgetStop(summary: SweepSummary): void {
@@ -627,6 +645,19 @@ function commitFetched(
   }
 }
 
+function suppliedForServer(
+  supplied: readonly MusicbrainzFetchResult[],
+  summary: Pick<SweepSummary, "unreachable">,
+): MusicbrainzFetchResult[] {
+  return supplied.map((entry) => {
+    if (entry.outcome !== "unreachable") {
+      return entry;
+    }
+    summary.unreachable += 1;
+    return { outcome: "throttled", url: entry.url };
+  });
+}
+
 async function supplyProviderBodies(
   plan: CrawlFetchPlan | undefined,
   nodeKind: "artist" | "label" | "release" | undefined,
@@ -640,7 +671,7 @@ async function supplyProviderBodies(
     const supplied = await runCrawlFetchPlan(plan, {
       onAttempt: (attempt) => recordBoxAttempt(summary, plan, nodeKind, attempt),
     });
-    return supplied;
+    return suppliedForServer(supplied, summary);
   } catch (error) {
     log(
       `box musicbrainz read unavailable: ${error instanceof Error ? error.message : String(error)}`,

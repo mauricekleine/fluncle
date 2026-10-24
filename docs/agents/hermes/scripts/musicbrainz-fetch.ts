@@ -28,6 +28,8 @@ const LOCK_WAIT_MS = 10_000;
 
 const MAX_RETRY_AFTER_MS = 60_000;
 
+const UNREACHABLE_RETRY_INTERVALS = 2;
+
 export function musicbrainzStateDir(): string {
   return process.env.FLUNCLE_MUSICBRAINZ_STATE_DIR ?? join(homedir(), ".musicbrainz");
 }
@@ -131,7 +133,7 @@ export async function deferMusicbrainzBudget(
 
 export type MusicbrainzFetchResult = {
   body?: unknown;
-  outcome: "body" | "empty" | "invalid" | "oversize" | "throttled";
+  outcome: "body" | "empty" | "invalid" | "oversize" | "throttled" | "unreachable";
   url: string;
 };
 
@@ -159,6 +161,18 @@ export async function fetchMusicbrainz(
   const stateDir = options.stateDir ?? musicbrainzStateDir();
   const intervalMs = options.intervalMs ?? MB_MIN_REQUEST_INTERVAL_MS;
   const fetchFn = options.fetch ?? globalThis.fetch;
+  const retryUnreachable = async (
+    attempt: number,
+    retryOutcome: string,
+  ): Promise<MusicbrainzFetchResult | undefined> => {
+    if (attempt === MB_ATTEMPTS - 1) {
+      options.onAttempt?.({ outcome: "unreachable", url });
+      return { outcome: "unreachable", url };
+    }
+    options.onAttempt?.({ outcome: retryOutcome, url });
+    await sleep(intervalMs * UNREACHABLE_RETRY_INTERVALS);
+    return undefined;
+  };
 
   for (let attempt = 0; attempt < MB_ATTEMPTS; attempt += 1) {
     await reserveMusicbrainzSlot(stateDir, intervalMs);
@@ -171,8 +185,11 @@ export async function fetchMusicbrainz(
         signal: AbortSignal.timeout(MB_REQUEST_TIMEOUT_MS),
       });
     } catch {
-      options.onAttempt?.({ outcome: "network_error", url });
-      return { outcome: "empty", url };
+      const gaveUp = await retryUnreachable(attempt, "network_error");
+      if (gaveUp) {
+        return gaveUp;
+      }
+      continue;
     }
 
     if (response.status >= 300 && response.status < 400) {
@@ -195,6 +212,14 @@ export async function fetchMusicbrainz(
       continue;
     }
 
+    if (response.status >= 500) {
+      const gaveUp = await retryUnreachable(attempt, `retry_${response.status}`);
+      if (gaveUp) {
+        return gaveUp;
+      }
+      continue;
+    }
+
     if (!response.ok) {
       options.onAttempt?.({ outcome: `http_${response.status}`, url });
       return { outcome: "empty", url };
@@ -204,8 +229,8 @@ export async function fetchMusicbrainz(
     try {
       text = await response.text();
     } catch {
-      options.onAttempt?.({ outcome: "network_error", url });
-      return { outcome: "empty", url };
+      options.onAttempt?.({ outcome: "unreachable", url });
+      return { outcome: "unreachable", url };
     }
     if (Buffer.byteLength(text, "utf8") > MB_MAX_BODY_BYTES) {
       options.onAttempt?.({ outcome: "oversize", url });
