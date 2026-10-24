@@ -217,11 +217,6 @@ function focusedSteps(plan, changed) {
   }
   const packages = readPackageGraph(root);
   const owners = [...packages.values()].filter((pkg) => plan.packages.includes(pkg.name));
-  for (const pkg of owners) {
-    if (pkg.path === "apps/raycast") {
-      steps.push(step("lint:apps/raycast", "bun", ["run", "lint"], pkg.path));
-    }
-  }
   const native = ["go-ssh", "go-dns", "sonar"].flatMap((lane) => leafSteps(plan, lane));
   steps.push(
     ...native.filter(

@@ -74,6 +74,10 @@ const path = require("node:path");
 const args = process.argv.slice(2);
 const stage = args[0] === "test" ? "test" : args[1];
 const root = process.env.FIXTURE_ROOT;
+if (stage === "lint" && process.cwd() === path.join(root, "apps/raycast")) {
+  console.error("typescript-eslint does not support TS 7.0.");
+  process.exit(2);
+}
 if (["format:check", "lint"].includes(stage) && (args.includes("--list-files") || fs.existsSync(path.join(root, ".turbo/real-static")))) {
   const argv = stage === "format:check"
     ? ["fmt", "--check", ...args.slice(2)]
@@ -170,7 +174,7 @@ for (const [label, path, content, owner] of [
     "value = 1\n",
     "label-triage-python",
   ],
-  ["Raycast", "apps/raycast/src/example.ts", "export const value = 1;\n", "lint:apps/raycast"],
+  ["Raycast", "apps/raycast/src/example.ts", "export const value = 1;\n", "typecheck:apps/raycast"],
   [
     "ignored skills",
     ".agents/skills/fluncle-example/scripts/helper.ts",
@@ -188,7 +192,7 @@ for (const [label, path, content, owner] of [
         "apps/raycast/package.json",
         JSON.stringify({
           name: "@fluncle/raycast",
-          scripts: { lint: "ray lint" },
+          scripts: { lint: "ray lint", test: "bun test", typecheck: "bun --check" },
         }),
       );
     }
@@ -205,6 +209,10 @@ for (const [label, path, content, owner] of [
     }
     if (owner) {
       expect(lanes).toContain(owner);
+    }
+    if (label === "Raycast") {
+      expect(lanes).toContain("test:apps/raycast");
+      expect(lanes).not.toContain("lint:apps/raycast");
     }
   });
 }
