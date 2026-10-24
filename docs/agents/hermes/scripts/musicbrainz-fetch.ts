@@ -7,8 +7,10 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { request } from "node:https";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 
 export const MB_USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
 
@@ -144,6 +146,53 @@ export type MusicbrainzFetchOptions = {
   stateDir?: string;
 };
 
+function requestOverIpv6(url: string, init: RequestInit = {}): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const outgoing = request(
+      url,
+      {
+        family: 6,
+        headers: Object.fromEntries(new Headers(init.headers)),
+        method: init.method ?? "GET",
+        signal: init.signal ?? undefined,
+      },
+      (incoming) => {
+        const headers = new Headers();
+        for (const [name, value] of Object.entries(incoming.headers)) {
+          for (const item of Array.isArray(value) ? value : value === undefined ? [] : [value]) {
+            headers.append(name, item);
+          }
+        }
+        const status = incoming.statusCode ?? 502;
+        const body =
+          status === 204 || status === 304
+            ? null
+            : (Readable.toWeb(incoming) as unknown as ReadableStream<Uint8Array>);
+        resolve(new Response(body, { headers, status }));
+      },
+    );
+    outgoing.on("error", reject);
+    outgoing.end();
+  });
+}
+
+export async function ipv6FirstFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  if (process.env.HTTPS_PROXY || process.env.https_proxy) {
+    return globalThis.fetch(input, init);
+  }
+  try {
+    return await requestOverIpv6(input instanceof Request ? input.url : input.toString(), init);
+  } catch (error) {
+    if (init?.signal?.aborted) {
+      throw error;
+    }
+    return globalThis.fetch(input, init);
+  }
+}
+
 function retryAfterMs(header: null | string): number {
   const seconds = Number(header);
   const ms = Number.isFinite(seconds) && seconds > 0 ? seconds * 1_000 : 2_000;
@@ -160,7 +209,7 @@ export async function fetchMusicbrainz(
   }
   const stateDir = options.stateDir ?? musicbrainzStateDir();
   const intervalMs = options.intervalMs ?? MB_MIN_REQUEST_INTERVAL_MS;
-  const fetchFn = options.fetch ?? globalThis.fetch;
+  const fetchFn = options.fetch ?? ipv6FirstFetch;
   const retryUnreachable = async (
     attempt: number,
     retryOutcome: string,

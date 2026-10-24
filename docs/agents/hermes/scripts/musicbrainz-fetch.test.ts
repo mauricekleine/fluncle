@@ -11,6 +11,7 @@ import {
   MB_USER_AGENT,
   deferMusicbrainzBudget,
   fetchMusicbrainz,
+  ipv6FirstFetch,
   musicbrainzStateDir,
   reserveMusicbrainzSlot,
   runCrawlFetchPlan,
@@ -310,5 +311,30 @@ describe("the issued fetch plan", () => {
       stateDir,
     });
     expect(supplied).toEqual([{ outcome: "throttled", url: tail.probeUrl }]);
+  });
+});
+
+describe("ipv6FirstFetch", () => {
+  it("leaves a configured proxy in charge of the connection", async () => {
+    const realFetch = globalThis.fetch;
+    const previous = process.env.HTTPS_PROXY;
+    const seen: string[] = [];
+    process.env.HTTPS_PROXY = "http://127.0.0.1:1";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      seen.push(input instanceof Request ? input.url : input.toString());
+      return new Response("{}");
+    }) as typeof fetch;
+    try {
+      const response = await ipv6FirstFetch("https://musicbrainz.org/ws/2/label/x?fmt=json");
+      expect(response.status).toBe(200);
+      expect(seen).toEqual(["https://musicbrainz.org/ws/2/label/x?fmt=json"]);
+    } finally {
+      globalThis.fetch = realFetch;
+      if (previous === undefined) {
+        delete process.env.HTTPS_PROXY;
+      } else {
+        process.env.HTTPS_PROXY = previous;
+      }
+    }
   });
 });
