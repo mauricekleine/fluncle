@@ -1271,7 +1271,64 @@ function musicbrainzDetailLines(mb: MusicBrainzEvidence | undefined): string[] {
   }
   for (const release of mb?.releases?.releases ?? []) {
     lines.push(
-      `    release: ${release.artist} — ${release.title}; catno ${release.catno ?? "none"}; ${release.date ?? "undated"}`,
+      `    release: ${release.artist} — ${release.title}; catno ${release.catno ?? "none"}; ${release.date ?? "undated"}; format ${release.format ?? "unknown"}; status ${release.status ?? "unknown"}; barcode ${release.barcode ?? "none"}`,
+    );
+  }
+
+  return lines;
+}
+
+function discogsDetailLines(discogs: DiscogsEvidence | undefined): string[] {
+  const lines: string[] = [];
+  if (discogs?.label) {
+    lines.push(`    profile: ${discogs.label.profile || "none"}`);
+    lines.push(
+      `    parent: ${discogs.label.parentLabel ? `${discogs.label.parentLabel.name} (${discogs.label.parentLabel.id})` : "none"}; sublabels: ${discogs.label.sublabels.join(", ") || "none"}`,
+    );
+  }
+  if (discogs?.releases) {
+    lines.push(
+      `    ${discogs.releases.releaseCount} releases; top artists: ${discogs.releases.topArtists.map((artist) => `${artist.name} ${artist.releases}`).join(", ") || "none"}`,
+    );
+    for (const release of discogs.releases.sample) {
+      lines.push(
+        `    release: ${release.artist} — ${release.title}; catno ${release.catno ?? "none"}; year ${release.year ?? "unknown"}; format ${release.format ?? "unknown"}`,
+      );
+    }
+  }
+  if (discogs?.styles) {
+    lines.push(
+      `    genres: ${countLine(discogs.styles.genres, discogs.styles.genres.length) || "none"}`,
+    );
+    lines.push(
+      `    all styles: ${countLine(discogs.styles.styles, discogs.styles.styles.length) || "none"}`,
+    );
+  }
+
+  return lines;
+}
+
+function beatportDetailLines(beatport: BeatportEvidence | undefined): string[] {
+  const lines: string[] = [];
+  if (beatport) {
+    lines.push(
+      `    subgenres: ${countLine(beatport.subGenres, beatport.subGenres.length) || "none"}`,
+    );
+    lines.push(
+      `    top artists: ${countLine(beatport.topArtists, beatport.topArtists.length) || "none"}`,
+    );
+  }
+
+  return lines;
+}
+
+function appleDetailLines(apple: AppleEvidence | undefined): string[] {
+  const lines: string[] = [];
+  for (const release of apple?.releases ?? []) {
+    lines.push(
+      release.found
+        ? `    Apple match: ${release.mbTitle}; barcode ${release.barcode}; genre ${release.primaryGenreName ?? "unknown"}; artist ${release.artistName ?? "unknown"}; title ${release.collectionName ?? "unknown"}; copyright ${release.copyright ?? "unknown"}`
+        : `    Apple unmatched: ${release.mbTitle}; barcode ${release.barcode}`,
     );
   }
 
@@ -1316,6 +1373,8 @@ export function labelEvidenceLines(evidence: LabelEvidence): string[] {
       : discogs.note;
   lines.push(`  discogs: ${discogs.status}${dgDetail ? ` — ${dgDetail}` : ""}`);
 
+  lines.push(...discogsDetailLines(dg));
+
   const bp = beatport.data;
   const bpDetail = bp
     ? `${bp.trackCount} tracks; genres: ${bp.genres
@@ -1325,11 +1384,15 @@ export function labelEvidenceLines(evidence: LabelEvidence): string[] {
     : beatport.note;
   lines.push(`  beatport: ${beatport.status}${bpDetail ? ` — ${bpDetail}` : ""}`);
 
+  lines.push(...beatportDetailLines(bp));
+
   const ap = apple.data;
   const apDetail = ap
     ? `${ap.found}/${ap.looked} found; genres: ${countLine(ap.genres, 4) || "none"}`
     : apple.note;
   lines.push(`  apple: ${apple.status}${apDetail ? ` — ${apDetail}` : ""}`);
+
+  lines.push(...appleDetailLines(ap));
 
   for (const failure of evidence.errors) {
     lines.push(`  ! ${failure.source}: ${failure.message}`);

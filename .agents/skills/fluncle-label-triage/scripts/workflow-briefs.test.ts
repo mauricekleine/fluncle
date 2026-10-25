@@ -98,10 +98,31 @@ describe("worker briefs", () => {
         expect(brief).toContain("sources.<name>");
         expect(brief).toContain("ok|partial|error|no_link|not_configured|skipped");
         expect(brief).toContain("Nullable:");
+        for (const field of [
+          "sources.musicbrainz.data.releases.releases[]",
+          "sources.discogs.data.releases.sample[]",
+          "sources.discogs.data.releases.topArtists[]",
+          "sources.discogs.data.styles.styles[]",
+          "sources.beatport.data.genres[]",
+          "sources.apple.data.releases[]",
+          "year:number|null",
+          "primaryGenreName?:string",
+        ]) {
+          expect(brief).toContain(field);
+        }
+        expect(brief).toContain("Supplemental lookups also run in the foreground");
+        expect(brief).toContain("one artist per Bash call");
+        expect(brief).toContain("If no blocking completion tool is available");
+        expect(brief).toContain("return the missing lookup to the coordinator");
         expect(brief).not.toContain("--json");
         expect(brief).not.toContain("ws/2/release?label=");
       }
       expect(briefs.at(-1)).toContain("--census");
+      if (script === "triage-workflow.js") {
+        expect(briefs.at(-1)).toContain("curl --fail --max-time 30");
+        expect(briefs.at(-1)).toContain("parses only a successful response");
+        expect(briefs.at(-1)).toContain("Optional upstream `media`/`tracks` arrays may be absent");
+      }
     });
   }
 
@@ -136,6 +157,11 @@ describe("worker briefs", () => {
     expect(Buffer.byteLength(text)).toBeLessThan(5000);
     expect(text).toContain("## Standing boundary");
     expect(text).toContain("## Oracle ladder");
+    expect(text).toContain("sources.musicbrainz.data.releases.releases[]");
+    expect(text).toContain("sources.discogs.data.releases.sample[]");
+    expect(text).toContain("sources.discogs.data.styles.styles[]");
+    expect(text).toContain("sources.beatport.data.genres[]");
+    expect(text).toContain("sources.apple.data.releases[]");
   });
 
   for (const script of ["triage-workflow.js", "verify-workflow.js"]) {
