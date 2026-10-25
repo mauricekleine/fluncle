@@ -1,25 +1,34 @@
 # Label triage rulings
 
-Read this file once with the file-read tool, then the live enabled/disabled calibration and ratified artist rules named in your brief. Research the exact MusicBrainz MBID. The operator ratifies proposals; a worker returns evidence and never applies rulings.
+Read once with the file-read tool, then calibration/rules. Exact MBID; propose, never apply.
 
 ## Standing boundary
 
-- Drum & bass and jungle, including their subgenres, are in. Majors, subsidiaries, distributors, aggregators, reissue houses and compilation mills are out even when they carry DnB. A MusicBrainz `Distributor` identity or a Discogs catalogue mostly carrying other labels settles that before genre research.
-- DnB-specific media imprints (Knowledge, Drum&BassArena, UKF) are in; general dance media (DJ Magazine) are out. Dubstep, grime, UKG and merely jungle-adjacent electronica are out.
-- A 1990–1994 UK breakbeat-hardcore imprint styled Breakbeat/Hardcore with no house, techno, trance or happy-hardcore drift is in, even without a Jungle tag. Judge a parent separately from its hardcore sublabel: Kickin Records is out; Kickin’ Underground Sound is in.
-- Two independent medium-confidence `not_dnb` passes suffice to propose disabling, except when a standing ruling conflicts; send that case to the operator.
-- Decide a one-release or handful-of-releases label from a DSP genre oracle, not prose: in-lane enables, another lane disables. `unclear` is available only when no rung answers.
+- DnB/jungle and their subgenres are in. Majors, subsidiaries, distributors, aggregators, reissue houses and compilation mills are out, even carrying DnB. MB Distributor/mostly licensed catalogue settles this.
+- DnB media imprints (Knowledge, Drum&BassArena, UKF) are in; general dance media (DJ Magazine), dubstep/grime/UKG and jungle-adjacent electronica are out.
+- 1990–1994 UK Breakbeat/Hardcore with no house/techno/trance/happy-hardcore drift is in without a Jungle tag. Judge parents separately: Kickin Records out; Kickin’ Underground Sound in.
+- Two independent medium-confidence not_dnb passes suffice; standing-ruling conflicts go to operator.
+- For few releases use the highest DSP genre oracle; unclear only if none answers.
 
 ## Oracle ladder
 
-Use the highest answering rung and cite its exact genre string: Apple/iTunes (`sources.apple.data.releases[].primaryGenreName`), Beatport (`sources.beatport.data.genres`, track counts/shares), Deezer album genre and `label`, Discogs release styles (`sources.discogs.data.styles.styles`), Bandcamp JSON-LD keywords. A lower rung never overrides an answering higher rung. Apple distinguishes `Jungle/Drum’n’bass`; its absence on an electronic release is evidence when Apple assigns that genre to the same artist elsewhere. MusicBrainz first-credit artists are useful genre signals; its tags/genres are usually empty. Discogs `no_link` candidates are unverified namesakes.
+Apple → Beatport → Deezer album genre/label → Discogs aggregate release styles → Bandcamp JSON-LD keywords. Cite the exact genre; higher answers win. Apple distinguishes Jungle/Drum’n’bass; its absence matters when Apple assigns it elsewhere to that artist. MB first credits signal genre; tags/genres are usually empty.
 
-## Mixed catalogues and identity
+## Mixed/identity
 
-- Flag a genuinely two-sided label for census, not a thin catalogue or conflation. The denominator is DISTINCT recordings, not releases. Artist exceptions fire on the FIRST credited artist MBID (recording credit, else release), never guests or names.
-- Check MusicBrainz `labelRelations` first. An existing child imprint covering the boundary means propose no artist rules; rule that entity instead.
-- Raw off-lane first-credit share ≤15% permits `dnb` plus blocks. Above 15%, propose `dnb_partial` plus allows for in-lane acts with their own DnB run, or `not_dnb` when the in-lane credits are incidental. `dnb_partial` leaves the seed state as it stands.
-- Also report residual share after globally ruled off-lane credits are dropped. Residual is never the rail. When residual ≤15% < raw, return `unclear` with the globally ruled acts and counts for the operator. A census sampling caveat can also make the share unreliable: copy it verbatim and lower confidence.
-- Every proposed rule needs a positive first-credit count. Include separate collaboration MBIDs; verify same-named acts separately. Proposals replace the whole per-label rule set, so account for existing exceptions. Global rules and visibility-only `unlisted` rulings belong to the operator; suggest globals only in prose.
-- A conflated MBID is never carved with rules. If no strand is in lane, return `not_dnb`. If a DnB strand exists, return `unclear` with `conflation`: the strand to keep and its catalogue scheme, releases to move with artists/catalogue numbers/years, whether DnB is recoverable, and traps such as metadata pointing to the strand being moved or another namesake.
-- `unclear` has three reasons: thin (no oracle answers), mixed (unreliable census or straddling shares), conflation (a DnB strand needs an upstream split). Missing or timed-out evidence goes back to the coordinator for collection before a verdict.
+Census mixed labels, not thin ones/conflations. Count DISTINCT recordings; rules match FIRST artist MBID (recording credit, else release). Check labelRelations: rule an existing boundary imprint instead of artists.
+
+Raw off-lane share ≤15% permits dnb + blocks; above it use dnb_partial + allows for acts with their own DnB run, else not_dnb for incidental credits. dnb_partial preserves seed state. Report residual after dropping globally ruled off-lane credits, never as the rail. residual ≤15% < raw means unclear with globally ruled acts/counts. Copy census caveat and lower confidence. Each rule needs positive first credits; include collaboration MBIDs, verify namesakes, account for existing rules: proposals replace all per-label rules. Globals/unlisted belong to the operator; suggest globals in prose.
+
+Never carve conflation: not_dnb if no DnB strand; otherwise unclear with conflation: strand/catalogue scheme to keep, releases/artists/catnos/years to move, recoverable DnB, moved-strand metadata/namesakes. unclear reasons: thin (no oracle), mixed (unreliable census/straddle), conflation. Failed collection returns to coordinator before a verdict.
+
+## Evidence layout
+
+Read text summaries first. Supplemental lookup: one artist per foreground Bash call, timeout 600000. Use task completion; if unavailable, return missing lookup to coordinator, never wait on files.
+
+JSON shape: top-level `label`, `fetchedAt`, `ok`, `partial`, `requests`, `errors`, `sources`. `sources.<name>` has status `ok|partial|error|no_link|not_configured|skipped`; `data`, `errors`, `note`, `cached` may be absent. `?` optional; Count: `{name:string,count:number}`.
+
+- MB data: optional `label`, `releases`, `census` objects. `sources.musicbrainz.data.releases.releases[]` items: `{artist:string,title:string,mbid:string,barcode:string|null,catno:string|null,date:string|null,format:string|null,status:string|null}`. `releases` OBJECT: numeric `releaseCount`, `releasesRead`, `variousArtistsReleases`, plus `firstCreditArtists[]:{mbid:string,name:string,releases:number}`. `census.firstCredits[]:{artistMbid:string,artistName:string,recordings:number}`; numeric `recordingsCounted`, `uncreditedRecordings`, `pagesFetched`, `releaseCount`, `releasesRead`; `sampled:boolean`, `caveat:string|null`. Imprints: `label.labelRelations[]:{direction:string,mbid:string,name:string,type:string}`. Nullable: label area/country/disambiguation/type and lifeSpan begin/end are string|null; labelCode is number|null.
+- Discogs data: optional `label`, `releases`, `styles`, `candidates`. `sources.discogs.data.releases.sample[]` items: `{artist:string,title:string,catno:string|null,format:string|null,year:number|null}`. `releases` OBJECT: `releaseCount:number` and `sources.discogs.data.releases.topArtists[]:{name:string,releases:number}`. No item styles: `sources.discogs.data.styles.styles[]` and `.styles.genres[]` are Count arrays over releases; numeric releasesRead/labelReleasesListed/viaRelease/viaSearch. `label` has profile/name/url strings, numeric id/sublabelCount, string[] sublabels/urls, parentLabel null or `{id:number,name:string}`. `candidates[]:{id:number,title:string,url:string}` are unverified namesakes.
+- Beatport data: `sources.beatport.data.genres[]:{name:string,count:number,share:number}` (share 0–1); `subGenres`/`topArtists` Count arrays; `trackCount:number`, `labelUrl`/`tracksUrl` strings. No releases.
+- Apple data: `found`/`looked` numbers, `genres` Count array, `sources.apple.data.releases[]:{barcode:string,mbTitle:string,found:boolean,artistName?:string,collectionName?:string,copyright?:string,primaryGenreName?:string}`. Match fields optional; unmatched: barcode/mbTitle/found only.

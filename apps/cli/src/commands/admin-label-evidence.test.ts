@@ -687,15 +687,54 @@ describe("parsers", () => {
     expect(() => parseCensusPages("x")).toThrow();
   });
 
-  test("renders a one-line-per-source summary", async () => {
-    const { deps } = setup(defaultRoutes(), { scraper: null });
+  test("renders catalogue details and oracle matches without JSON exploration", async () => {
+    const routes = defaultRoutes();
+    routes["api.discogs.com/releases/103"] = () =>
+      json({
+        genres: ["Electronic"],
+        styles: ["Halftime", "Breakbeat", "Techno", "Ambient", "House", "Jungle", "IDM"],
+      });
+    routes["itunes.apple.com/lookup?upc=0001"] = () =>
+      json({
+        results: [
+          {
+            artistName: "Roller",
+            collectionName: "Amen Science",
+            copyright: "2020 Test Beats",
+            primaryGenreName: "Jungle/Drum'n'bass",
+            wrapperType: "collection",
+          },
+        ],
+      });
+    const { deps } = setup(routes);
     const lines = labelEvidenceLines(await gatherLabelEvidence(LABEL_MBID, ALL, deps));
 
     expect(lines[0]).toBe(`Test Beats (${LABEL_MBID})`);
-    expect(lines.find((line) => line.startsWith("  beatport:"))).toContain("not_configured");
+    expect(lines.find((line) => line.startsWith("  beatport:"))).toContain("Drum & Bass 90%");
+    expect(lines.join("\n")).toContain("subgenres: Jungle 12");
+    expect(lines.join("\n")).toContain("top artists: Roller 60");
     expect(lines.find((line) => line.startsWith("  discogs:"))).toContain("Drum n Bass 2");
     expect(lines.join("\n")).toContain("label relations: label ownership: Test Beats Dubs");
-    expect(lines.join("\n")).toContain("release: Roller — Amen Science; catno TB001; 2020-01-01");
+    expect(lines.join("\n")).toContain(
+      'release: Roller — Amen Science; catno TB001; 2020-01-01; format 12" Vinyl; status Official; barcode 0001',
+    );
+    expect(lines.join("\n")).toContain(
+      "release: Various Artists — Test Beats Vol. 1; catno none; 2022-01-01; format unknown; status unknown; barcode none",
+    );
+    expect(lines.join("\n")).toContain("profile: Drum & bass imprint.");
+    expect(lines.join("\n")).toContain("parent: Test Beats Ltd (1); sublabels: Test Beats Dubs");
+    expect(lines.join("\n")).toContain("top artists: Roller 2, Dub Unit 1");
+    expect(lines.join("\n")).toContain(
+      "release: Roller — Reese Theory; catno TB002; year unknown; format unknown",
+    );
+    expect(lines.join("\n")).toContain("genres: Electronic 3");
+    expect(lines.join("\n")).toContain(
+      "all styles: Drum n Bass 2, Jungle 2, Ambient 1, Breakbeat 1, Halftime 1, House 1, IDM 1, Techno 1",
+    );
+    expect(lines.join("\n")).toContain(
+      "Apple match: Amen Science; barcode 0001; genre Jungle/Drum'n'bass; artist Roller; title Amen Science; copyright 2020 Test Beats",
+    );
+    expect(lines.join("\n")).toContain("Apple unmatched: Reese Theory; barcode 0002");
   });
 });
 
