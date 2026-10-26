@@ -263,7 +263,12 @@ function LensPill({
   onClick: () => void;
 }) {
   return (
-    <Button onClick={onClick} size="sm" variant={active ? "secondary" : "ghost"}>
+    <Button
+      aria-pressed={active}
+      onClick={onClick}
+      size="sm"
+      variant={active ? "secondary" : "ghost"}
+    >
       {label}
       <Badge className="ml-1 tabular-nums" variant={active ? "outline" : "secondary"}>
         {count}

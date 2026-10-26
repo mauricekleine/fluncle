@@ -569,6 +569,7 @@ function ReachPage() {
                 role="group"
               >
                 <button
+                  aria-pressed={!activeSlug}
                   className={chipClass(!activeSlug)}
                   onClick={() => selectPlatform(undefined)}
                   type="button"
@@ -579,6 +580,7 @@ function ReachPage() {
                   .sort((a, b) => a.label.localeCompare(b.label))
                   .map((p) => (
                     <button
+                      aria-pressed={activeSlug === p.slug}
                       className={chipClass(activeSlug === p.slug)}
                       key={p.slug}
                       onClick={() => selectPlatform(activeSlug === p.slug ? undefined : p.slug)}
@@ -594,6 +596,7 @@ function ReachPage() {
               <div aria-label="Period" className="flex gap-1.5" role="group">
                 {PERIODS.map((period) => (
                   <button
+                    aria-pressed={periodDays === period.days}
                     className={chipClass(periodDays === period.days)}
                     key={period.days}
                     onClick={() => setPeriodDays(period.days)}
@@ -616,6 +619,7 @@ function ReachPage() {
 
                       return (
                         <button
+                          aria-pressed={active}
                           className={chipClass(active)}
                           key={option.key}
                           onClick={() => setChartKey(option.key)}

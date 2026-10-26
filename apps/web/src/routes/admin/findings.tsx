@@ -1179,7 +1179,12 @@ function FilterPill({
   onClick: () => void;
 }) {
   return (
-    <Button onClick={onClick} size="sm" variant={active ? "secondary" : "ghost"}>
+    <Button
+      aria-pressed={active}
+      onClick={onClick}
+      size="sm"
+      variant={active ? "secondary" : "ghost"}
+    >
       {label}
       <Badge
         className={cn(
