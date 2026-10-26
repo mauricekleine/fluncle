@@ -83,9 +83,9 @@
    bridge those three back onto canon here (same specificity, later source) so
    the sidebar stays Nostalgic Cosmos, not neutral gray. */
 .dark #nd-sidebar {
-  --color-fd-muted: #171611; /* Tape Black */
-  --color-fd-muted-foreground: #b7ab95; /* Stardust */
-  --color-fd-secondary: #171611; /* Tape Black */
+  --color-fd-muted: var(--tape-black);
+  --color-fd-muted-foreground: var(--stardust);
+  --color-fd-secondary: var(--tape-black);
 }
 
 /* One translucent pane over the cosmos (One Pane): a whisper of Sleeve Black
