@@ -13,7 +13,12 @@
   "pnpm": {
     "overrides": {
       "@modelcontextprotocol/sdk": "1.32.0",
-      "@earendil-works/pi-coding-agent>undici": "~8.10.0"
+      "@earendil-works/pi-coding-agent>undici": "8.12.3",
+      "@vercel/cli-config>zod": "4.6.7"
     }
+  },
+  "// overrides": {
+    "@earendil-works/pi-coding-agent>undici": "Remove when deepsec's pinned pi-coding-agent accepts patched undici without an override.",
+    "@vercel/cli-config>zod": "Remove when @vercel/cli-config accepts zod >=4.6.6 without an override."
   }
 }
