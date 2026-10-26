@@ -15,12 +15,12 @@
       "@modelcontextprotocol/sdk": "1.32.0",
       "@earendil-works/pi-coding-agent>undici": "8.12.3",
       "@vercel/cli-config>zod": "4.6.7",
-      "@vercel/sandbox>zod": "4.6.7"
+      "deepsec>@vercel/sandbox": "3.9.0"
     }
   },
   "// overrides": {
     "@earendil-works/pi-coding-agent>undici": "Remove when deepsec's pinned pi-coding-agent accepts patched undici without an override.",
     "@vercel/cli-config>zod": "Remove when @vercel/cli-config accepts zod >=4.6.6 without an override.",
-    "@vercel/sandbox>zod": "Remove when @vercel/sandbox resolves patched Zod itself; 1.10.2 pins Zod 3.24.4, and its published runtime bundle has no Zod import."
+    "deepsec>@vercel/sandbox": "Remove when deepsec's declared @vercel/sandbox range includes 3.x. Version 2.3.10 declares ^1.9.0; sandbox 3.9.0 uses patched Zod 4."
   }
 }
