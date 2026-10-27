@@ -49,7 +49,7 @@ export function meFrontierHandlers(os: Implementer) {
                 result.reason === "mint_cap_reached" ? "mint_cap_reached" : "frontier_sync_failed",
               apiMessage:
                 result.reason === "mint_cap_reached"
-                  ? "The Frontier is minting a lot right now. Try again shortly."
+                  ? "I've sent out all the new playlists I can for today. Try again later."
                   : "Couldn't reach Spotify for your Frontier. Try again shortly.",
             },
             message: "Frontier sync failed",

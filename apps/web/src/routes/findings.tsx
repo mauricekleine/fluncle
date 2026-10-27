@@ -41,6 +41,8 @@ const findingsTitle = "Every drum & bass finding, newest first · Fluncle";
 const findingsDescription =
   "Every drum & bass banger Fluncle has certified, newest first, each one logged with the coordinate that names it.";
 
+const ARCHIVE_UNREACHABLE = "Couldn't reach the archive. The findings didn't make the trip back.";
+
 const fetchFindingsData = createServerFn({ method: "GET" }).handler(async () => {
   const { loadFindingsData } = await import("./-findings-data");
   return loadFindingsData();
@@ -187,12 +189,7 @@ function FindingsPage() {
 
   const totalCount = data.pages[0]?.totalCount ?? initialPage.totalCount;
 
-  const cursor = data.pageParams.at(-1) as string | undefined;
-  const error = loadError
-    ? loadError instanceof Error
-      ? loadError.message
-      : String(loadError)
-    : undefined;
+  const loadFailed = loadError !== null;
 
   const closeStory = useCallback(() => {
     if (canGoBack) {
@@ -230,7 +227,7 @@ function FindingsPage() {
   useEffect(() => {
     const sentinel = loadMoreSentinelRef.current;
 
-    if (!sentinel || !hasNextPage || isFetchingNextPage || error) {
+    if (!sentinel || !hasNextPage || isFetchingNextPage || loadFailed) {
       return;
     }
 
@@ -251,7 +248,7 @@ function FindingsPage() {
     return () => {
       observer.disconnect();
     };
-  }, [error, fetchNextPage, hasNextPage, isFetchingNextPage]);
+  }, [loadFailed, fetchNextPage, hasNextPage, isFetchingNextPage]);
 
   const trackNumberBase = totalCount || tracks.length;
 
@@ -304,16 +301,15 @@ function FindingsPage() {
                   <span aria-hidden="true" />
                 </div>
 
-                {tracks.length === 0 && !error ? (
+                {tracks.length === 0 && !loadFailed ? (
                   <div className="empty-scanlines px-4 py-10 text-center text-muted-foreground">
                     No findings logged yet. Quiet sector tonight.
                   </div>
                 ) : undefined}
 
-                {tracks.length === 0 && error ? (
+                {tracks.length === 0 && loadFailed ? (
                   <div className="empty-scanlines px-4 py-10 text-center text-muted-foreground">
-                    <p>Couldn't reach the archive. The findings didn't make the trip back.</p>
-                    <p className="mt-1 text-destructive">{error}</p>
+                    <p>{ARCHIVE_UNREACHABLE}</p>
                   </div>
                 ) : undefined}
 
@@ -355,11 +351,9 @@ function FindingsPage() {
                 ) : undefined}
               </div>
 
-              {error && tracks.length > 0 ? (
-                <p className="mt-4 text-sm text-destructive">{error}</p>
+              {loadFailed && tracks.length > 0 ? (
+                <p className="mt-4 text-sm text-destructive">{ARCHIVE_UNREACHABLE}</p>
               ) : undefined}
-
-              {cursor ? <span className="sr-only">Loaded through cursor {cursor}</span> : undefined}
             </section>
           </section>
         </article>

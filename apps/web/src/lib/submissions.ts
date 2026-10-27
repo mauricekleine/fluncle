@@ -9,17 +9,21 @@ export type SearchResult = {
   artworkUrl?: string;
 };
 
+export const SEARCH_FAILED_MESSAGE = "I can't search right now. Try again later.";
+
+export const SUBMIT_FAILED_MESSAGE = "I can't log your track right now. Try again later.";
+
 export async function searchTracks(query: string): Promise<SearchResult[]> {
   const params = new URLSearchParams({ q: query });
   const response = await fetch(`/api/v1/search?${params.toString()}`);
-  const data = (await response.json()) as {
+  const data = (await response.json().catch(() => ({}))) as {
     ok?: boolean;
     results?: SearchResult[];
     message?: string;
   };
 
   if (!response.ok || !data.ok) {
-    throw new Error(data.message ?? `Search failed: ${response.status}`);
+    throw new Error(data.message ?? SEARCH_FAILED_MESSAGE);
   }
 
   return data.results ?? [];
@@ -57,12 +61,12 @@ export async function submitTrack({
     },
     method: "POST",
   });
-  const data = (await response.json()) as {
+  const data = (await response.json().catch(() => ({}))) as {
     ok?: boolean;
     message?: string;
   };
 
   if (!response.ok || !data.ok) {
-    throw new Error(data.message ?? `Submission failed: ${response.status}`);
+    throw new Error(data.message ?? SUBMIT_FAILED_MESSAGE);
   }
 }
