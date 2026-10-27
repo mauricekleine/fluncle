@@ -7,14 +7,14 @@
   },
   "new": {
     "coreBaseSeconds": 31,
-    "e2eP50Seconds": 348,
-    "e2eP90Seconds": 569,
-    "fullPackageSeconds": 221,
+    "e2eP50Seconds": 378,
+    "e2eP90Seconds": 384,
+    "fullPackageSeconds": 343,
     "gateSeconds": 5,
     "goDnsSeconds": 3,
-    "goSshSeconds": 13,
-    "scriptsSeconds": 36,
-    "sonarSeconds": 99,
+    "goSshSeconds": 23,
+    "scriptsSeconds": 280,
+    "sonarSeconds": 136,
     "workflowSeconds": 2
   }
 }
