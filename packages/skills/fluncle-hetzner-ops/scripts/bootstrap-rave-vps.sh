@@ -75,6 +75,7 @@ tailscale up \
 	--hostname="${TS_HOSTNAME}" \
 	--ssh \
 	--accept-dns=true
+tailscale set --auto-update
 
 log "Installing read-only reboot status"
 bash "${REBOOT_STATUS_INSTALLER}"
