@@ -51,9 +51,9 @@ Do not rebuild a box that is merely unreachable — a re-provision throws away a
 
 The order is load-bearing. Each step names the asset that does the work.
 
-**1. Create the guest.** Run the private platform repo's guest script on the hypervisor; the labs doc names it. It creates the VM with the box posture (admin user, the read-only `observer` login, key-only OpenSSH on 2222, UFW, Tailscale, **and `op`**), then runs this repo's [`install-toolchain.sh`](../fluncle-hetzner-ops/scripts/install-toolchain.sh) with `TOOLCHAIN_PROFILE=agent-box`: Docker and a small host floor, no workstation toolchain. Size, network, and tags are box facts — read them from the labs doc, do not re-derive them.
+**1. Create the guest.** Run the private platform repo's guest script on the hypervisor; the labs doc names it. It creates the VM with the box posture (admin user, the read-only `observer` login, a bootstrap-only key-only OpenSSH listener on 2222 before Tailscale joins, UFW, Tailscale, **and `op`**), then runs this repo's [`install-toolchain.sh`](../fluncle-hetzner-ops/scripts/install-toolchain.sh) with `TOOLCHAIN_PROFILE=agent-box`: Docker and a small host floor, no workstation toolchain. Size, network, and tags are box facts — read them from the labs doc, do not re-derive them.
 
-**2. Join the tailnet tagged.** Use the tags from the labs doc; a tagged node's key does not expire. Then open a **second** terminal and confirm you can get in over the tailnet before relying on it. Once you can, remove the hypervisor's provisioning key from admin as the platform's guest README says, so fleet agents keep only the read-only login.
+**2. Join the tailnet tagged.** Use the tags from the labs doc; a tagged node's key does not expire. Then open a **second** terminal and confirm normal access with `ssh fluncle-rave-02` on Tailscale SSH port 22 before relying on it. Once you can, remove the hypervisor's provisioning key from admin as the platform's guest README says, so fleet agents keep only the read-only login.
 
 **3. Place the bootstrap env.** `op inject` cannot fetch its own credential, so this one file is the irreducible manual link. The recipe (reading the token with the operator's own biometric session and piping it over SSH, never typing it) and the file's contents are in the labs doc. **`op` must already be installed** — step 1 does that.
 
