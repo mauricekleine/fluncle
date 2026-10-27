@@ -223,7 +223,7 @@ function honestNoRuns(row: ServiceStatusRow, now: number): ServiceStatusRow {
 
   return {
     ...row,
-    message: "never run — the cron is registered but appears not to be deployed",
+    message: "never run: the cron is registered but appears not to be deployed",
     status: "degraded",
   };
 }
