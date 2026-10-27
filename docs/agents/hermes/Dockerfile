@@ -329,7 +329,7 @@ RUN chmod -R a+rX /opt/fonts
 # Linux managed-settings path, read whatever CLAUDE_CONFIG_DIR is, so every sweep's
 # `claude -p` gets the same settings; root-owned + world-readable so the NON-root cron
 # user reads them but cannot change them.
-RUN npm install -g @anthropic-ai/claude-code@2.1.310
+RUN npm install -g @anthropic-ai/claude-code@2.1.311
 COPY docs/agents/hermes/claude-managed-settings.d /etc/claude-code/managed-settings.d
 RUN chmod -R a+rX /etc/claude-code
 
