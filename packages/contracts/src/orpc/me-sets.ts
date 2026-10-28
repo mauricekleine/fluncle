@@ -47,7 +47,7 @@ export const updatePrivateSavedSet = oc
     summary: "Rename or overwrite a saved set",
     tags: ["Me"],
   })
-  .input(z.looseObject({ id: z.string() }))
+  .input(SaveSetBodySchema.extend({ id: z.string() }))
   .output(z.object({ ok: z.literal(true), savedSet: SavedSetSchema }));
 
 export const deletePrivateSavedSet = oc

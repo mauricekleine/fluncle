@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { gateNoteEcho, gateNoteText, scoreNoteEcho } from "./note";
+import { gateNoteText, noteEchoError, scoreNoteEcho } from "./note";
 
 const GOOD = "Pure rolling menace, half-step and patient. That is why it is here.";
 
@@ -264,35 +264,34 @@ describe("scoreNoteEcho", () => {
   });
 });
 
-describe("gateNoteEcho", () => {
-  it("throws `note_echoes_neighbours` on a lifted phrase, naming the neighbour", () => {
-    let thrown: { code?: string; message?: string } = {};
+describe("noteEchoError", () => {
+  it("rejects a lifted phrase as `note_echoes_neighbours` (422), naming the neighbour", () => {
+    const echo = scoreNoteEcho("I have been rewinding it since the first bar; this one stays.", [
+      {
+        logId: "004.5.6V",
+        note: "Shoulders dropped on the first bar; Maya Randle rebuilt Wings in 2022 and I have been rewinding it since.",
+      },
+    ]);
 
-    try {
-      gateNoteEcho("I have been rewinding it since the first bar; this one stays.", [
-        {
-          logId: "004.5.6V",
-          note: "Shoulders dropped on the first bar; Maya Randle rebuilt Wings in 2022 and I have been rewinding it since.",
-        },
-      ]);
-    } catch (error) {
-      thrown = error as { code?: string; message?: string };
-    }
+    expect(echo.echoes).toBe(true);
 
-    expect(thrown.code).toBe("note_echoes_neighbours");
-    expect(thrown.message).toContain("004.5.6V");
+    const error = noteEchoError(echo);
+
+    expect(error.code).toBe("note_echoes_neighbours");
+    expect(error.status).toBe(422);
+    expect(error.message).toContain("004.5.6V");
   });
 
-  it("passes a distinct note straight through, returning its (clean) reading", () => {
-    const echo = gateNoteEcho("Piano loops into your chest and the vocal keeps you there.", [
+  it("reads a distinct note as clean", () => {
+    const echo = scoreNoteEcho("Piano loops into your chest and the vocal keeps you there.", [
       { logId: "027.2.8R", note: "My shoulders dropped before the break even settled." },
     ]);
 
     expect(echo.echoes).toBe(false);
   });
 
-  it("passes anything when there is no neighbourhood to echo (the layer is optional)", () => {
-    expect(gateNoteEcho("Pure rolling menace, half-step and patient.", []).echoes).toBe(false);
+  it("reads anything as clean when there is no neighbourhood to echo (the layer is optional)", () => {
+    expect(scoreNoteEcho("Pure rolling menace, half-step and patient.", []).echoes).toBe(false);
   });
 });
 

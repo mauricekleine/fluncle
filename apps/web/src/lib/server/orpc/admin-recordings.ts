@@ -146,11 +146,9 @@ export function adminRecordingsHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const cues = Array.isArray(input.cues) ? input.cues : [];
-
         return {
           ok: true as const,
-          recording: await replaceRecordingCues(input.recordingId, cues),
+          recording: await replaceRecordingCues(input.recordingId, input.cues),
         };
       } catch (error) {
         throw apiFault(error);

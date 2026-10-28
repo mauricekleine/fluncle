@@ -1,5 +1,7 @@
 import { type CatalogueResponse, type CatalogueTrackItem } from "@fluncle/contracts";
+import { CatalogueLensSchema } from "@fluncle/contracts/orpc";
 import { adminApiGet, adminApiPost, adminApiPut } from "../api";
+import { CliError } from "../output";
 
 export type { CatalogueTrackItem };
 
@@ -61,15 +63,22 @@ export type TelescopeSyncOutcome =
   | { changed: boolean; ok: true; size: number }
   | { ok: false; reason: string };
 
-const CATALOGUE_LENSES = new Set(["capture", "dismissed", "failed", "quarantine", "unmatched"]);
-
 export async function catalogueListCommand(options: {
   lens?: string;
   limit?: string;
 }): Promise<CatalogueResponse> {
+  const lens = CatalogueLensSchema.safeParse(options.lens ?? "ear");
+
+  if (!lens.success) {
+    throw new CliError(
+      "invalid_lens",
+      `Unknown lens "${options.lens}". Use one of: ${CatalogueLensSchema.options.join(", ")}`,
+    );
+  }
+
   const params = new URLSearchParams();
 
-  params.set("lens", options.lens && CATALOGUE_LENSES.has(options.lens) ? options.lens : "ear");
+  params.set("lens", lens.data);
 
   if (options.limit) {
     params.set("limit", options.limit);
