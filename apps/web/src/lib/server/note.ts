@@ -206,17 +206,3 @@ export function noteEchoError(echo: NoteEcho): ApiError {
     422,
   );
 }
-
-export function gateNoteEcho(
-  note: string,
-  neighbors: readonly NoteNeighbor[],
-  thresholds: NoteEchoThresholds = NOTE_ECHO_DEFAULTS,
-): NoteEcho {
-  const echo = scoreNoteEcho(note, neighbors, thresholds);
-
-  if (!echo.echoes) {
-    return echo;
-  }
-
-  throw noteEchoError(echo);
-}

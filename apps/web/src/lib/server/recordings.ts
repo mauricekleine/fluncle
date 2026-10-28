@@ -399,17 +399,14 @@ export async function deleteRecording(id: string): Promise<void> {
   );
 }
 
-export async function replaceRecordingCues(
-  id: string,
-  cues: RecordingCueInput[],
-): Promise<RecordingDTO> {
+export async function replaceRecordingCues(id: string, cues: unknown): Promise<RecordingDTO> {
   await getRecordingRow(id);
 
   if (!Array.isArray(cues)) {
     throw new ApiError("invalid_cues", "cues must be an array", 400);
   }
 
-  const normalized = cues.map((raw, index) => {
+  const normalized = cues.map((raw: RecordingCueInput | null | undefined, index) => {
     if (!raw || typeof raw !== "object") {
       throw new ApiError("invalid_cues", `Cue ${index + 1} must be an object`, 400);
     }

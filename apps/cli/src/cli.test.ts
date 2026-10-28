@@ -797,6 +797,35 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Usage: fluncle admin tracks observe");
   });
 
+  testCli("admin tracks observe takes a --duration-target-sec from 5 to 90 only", async () => {
+    const observe = (sec: string) =>
+      runCli([
+        "admin",
+        "tracks",
+        "observe",
+        "004.7.2I",
+        "--script",
+        "A line.",
+        "--duration-target-sec",
+        sec,
+        "--json",
+      ]);
+    const rangeError = "--duration-target-sec must be a whole number from 5 to 90";
+
+    for (const sec of ["4", "91"]) {
+      const result = await observe(sec);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain(rangeError);
+    }
+
+    for (const sec of ["5", "90"]) {
+      const result = await observe(sec);
+
+      expect(result.stdout).not.toContain(rangeError);
+    }
+  });
+
   testCli("admin tracks context requires an id before any fetch", async () => {
     const result = await runCli(["admin", "tracks", "context", "--json"]);
 

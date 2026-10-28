@@ -570,6 +570,7 @@ export type TrackObserveResult = {
   jsonUrl: string;
   logId: string;
   ok: true;
+  skipped?: boolean;
   textUrl: string;
   trackId: string;
   voiceId: string;

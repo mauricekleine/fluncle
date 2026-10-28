@@ -209,6 +209,14 @@ describe("replaceRecordingCues", () => {
     expect(batch).not.toHaveBeenCalled();
   });
 
+  it("rejects a cues value that is not an array without touching the stored cues", async () => {
+    await expect(replaceRecordingCues("rec-1", undefined)).rejects.toThrow(/must be an array/i);
+    await expect(replaceRecordingCues("rec-1", { cues: [{ titleText: "x" }] })).rejects.toThrow(
+      /must be an array/i,
+    );
+    expect(batch).not.toHaveBeenCalled();
+  });
+
   it("clears the cues on an empty array", async () => {
     await replaceRecordingCues("rec-1", []);
 

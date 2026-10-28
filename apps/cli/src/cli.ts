@@ -1824,7 +1824,10 @@ JSON field reference:
     )
     .option("--voice-id <id>", "Override the configured Cartesia voice id")
     .option("--duration-ms <ms>", "Probed audio duration in ms (else derived from word timestamps)")
-    .option("--duration-target-sec <sec>", "Target observation length in seconds (20–45)")
+    .option(
+      "--duration-target-sec <sec>",
+      "Target observation length in seconds (aim for 20–45; accepts 5–90)",
+    )
     .option("--context-note <text>", "Pre-fetched factual context (else the Worker firecrawls)")
     .option(
       "--prompt-version <n>",
@@ -2929,7 +2932,7 @@ JSON field reference:
     )
     .option(
       "--lens <lens>",
-      "ear (default), capture, quarantine, unmatched, failed, or dismissed",
+      "ear (default), capture, long, quarantine, unmatched, failed, or dismissed",
       "ear",
     )
     .option("--limit <limit>", "Rows (default 50, max 200)")
@@ -4233,9 +4236,9 @@ async function runTrackObserve(
 
   if (
     durationTargetSec !== undefined &&
-    (!Number.isInteger(durationTargetSec) || durationTargetSec < 1)
+    (!Number.isInteger(durationTargetSec) || durationTargetSec < 5 || durationTargetSec > 90)
   ) {
-    throw new Error("--duration-target-sec must be a positive integer");
+    throw new Error("--duration-target-sec must be a whole number from 5 to 90");
   }
 
   const result = await trackObserveCommand(idOrLogId, {
@@ -4250,6 +4253,12 @@ async function runTrackObserve(
 
   if (options.json) {
     printJson(result);
+    return;
+  }
+
+  if (result.skipped) {
+    console.log(`${result.logId} already has an observation; pass --force to record over it`);
+    console.log(`  audio: ${result.audioUrl}`);
     return;
   }
 

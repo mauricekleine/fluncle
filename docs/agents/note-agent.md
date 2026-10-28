@@ -51,7 +51,7 @@ fluncle admin notes gate [--min-phrase-words <n>] [--max-overlap <x>] # read or 
 
 ## The echo gate (the anti-sameness rail — the thing that makes the neighbour layer safe)
 
-Showing an author its neighbours' notes is exactly how you get a region of the archive that all reads the same. So the guardrail is **mechanical, not hoped for**: `gateNoteEcho` (`note.ts`) re-reads the same six neighbour notes the agent was shown and hard-fails a note that echoes them (`note_echoes_neighbours`, 422). Two signals, both pure and deterministic:
+Showing an author its neighbours' notes is exactly how you get a region of the archive that all reads the same. So the guardrail is **mechanical, not hoped for**: `note_track` scores the note with `scoreNoteEcho` (`note.ts`) against the same six neighbour notes the agent was shown and hard-fails a note that echoes them with `noteEchoError` (`note_echoes_neighbours`, 422). Two signals, both pure and deterministic:
 
 - **A lifted phrase** — a run of four or more consecutive words shared with a neighbour, carrying at least one content word ("my shoulders dropped before", "I've been rewinding it since"). This is the failure mode that actually shows up: the voice has a small stock of bodily images, and an author reading its neighbours reuses the phrasing verbatim.
 - **Wholesale overlap** — content-word Jaccard ≥ 0.30 with a neighbour. It catches the rewrite that dodges the phrase check by reordering but says the same thing with the same words.
