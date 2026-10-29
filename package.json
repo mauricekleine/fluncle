@@ -104,6 +104,7 @@
     "sharp": "0.35.5",
     "shell-quote": "1.11.0",
     "source-map-js": "1.2.2",
+    "systeminformation": "5.33.16",
     "undici": "7.30.1",
     "vue": "3.5.42"
   },
@@ -120,6 +121,7 @@
     "sharp": "Drop when Transformers and every Miniflare chain require sharp 0.35.5 or newer, including exact pins.",
     "shell-quote": "Drop when React Native devtools and Expo tooling require shell-quote 1.11.0 or newer.",
     "source-map-js": "Drop when every compiler, CSS, and source-map tooling chain requires source-map-js 1.2.2 or newer.",
+    "systeminformation": "Drop when @dotenvx/dotenvx requires systeminformation 5.33.16 or newer (GHSA-3f7j-7jwc-fxfj).",
     "undici": "Drop when every undici consumer, including @scalar/json-magic and Miniflare exact pins, requires 7.30.1 or newer.",
     "vue": "Drop when every Vue consumer requires Vue 3.5.42 or newer; Vue pins its renderer, compilers, and runtime to the same exact release."
   },
