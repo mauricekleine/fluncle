@@ -290,7 +290,7 @@ function compactMixtape(mixtape: {
     coordinate: mixtape.logId,
     note: mixtape.note ?? undefined,
     runtimeMs: mixtape.durationMs,
-    title: mixtape.title,
+    title: mixtapeDisplayTitle(mixtape.title),
   });
 }
 

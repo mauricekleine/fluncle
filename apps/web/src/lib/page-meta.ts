@@ -248,7 +248,7 @@ export function albumMetaDescription(album: {
     counted,
   ].filter((fact) => fact !== undefined);
   const sampled =
-    listed === undefined && recommends === undefined
+    recommends === undefined
       ? [3, 2].flatMap((size) =>
           titles.length < size || size >= trackCount
             ? []

@@ -91,6 +91,27 @@ describe("renderLlmsFull", () => {
     expect(doc).not.toContain("BPM");
   });
 
+  it("names a mixtape by its display title, its coordinate written once", () => {
+    const doc = renderLlmsFull(
+      [
+        {
+          artists: ["Fluncle"],
+          externalUrls: { mixcloud: "https://www.mixcloud.com/fluncle/mixtape-1/" },
+          logId: "019.F.1A",
+          memberCount: 17,
+          members: [],
+          status: "published",
+          title: "Fluncle Drum & Bass Mixtape #1 | 019.F.1A",
+          type: "mixtape",
+        },
+      ],
+      1,
+    );
+
+    expect(doc).toContain("- **Fluncle Drum & Bass Mixtape #1** (fluncle://019.F.1A)");
+    expect(doc).not.toContain("| 019.F.1A");
+  });
+
   it("notes omitted findings when the archive is truncated", () => {
     const doc = renderLlmsFull([finding({ logId: "012.8.0A" })], 30);
 
