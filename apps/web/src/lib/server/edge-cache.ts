@@ -291,7 +291,13 @@ export async function withEdgeCache(
 
   const url = new URL(request.url);
   const cacheKey = cacheKeyRequest(url.pathname, url.search);
-  const hit = await cache.match(cacheKey);
+  const hit = await cache.match(cacheKey).catch((cause: unknown) => {
+    void runServerEffect(
+      keepAlive("edge-cache.match-failed", Effect.fail(new EdgeCacheFailed({ cause }))),
+    );
+
+    return undefined;
+  });
 
   const storedAt = Number(hit?.headers.get(STAMP_HEADER));
   const crossesReleaseDay =
