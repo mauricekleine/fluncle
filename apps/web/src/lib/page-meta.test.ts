@@ -222,7 +222,7 @@ describe("albumMetaDescription", () => {
     );
   });
 
-  it("falls back to a count when the tracklist does not fit", () => {
+  it("falls back to a count when not even two track titles fit", () => {
     const description = albumMetaDescription({
       artist: "Various",
       bio: undefined,
@@ -232,11 +232,40 @@ describe("albumMetaDescription", () => {
       releaseDate: undefined,
       trackTitles: Array.from(
         { length: 20 },
-        (_value, index) => `A Rather Long Track Title ${index}`,
+        (_value, index) => `A Rather Long Track Title That Runs On Past Any Snippet ${index}`,
       ),
     });
 
     expect(description).toBe("Sampler by Various, a drum & bass release. 20 tracks.");
+  });
+
+  it("names the first tracks when the whole known tracklist does not fit", () => {
+    const description = albumMetaDescription({
+      artist: "Orbit Crew",
+      bio: undefined,
+      findingCount: 0,
+      label: undefined,
+      name: "Far Side LP",
+      releaseDate: "2026-10-15",
+      trackTitles: [
+        "Lift Off",
+        "Dust Lane",
+        "Long Way Back",
+        "Perihelion",
+        "Night Shift",
+        "Cold Burn",
+        "Static Bloom",
+        "Low Orbit",
+        "Second Sun",
+        "Drift Signal",
+        "Tidal Lock",
+        "Landfall",
+      ],
+    });
+
+    expect(description).toBe(
+      "Far Side LP by Orbit Crew, a 2026 drum & bass release. 12 tracks, including Lift Off, Dust Lane and Long Way Back.",
+    );
   });
 
   it("names the first tracks when the whole tracklist does not fit", () => {

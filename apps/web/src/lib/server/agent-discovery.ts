@@ -2,7 +2,7 @@ import llmsTxt from "../../../public/llms.txt?raw";
 import { radioUrl, siteUrl, spotifyPlaylistCanonicalUrl, telegramUrl } from "../fluncle-links";
 import { findingsCount } from "../format";
 import { fluncleDescription } from "../identity";
-import { type FeedItem } from "../mixtapes";
+import { type FeedItem, mixtapeDisplayTitle } from "../mixtapes";
 import { isGalaxyMapFullyNamed } from "./galaxies-map";
 import { sha256Hex } from "./hash";
 import { mcpToolNames } from "./mcp";
@@ -270,7 +270,7 @@ async function markdownHomeResponse(): Promise<Response> {
     : "";
   const tracks = page.tracks.map((track) => {
     if (track.type === "mixtape") {
-      return `- ${track.title} (${track.logId ?? "draft checkpoint"})`;
+      return `- ${mixtapeDisplayTitle(track.title)} (${track.logId ?? "draft checkpoint"})`;
     }
 
     return `- ${track.artists.join(", ")} — ${track.title} (found ${track.addedAt.slice(0, 10)})`;
@@ -448,7 +448,10 @@ function renderMixtape(track: Extract<FeedItem, { type: "mixtape" }>): string {
     track.externalUrls.mixcloud ?? track.externalUrls.youtube ?? track.externalUrls.soundcloud,
   ].filter(Boolean);
 
-  return [`- **${track.title}** (${coordinate})`, `  ${facts.join(" · ")}`].join("\n");
+  return [
+    `- **${mixtapeDisplayTitle(track.title)}** (${coordinate})`,
+    `  ${facts.join(" · ")}`,
+  ].join("\n");
 }
 
 function llmsTxtResponse(): Response {
