@@ -965,6 +965,35 @@ describe("withEdgeCache", () => {
     }
   });
 
+  it("renders a miss and logs the failure when the Cache API lookup rejects", async () => {
+    const fake = installFakeCache();
+    const globals = globalThis as { caches?: { default?: { match: unknown } } };
+    const cache = globals.caches?.default;
+    if (cache) {
+      cache.match = async () => {
+        throw new Error("Network connection lost.");
+      };
+    }
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const render = vi.fn(async () => html("rendered"));
+      const response = await withEdgeCache(new Request("https://www.fluncle.com/mixtapes"), render);
+      expect(response.headers.get("x-edge-cache")).toBe("miss");
+      expect(await response.text()).toBe("rendered");
+      expect(render).toHaveBeenCalledOnce();
+      await Promise.all(takeWaitUntilPromises());
+      expect(logged.mock.calls.map(([line]) => JSON.parse(String(line)))).toContainEqual(
+        expect.objectContaining({
+          cause: expect.stringContaining("Network connection lost."),
+          event: "edge-cache.match-failed",
+        }),
+      );
+    } finally {
+      logged.mockRestore();
+      fake.restore();
+    }
+  });
+
   it("retains stored entries for one error-only day beyond their serving expiry", async () => {
     const fake = installFakeCache();
     const request = new Request("https://www.fluncle.com/track/mb_x");
