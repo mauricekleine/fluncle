@@ -12,7 +12,7 @@ Every automation cron runs from a repo-checked-in host timer so the SCHEDULE is 
 
 Install all timers at once with [`../install-host-timers.sh`](../install-host-timers.sh), or just this one:
 
-````bash
+```bash
 sudo install -m 0644 docs/agents/hermes/observation-timer/fluncle-observation.service /etc/systemd/system/
 sudo install -m 0644 docs/agents/hermes/observation-timer/fluncle-observation.timer   /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -22,5 +22,6 @@ sudo systemctl enable --now fluncle-observation.timer
 sudo systemctl start fluncle-observation.service            # one tick now
 journalctl -u fluncle-observation.service -n 40 --no-pager  # expect a { "ok": true, … } summary line
 systemctl list-timers fluncle-observation.timer
-``` (The observation sweep costs Cartesia credits + subscription quota per render — watch the first tick before walking away.)
-````
+```
+
+The observation sweep costs Cartesia credits + subscription quota per render — watch the first tick before walking away.

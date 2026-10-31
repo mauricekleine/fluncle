@@ -11,7 +11,7 @@ The refresh was a Friday-07:00 BURST — it walked every minted playlist in one 
 The feature ships behind a **DEFAULT-DENY kill switch** (`frontier.minting` in the `settings` KV): ONLY the literal string `"true"` opens minting; an unset key, a fresh deploy, or a lost row reads as CLOSED. The switch gates only the EXTERNAL Spotify effect: with it closed the drain still performs its paced EDITION writes (the internal recommendation ledger the shelf reads — `switchOff: true`, editions written and reported as `editionOnly`), and skips only the Spotify mirror. So installing this timer is safe on any box: it never writes to Spotify until the operator opens minting, and its internal edition writes touch nothing a stranger can see.
 
 - **It certifies nothing and creates no new public authority.** Every playlist it touches already exists, minted by its own owner. `refresh_frontier_playlists` is AGENT tier, so the box's existing agent-scoped token drives it — **no new secret**. Zero LLM tokens.
-- **Best-effort per user.** One user's Spotify fault is counted in `failed` and the walk continues; the next week retries.
+- **Best-effort per user.** One user's Spotify fault is counted in `failed` and the walk continues; only a successful refresh is stamped, so the next tick retries.
 
 ## The cover leg is separate (and operator-run)
 

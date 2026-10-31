@@ -61,12 +61,12 @@ The transparent cutout `apps/web/public/fluncle-transparant.png` (mirrored to `p
 
 Generated from code by [`@fluncle/media`](../../packages/media/README.md) and written to [`banners/`](./banners): the floating cosmonaut against a warm Deep Field cosmos, **wordless** (the platform shows the channel name as text; the wordmark lives on the cover art). Regenerate with `bun run --cwd packages/media render:socials`.
 
-| Platform   | Asset          | File                     | Dimensions | Format | Notes                                                                                                |
-| ---------- | -------------- | ------------------------ | ---------- | ------ | ---------------------------------------------------------------------------------------------------- |
-| YouTube    | channel banner | `banners/youtube.png`    | 2048×1152  | PNG    | the figure is centred in the **1235×338** safe area so the hard mobile crop still catches it; ≤ 6 MB |
-| Mixcloud   | profile cover  | `banners/mixcloud.png`   | 2048×512   | PNG    | wide ~4.75:1 — confirm the exact crop in the uploader                                                |
-| SoundCloud | profile header | `banners/soundcloud.png` | 2480×520   | PNG    | 4.7:1, ≤ 2 MB cap; figure centred to survive SoundCloud's hard mobile crop (safe central ~1000×260)  |
-| Twitch     | profile banner | `banners/twitch.png`     | 1200×480   | PNG    | 2.5:1, ≤ 10 MB; figure centred (the avatar overlaps bottom-left on the channel page)                 |
+| Platform   | Asset          | File                     | Dimensions | Format | Notes                                                                                                    |
+| ---------- | -------------- | ------------------------ | ---------- | ------ | -------------------------------------------------------------------------------------------------------- |
+| YouTube    | channel banner | `banners/youtube.png`    | 2048×1152  | PNG    | the figure is centred in the **1235×338** safe area so the hard mobile crop still catches it; ≤ 6 MB     |
+| Mixcloud   | profile cover  | `banners/mixcloud.png`   | 2048×512   | PNG    | wide ~4.75:1 — confirm the exact crop in the uploader                                                    |
+| SoundCloud | profile header | `banners/soundcloud.png` | 2480×520   | PNG    | 4.7:1, ≤ 2 MB cap; figure centred in the **1480×460** safe area to survive SoundCloud's hard mobile crop |
+| Twitch     | profile banner | `banners/twitch.png`     | 1200×480   | PNG    | 2.5:1, ≤ 10 MB; figure centred (the avatar overlaps bottom-left on the channel page)                     |
 
 The **Spotify playlist cover** and the **Telegram channel** image are the cover art (`fluncle-cover.png`), not generated here. The X (1500×500) banner spec is wired in (`render: false`) for when that handle is claimed.
 

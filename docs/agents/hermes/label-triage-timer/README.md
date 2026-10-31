@@ -67,7 +67,7 @@ Every run's summary carries the measured `tokens` and `usd`, so the run ledger h
 The gate line, then a JSON summary:
 
 ```
-LABEL TRIAGE GATE: HOLD undecided=247 excluded=31 never-looked=9 stale=0 candidates=0 — 9 never-looked labels, below the threshold of 40
+LABEL TRIAGE GATE: HOLD undecided=247 excluded=31 carried=0 never-looked=9 stale=0 candidates=0 — 9 never-looked labels, below the threshold of 40
 {"checked":0,"gate":"hold","ok":true,"produced":0,…}
 ```
 
