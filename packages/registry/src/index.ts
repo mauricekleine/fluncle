@@ -247,7 +247,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "web_route",
     name: "web.artist",
     operatorNotes:
-      "Slug is real-name kebab-case (e.g. /artist/dbridge). Read-only; an artist earns a page on its CONTENT exactly as a label/album does — a row renders (a findings-free discovered artist included), a slug with no row 404s, and a page below the thin-content floor renders noindex + stays out of the sitemap (the ARTIST_INDEX_MIN_FINDINGS precedent). No probeConfig — the route is slug-parameterized, so there is no fixed URL to GET-probe.",
+      "Slug is real-name kebab-case (e.g. /artist/dbridge). Read-only; an artist earns a page on its CONTENT exactly as a label/album does — a row renders (a findings-free discovered artist included), a slug with no row 404s, and a page below the thin-content floor renders noindex + stays out of the sitemap (the ARTIST_INDEX_MIN_FINDINGS precedent). No probeConfig — the /artist/:slug page is slug-parameterized, and the fixed /artists index is not probed (unlike /labels).",
     route: "/artists",
     url: `${SITE}/artists`,
     weights: { ssh: "secondary", web: "secondary" },
