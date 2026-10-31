@@ -280,15 +280,15 @@ Point any MCP client at the endpoint, for example:
 
 ## Social Video
 
-`packages/video` is a Remotion kit that composes per-track social videos for Fluncle's Findings: 1080×1920 vertical clips that put one banger under the burning eclipse, on-brand with DESIGN.md and VOICE.md. It is built as a kit for a future AI agent to assemble fresh scenes per track, with `NostalgicCosmos` as the exemplar composition.
+`packages/video` is a Remotion kit that composes per-track social videos for Fluncle's Findings: 1080×1920 vertical clips that put one banger under the burning eclipse, on-brand with DESIGN.md and VOICE.md. It is built as a kit for a future AI agent to assemble fresh scenes per track: each clip is a self-contained composition in the gitignored `packages/video/src/remotion/workbench/<Id>.tsx`, auto-registered by `root.tsx`.
 
 Render a preview for a track locally:
 
 ```bash
-bun run social:preview <track-id>
+bun run social:preview <track-id> --composition <Id>
 ```
 
-This fetches the track, resolves and analyzes a preview clip, extracts the artwork palette, and renders to `packages/video/out/<track-id>.mp4` (props land alongside as `out/<track-id>.props.json`). Add `--skip-render` to stop after the props JSON, `--composition <Id>` to render a registered composition other than the exemplar, or run `bun run --cwd packages/video studio` to scrub the composition live.
+This fetches the track, resolves and analyzes a preview clip, extracts the artwork palette, and renders to `packages/video/out/<track-id>.mp4` (props land alongside as `out/<track-id>.props.json`). Rendering requires `--composition <Id>`; there is no default track composition. Add `--skip-render` to stop after the props JSON, or run `bun run --cwd packages/video studio` to scrub the composition live.
 
 `social:preview` is the local dev loop. Production renders run unattended on the box render conductor, which wakes a scale-to-zero GPU box, renders one queued finding, and ships the bundle to R2 — see [docs/agents/render-conductor.md](./docs/agents/render-conductor.md). Publishing the finished clip is a separate leg: the server pushes to TikTok and YouTube through its Postiz integration, driven by the `fluncle-publish-advance` box cron, with the [fluncle-publish skill](./packages/skills/fluncle-publish) as the doctrine. See [packages/video/README.md](./packages/video/README.md) for the machinery, the output contract, and the pipeline; the creative doctrine lives in the [fluncle-video skill](./packages/skills/fluncle-video).
 

@@ -70,7 +70,7 @@ So every pass ends with a JSON summary line on stdout and POSTs it to the run le
 
 `checked` is the DENOMINATOR — timers examined, counted before any filter — and it is the only field that separates a healthy idle pass from a blind one. `produced` is re-arms performed, `errors` failed re-arms, `queue_depth` the stranded timers this pass found; the ledger alarms on `produced == 0 AND queue_depth > 0`, so finding nothing to do stays silent forever while finding stranded timers and re-arming none does not. `expectedIntervalMs` mirrors this unit's own `OnCalendar`, and `run-events.test.ts` pins the pair against the `.timer` file so a cadence change cannot quietly teach the ledger the wrong freshness budget.
 
-**There is no `ok` in that line, deliberately.** The verdict is `exit_code == 0 && errors == 0` and the Worker computes it from the two facts above; a summary that grades itself is rejected at the edge, because the nightly Sentry sweep exited 0 for eleven nights while printing `{"errors":2,"ok":true}` — a hardcoded literal sitting beside the number that contradicted it.
+**There is no `ok` in that line, deliberately.** The verdict is `exit_code == 0 && errors == 0` and the Worker computes it from the two facts above; a summary's own `ok` is never trusted (the Worker stores it as `self_asserted_ok` and counts a false claim in the ledger's `liarCount`), because the nightly Sentry sweep exited 0 for eleven nights while printing `{"errors":2,"ok":true}` — a hardcoded literal sitting beside the number that contradicted it.
 
 Bearer headers and secret webhook/beacon URLs reach curl through escaped config on stdin (`--config -`), never argv.
 

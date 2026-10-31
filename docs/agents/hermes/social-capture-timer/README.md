@@ -20,6 +20,6 @@ sudo systemctl enable --now fluncle-social-capture.timer
 
 # Verify.
 sudo systemctl start fluncle-social-capture.service            # one tick now
-journalctl -u fluncle-social-capture.service -n 40 --no-pager  # expect a 2xx (no output on an empty backlog)
+journalctl -u fluncle-social-capture.service -n 40 --no-pager  # expect the tick's JSON counters line; a failed POST prints reason request_failed
 systemctl list-timers fluncle-social-capture.timer
 ```

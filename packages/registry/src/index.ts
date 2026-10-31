@@ -247,9 +247,9 @@ export const SURFACES: readonly Surface[] = [
     kind: "web_route",
     name: "web.artist",
     operatorNotes:
-      "Slug is real-name kebab-case (e.g. /artist/dbridge). Read-only; an artist earns a page on its CONTENT exactly as a label/album does — a row renders (a findings-free discovered artist included), a slug with no row 404s, and a page below the thin-content floor renders noindex + stays out of the sitemap (the ARTIST_INDEX_MIN_FINDINGS precedent). No probeConfig — the route is slug-parameterized, so there is no fixed URL to GET-probe.",
-    route: "/artist",
-    url: `${SITE}/artist`,
+      "Slug is real-name kebab-case (e.g. /artist/dbridge). Read-only; an artist earns a page on its CONTENT exactly as a label/album does — a row renders (a findings-free discovered artist included), a slug with no row 404s, and a page below the thin-content floor renders noindex + stays out of the sitemap (the ARTIST_INDEX_MIN_FINDINGS precedent). No probeConfig — the /artist/:slug page is slug-parameterized, and the fixed /artists index is not probed (unlike /labels).",
+    route: "/artists",
+    url: `${SITE}/artists`,
     weights: { ssh: "secondary", web: "secondary" },
   },
   {
@@ -626,7 +626,9 @@ export const SURFACES: readonly Surface[] = [
   {
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/api/v1/openapi.json`,
-    exposedContent: ["Spotify search candidates for submitting a track"],
+    exposedContent: [
+      "candidates for submitting a track, from the catalogue and Deezer, with Spotify as the fallback",
+    ],
     kind: "api",
     name: "api.search",
     route: "/api/v1/search",
@@ -1006,7 +1008,7 @@ export const SURFACES: readonly Surface[] = [
   {
     command: "ssh rave.fluncle.com",
     exposedContent: [
-      "the rave terminal TUI: Latest findings, Fresh releases, Artist archive, Sonic galaxies, Mixtape archive, Random banger, Submit, Subscribe, Install CLI, System status, About",
+      "the rave terminal TUI: Latest findings, Fresh releases, Artist archive, Sonic galaxies, Mixtape archive, Random banger, Submit a track, Subscribe, Install CLI, System status, About, Quit",
       "deep-register one-shots: `ssh rave.fluncle.com latest|fresh|random`",
     ],
     kind: "ssh",
@@ -1755,12 +1757,12 @@ export const SURFACES: readonly Surface[] = [
   {
     command: "fluncle admin newsletter draft",
     exposedContent: [
-      "draft + persist the weekly edition, then offer the operator a Discord Send button (the only agent cron)",
+      "draft + persist the weekly edition, then offer the operator the send command on Discord",
     ],
     kind: "cron",
     name: "cron.newsletter",
     operatorNotes:
-      "Fri 15:00 Amsterdam (cron `0 15 * * 5`, box pinned Europe/Amsterdam for DST). A hybrid --no-agent sweep with one claude -p authoring call. Send is operator-gated (agent token 403s send_edition). Source: docs/agents/hermes/newsletter-timer/README.md.",
+      "Fri 15:00 Amsterdam (OnCalendar `Fri 15:00 Europe/Amsterdam`, plus a 16:15 same-Friday retry). A hybrid --no-agent sweep with one claude -p authoring call. Send is operator-gated (agent token 403s send_edition). Source: docs/agents/hermes/newsletter-timer/README.md.",
     probeConfig: {
       cadenceMs: 7 * 24 * 60 * MINUTE_MS,
       cronName: "fluncle-newsletter",
