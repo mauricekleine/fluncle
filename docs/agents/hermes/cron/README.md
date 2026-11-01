@@ -336,7 +336,7 @@ The box's dependency-free SigV4 signer and the web signer must stay equivalent t
    TURSO_AUTH_TOKEN=op://<vault>/<turso-item>/TURSO_AUTH_TOKEN_READONLY
    FLUNCLE_BACKUP_R2_ACCESS_KEY_ID=op://<vault>/<r2-backup-item>/access_key_id
    FLUNCLE_BACKUP_R2_SECRET_ACCESS_KEY=op://<vault>/<r2-backup-item>/secret_access_key
-   R2_ACCOUNT_ID=0651fd3b33d9e0b2fe72a5f13e5cf65d
+   R2_ACCOUNT_ID=cd3869f6196b44d50b6ac4b77cb18511
    ```
 
 3. **Install the host timer.** The sweep pair bakes to `/opt/hermes-scripts` (Unit A); deploy is the host timer — the baked `backup-sweep.sh` on a 24h `.timer`, install + smoke in [`../backup-timer/README.md`](../backup-timer/README.md) (or all timers at once via [`../install-host-timers.sh`](../install-host-timers.sh)). Smoke-test as the cron user first: `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/backup-sweep.sh` → expect an `{ "ok": true, "dailyKey": … }` summary and the object in R2. Then confirm `cron.backup` goes green on `/status` after a tick.

@@ -10,17 +10,17 @@ export default defineConfig({
     entrypoint: "./src/server.ts",
     env: {
       CARTESIA_VOICE_ID: bindings.text("ca8c023f-1901-40f7-be8c-faafd7a58139"),
-      CF_CACHE_PURGE_ZONE_ID: bindings.text("93b403e3d6ed70d10cdd2890c557376f"),
+      CF_CACHE_PURGE_ZONE_ID: bindings.text("85c28a90f0c3586bc2cb05c3e8d51160"),
       OPENROUTER_CONTEXT_EFFORT: bindings.text("medium"),
       OPENROUTER_CONTEXT_MODEL: bindings.text("openai/gpt-5.6-luna"),
       OPENROUTER_REASONING_EFFORT: bindings.text("low"),
       OPENROUTER_SEARCH_MODEL: bindings.text("openai/gpt-5.6-luna"),
-      R2_ACCOUNT_ID: bindings.text("0651fd3b33d9e0b2fe72a5f13e5cf65d"),
+      R2_ACCOUNT_ID: bindings.text("cd3869f6196b44d50b6ac4b77cb18511"),
       SOURCE_AUDIO: bindings.r2({
         name: "fluncle-source-audio",
       }),
       SPOTIFY_ALBUM_TRACKS: bindings.kv({
-        id: "a495cc659e554f5dbcd8246e4f9771bb",
+        id: "3eb348abf7b24a8280db1f9248bc738f",
       }),
       VIDEOS: bindings.r2({
         name: "fluncle-videos",

@@ -12,7 +12,7 @@ import {
   presignUploads,
 } from "./r2-presign";
 
-const ACCOUNT_ID = "0651fd3b33d9e0b2fe72a5f13e5cf65d";
+const ACCOUNT_ID = "cd3869f6196b44d50b6ac4b77cb18511";
 
 beforeAll(() => {
   process.env.R2_ACCESS_KEY_ID = "test-access-key-id";

@@ -32,7 +32,7 @@ const COL_CLASS = "w-14";
 
 const MENU_COL_CLASS = "w-10";
 
-const R2_ACCOUNT_ID = "0651fd3b33d9e0b2fe72a5f13e5cf65d";
+const R2_ACCOUNT_ID = "cd3869f6196b44d50b6ac4b77cb18511";
 const R2_BUCKET = "fluncle-videos";
 function r2FolderUrl(logId: string) {
   const prefix = encodeURIComponent(`${logId}/`);
