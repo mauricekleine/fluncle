@@ -100,6 +100,7 @@
     "@modelcontextprotocol/sdk": "1.32.0",
     "@remotion/studio>zod": "catalog:",
     "compression": "1.8.2",
+    "node-forge": "1.4.2",
     "proxy-addr": "2.0.8",
     "sharp": "0.35.5",
     "shell-quote": "1.11.0",
