@@ -2483,7 +2483,7 @@ describe("runAnchorSweep — the firing preflight", () => {
       "kind=anchor&limit=1&count=false&paidMode=unasked",
     );
     const missing = () => Promise.resolve(Response.json({}));
-    expect(readAnchorIsrcDue(missing)).rejects.toThrow("invalid worklist");
+    await expect(readAnchorIsrcDue(missing)).rejects.toThrow("invalid worklist");
   });
 
   test("no ISRC ask slots leaves no work for the tap gate without a database probe", async () => {
