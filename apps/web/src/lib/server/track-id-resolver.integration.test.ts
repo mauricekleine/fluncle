@@ -17,6 +17,14 @@ const COLLIDING_TOKEN = "009.1.1A";
 
 let db: Client;
 
+function text(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new TypeError(`expected a string column, got ${typeof value}`);
+  }
+
+  return value;
+}
+
 beforeAll(async () => {
   db = await createIntegrationDb();
   await seedTrack(db, { logId: FINDING_LOG, trackId: FINDING_TRACK });
@@ -31,7 +39,7 @@ async function resolveOne(cte: string, token: string): Promise<string[]> {
     sql: `with ${cte} select track_id from resolved_track`,
   });
 
-  return result.rows.map((row) => String(row.track_id));
+  return result.rows.map((row) => text(row.track_id));
 }
 
 async function resolveAll(token: string): Promise<string[]> {
@@ -40,7 +48,7 @@ async function resolveAll(token: string): Promise<string[]> {
     sql: `with ${ALL_TRACK_OR_LOG_ID_MATCHES_CTE} select track_id from resolved_tracks order by track_id`,
   });
 
-  return result.rows.map((row) => String(row.track_id));
+  return result.rows.map((row) => text(row.track_id));
 }
 
 async function resolveBulk(tokens: string[]): Promise<Array<[string, string | null]>> {
@@ -50,8 +58,8 @@ async function resolveBulk(tokens: string[]): Promise<Array<[string, string | nu
   });
 
   return result.rows.map((row) => [
-    String(row.track_id),
-    row.log_id === null ? null : String(row.log_id),
+    text(row.track_id),
+    row.log_id === null ? null : text(row.log_id),
   ]);
 }
 
