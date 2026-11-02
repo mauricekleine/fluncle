@@ -80,6 +80,20 @@ const PUBLIC_SEARCH_WHERE = publicTrackWhere("tracks", "findings");
 
 const CERTIFIED_FIRST = `case when findings.track_id is null then 1 else 0 end asc`;
 
+function hydrateRankedSql(
+  rankedSql: string,
+  orderBy: string,
+  extra: { join?: string; select?: string } = {},
+): string {
+  return `with ranked as materialized (${rankedSql})
+          select ${SEARCH_SELECT}${extra.select ?? ""}
+          from ranked
+          cross join tracks on tracks.track_id = ranked.track_id
+          left join findings on findings.track_id = tracks.track_id
+          ${extra.join ?? ""}
+          order by ${orderBy}`;
+}
+
 function parseArtists(json: string): string[] {
   try {
     const raw: unknown = JSON.parse(json);
@@ -123,14 +137,17 @@ export async function ftsSearchRows(
   const db = await getDb();
   const result = await db.execute({
     args: [match, limit],
-    sql: `select ${SEARCH_SELECT}
-          from tracks_fts
-          join tracks on tracks.track_id = tracks_fts.track_id
-          left join findings on findings.track_id = tracks.track_id
-          where tracks_fts match ? and ${PUBLIC_SEARCH_WHERE}
-            ${submissionCandidates ? "and (tracks.spotify_uri is not null or tracks.spotify_url is not null or (tracks.isrc is not null and trim(tracks.isrc) <> '' and tracks.duration_ms > 0))" : ""}
-          order by ${CERTIFIED_FIRST}, bm25(tracks_fts) asc, tracks.track_id asc
-          limit ?`,
+    sql: hydrateRankedSql(
+      `select tracks.track_id as track_id, bm25(tracks_fts) as score
+       from tracks_fts
+       join tracks on tracks.track_id = tracks_fts.track_id
+       left join findings on findings.track_id = tracks.track_id
+       where tracks_fts match ? and ${PUBLIC_SEARCH_WHERE}
+         ${submissionCandidates ? "and (tracks.spotify_uri is not null or tracks.spotify_url is not null or (tracks.isrc is not null and trim(tracks.isrc) <> '' and tracks.duration_ms > 0))" : ""}
+       order by ${CERTIFIED_FIRST}, bm25(tracks_fts) asc, tracks.track_id asc
+       limit ?`,
+      `${CERTIFIED_FIRST}, ranked.score asc, ranked.track_id asc`,
+    ),
   });
 
   return typedRows<SearchRow>(result.rows);
@@ -618,12 +635,15 @@ async function runFilters(filters: SearchFilters, limit: number): Promise<Search
   const db = await getDb();
   const result = await db.execute({
     args: [...clauses.flatMap((clause) => clause.args), limit],
-    sql: `select ${SEARCH_SELECT}
-          from ${SEARCH_FROM}
-          where ${clauses.map((clause) => clause.sql).join(" and ")}
-            and ${PUBLIC_SEARCH_WHERE}
-          order by ${CERTIFIED_FIRST}, tracks.release_date desc, tracks.track_id asc
-          limit ?`,
+    sql: hydrateRankedSql(
+      `select tracks.track_id as track_id
+       from ${SEARCH_FROM}
+       where ${clauses.map((clause) => clause.sql).join(" and ")}
+         and ${PUBLIC_SEARCH_WHERE}
+       order by ${CERTIFIED_FIRST}, tracks.release_date desc, tracks.track_id asc
+       limit ?`,
+      `${CERTIFIED_FIRST}, tracks.release_date desc, tracks.track_id asc`,
+    ),
   });
 
   return {
@@ -647,14 +667,21 @@ async function resolveAnchor(
   const db = await getDb();
   const result = await db.execute({
     args: [match],
-    sql: `select ${SEARCH_SELECT}, emb.embedding_blob
-          from tracks_fts
-          join tracks on tracks.track_id = tracks_fts.track_id
-          join track_embeddings emb on emb.track_id = tracks.track_id
-          left join findings on findings.track_id = tracks.track_id
-          where tracks_fts match ? and ${PUBLIC_SEARCH_WHERE}
-          order by ${CERTIFIED_FIRST}, bm25(tracks_fts) asc, tracks.track_id asc
-          limit 1`,
+    sql: hydrateRankedSql(
+      `select tracks.track_id as track_id
+       from tracks_fts
+       join tracks on tracks.track_id = tracks_fts.track_id
+       join track_embeddings emb on emb.track_id = tracks.track_id
+       left join findings on findings.track_id = tracks.track_id
+       where tracks_fts match ? and ${PUBLIC_SEARCH_WHERE}
+       order by ${CERTIFIED_FIRST}, bm25(tracks_fts) asc, tracks.track_id asc
+       limit 1`,
+      `ranked.track_id asc`,
+      {
+        join: `join track_embeddings emb on emb.track_id = tracks.track_id`,
+        select: `, emb.embedding_blob`,
+      },
+    ),
   });
 
   const row = typedRow<SearchRow & { embedding_blob: unknown }>(result.rows);
