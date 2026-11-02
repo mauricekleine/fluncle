@@ -19,7 +19,9 @@ regexTarget = "match"
 regexes = [
   # The Cloudflare R2 account id is a runtime Worker binding (apps/web/cloudflare.config.ts) — a
   # public account IDENTIFIER, not a credential. It is useless without the actual
-  # R2 token, which is a Worker secret and never in the repo.
+  # R2 token, which is a Worker secret and never in the repo. gitleaks scans the full
+  # history, so the account's earlier id stays listed beside the current one.
+  '''cd3869f6196b44d50b6ac4b77cb18511''',
   '''0651fd3b33d9e0b2fe72a5f13e5cf65d''',
   # The IndexNow ownership token, served publicly at /<key>.txt so search engines can
   # verify domain ownership before accepting URL submissions. Public by design — it is
@@ -28,7 +30,9 @@ regexes = [
   # The Cloudflare cache-purge ZONE id, a plain var in apps/web/cloudflare.config.ts. Same
   # rationale as the R2 account id above: a public zone IDENTIFIER naming which zone to
   # purge, useless without the Cache-Purge-scoped CF_CACHE_PURGE_TOKEN, which is a
-  # Worker secret and never in the repo.
+  # Worker secret and never in the repo. The zone's earlier id stays listed for the
+  # full-history scan.
+  '''85c28a90f0c3586bc2cb05c3e8d51160''',
   '''93b403e3d6ed70d10cdd2890c557376f''',
   # The two Sentry DSN public keys (browser + Worker), committed in
   # apps/web/src/lib/sentry-config.ts. A DSN is a PUBLIC ingestion identifier — like

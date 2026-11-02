@@ -97,7 +97,7 @@ VITE_FLUNCLE_TELEGRAM_URL=https://t.me/fluncle
 # read it from .dev.vars.
 R2_ACCESS_KEY_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/R2_SECRET_ACCESS_KEY
-R2_ACCOUNT_ID=0651fd3b33d9e0b2fe72a5f13e5cf65d
+R2_ACCOUNT_ID=cd3869f6196b44d50b6ac4b77cb18511
 
 # Optional side-channels -- each no-ops when absent (readOptionalEnv in
 # src/lib/server/env.ts), so local dev works unprovisioned. Uncomment a block
