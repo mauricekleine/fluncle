@@ -1168,11 +1168,20 @@ export async function getTracksForMixtape(mixtapeId: string): Promise<MixtapeMem
   }));
 }
 
+function randomFindingSql(pickWhere = ""): string {
+  return `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+          where findings.track_id = (
+            select picked.track_id
+            from findings picked
+            join tracks picked_track on picked_track.track_id = picked.track_id
+            ${pickWhere}
+            order by random() limit 1
+          )`;
+}
+
 export async function getRandomTrack(): Promise<TrackListItem | undefined> {
   const db = await getDb();
-  const result = await db.execute({
-    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM} order by random() limit 1`,
-  });
+  const result = await db.execute({ sql: randomFindingSql() });
   const row = typedRow<TrackRow>(result.rows);
 
   return row ? toTrackListItem(row) : undefined;
@@ -1181,10 +1190,10 @@ export async function getRandomTrack(): Promise<TrackListItem | undefined> {
 export async function getRandomRadioTrack(): Promise<TrackListItem | undefined> {
   const db = await getDb();
   const result = await db.execute({
-    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
-          where findings.video_squared_at is not null
-            and findings.observation_audio_url is not null
-          order by random() limit 1`,
+    sql: randomFindingSql(
+      `where picked.video_squared_at is not null
+         and picked.observation_audio_url is not null`,
+    ),
   });
   const row = typedRow<TrackRow>(result.rows);
 

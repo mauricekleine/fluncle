@@ -14,6 +14,7 @@ import {
   compileFilters,
   type EntityMatchMode,
   entityMatchStatement,
+  ftsSearchRows,
   labelNameProbeStatement,
   resolveFilterEntities,
   searchArchive as searchArchiveLive,
@@ -786,6 +787,75 @@ describe("the catalogue rule — findings are named, the rest is not", () => {
     for (const hit of result.results) {
       expect(hit.certified).toBe(hit.logId !== undefined);
     }
+  });
+});
+
+describe("ranked reads hydrate the page, not every match", () => {
+  async function rankedStatementsDuring(run: () => Promise<unknown>): Promise<string[]> {
+    const executeSpy = vi.spyOn(db, "execute");
+    try {
+      await run();
+      return executeSpy.mock.calls
+        .map((call) => {
+          const arg = call[0] as string | { sql: string };
+
+          return typeof arg === "string" ? arg : arg.sql;
+        })
+        .filter((sql) => sql.trimStart().startsWith("with ranked as materialized"));
+    } finally {
+      executeSpy.mockRestore();
+    }
+  }
+
+  function rankedBody(sql: string): string {
+    return sql.slice(0, sql.indexOf("select tracks.track_id, tracks.title"));
+  }
+
+  const PER_ROW_COLUMNS = ["as sonic_seed", "as galaxy_name", "embedding_blob"];
+
+  it.each([
+    ["the FTS token tier", () => searchArchive({ q: "Hospital Records" })],
+    [
+      "the filter tier",
+      async () => {
+        translateQuery.mockResolvedValue({ artist: "Netsky", key: "A minor" });
+
+        return searchArchive({ q: "Netsky tracks in A minor" });
+      },
+    ],
+    [
+      "the sonic anchor",
+      async () => {
+        translateQuery.mockResolvedValue({ soundsLike: "Nine Clouds" });
+
+        return searchArchive({ q: "give me more of that Nine Clouds energy" });
+      },
+    ],
+  ])(
+    "%s ranks track ids under the limit and computes per-row columns afterwards",
+    async (_, run) => {
+      const statements = await rankedStatementsDuring(run);
+
+      expect(statements.length).toBeGreaterThan(0);
+      for (const sql of statements) {
+        const ranked = rankedBody(sql);
+
+        expect(ranked).toMatch(/limit (\?|1)\)\s*$/);
+        for (const column of PER_ROW_COLUMNS) {
+          expect(ranked).not.toContain(column);
+        }
+      }
+    },
+  );
+
+  it("keeps the certified-first order through the hydrate when the limit cuts the match set", async () => {
+    expect((await ftsSearchRows("hospital*", 2)).map((row) => row.track_id)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+    expect((await ftsSearchRows("hospital*", 1)).map((row) => row.track_id)).toEqual([
+      "certified-netsky",
+    ]);
   });
 });
 

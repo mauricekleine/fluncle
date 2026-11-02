@@ -139,6 +139,19 @@ describe("getRandomRadioTrack", () => {
     expect(track?.galaxy).toEqual({ name: "The Liquid Deep", slug: "the-liquid-deep" });
   });
 
+  it("draws the random finding by id before hydrating the one row it returns", async () => {
+    await getRandomRadioTrack();
+
+    const call: unknown = execute.mock.calls[0]?.[0];
+    const sql = typeof call === "object" && call !== null && "sql" in call ? String(call.sql) : "";
+    const pick = sql.slice(sql.indexOf("select picked.track_id"));
+
+    expect(pick).toContain("order by random() limit 1");
+    expect(pick).toContain("picked.video_squared_at is not null");
+    expect(pick).not.toContain("galaxy_name");
+    expect(sql.slice(0, sql.indexOf("select picked.track_id"))).not.toContain("random()");
+  });
+
   it("returns undefined when no finding is eligible", async () => {
     execute.mockResolvedValueOnce({ rows: [] });
 
