@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { buildCommitSha } from "./build-commit.ts";
 import { repositoryRoot } from "./classifier.mjs";
 
 function parseArguments(argv) {
@@ -166,13 +167,7 @@ function run(commandDefinition) {
           (process.env.CI
             ? ".turbo/cache"
             : join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "turbo", "fluncle")),
-        WORKERS_CI_COMMIT_SHA:
-          process.env.WORKERS_CI_COMMIT_SHA ||
-          spawnSync("git", ["rev-parse", "HEAD"], {
-            cwd: repositoryRoot(),
-            encoding: "utf8",
-          }).stdout?.trim() ||
-          "",
+        WORKERS_CI_COMMIT_SHA: buildCommitSha(),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });

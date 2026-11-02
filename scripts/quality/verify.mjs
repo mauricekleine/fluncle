@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { buildCommitSha } from "./build-commit.ts";
 import { classifyPaths, readPackageGraph, repositoryRoot } from "./classifier.mjs";
 import { commandsForLane } from "./run-lane.mjs";
 
@@ -299,7 +300,7 @@ function runStep(command, logPath, focused) {
       env: {
         ...process.env,
         ...(focused ? { FLUNCLE_VITEST_COVERAGE: "false" } : {}),
-        WORKERS_CI_COMMIT_SHA: process.env.WORKERS_CI_COMMIT_SHA || git("rev-parse", "HEAD").trim(),
+        WORKERS_CI_COMMIT_SHA: buildCommitSha(),
       },
       stdio: ["ignore", log, log],
     });
