@@ -38,6 +38,7 @@ import { Button } from "@fluncle/ui/components/button";
 import { Dialog, DialogContent } from "@fluncle/ui/components/dialog";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@fluncle/ui/components/empty";
 import { Label } from "@fluncle/ui/components/label";
+import { Separator } from "@fluncle/ui/components/separator";
 import { Switch } from "@fluncle/ui/components/switch";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { readCaptions } from "@/lib/server/captions";
@@ -973,7 +974,7 @@ function AdminBoardPage() {
             onClick={() => setWorklist(worklist.key)}
           />
         ))}
-        <span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
+        <Separator className="mx-1 h-5 data-vertical:self-center" orientation="vertical" />
         <CassetteTapeIcon
           aria-hidden="true"
           className="mr-0.5 size-3.5 text-muted-foreground"
