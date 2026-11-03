@@ -4605,16 +4605,6 @@ a.catalogue-letter:focus-visible {
   }
 }
 
-/* ── The crew button's glowing moving border (home link hub) ──────────────────
-   The Retint Rule (DESIGN.md): the Vercel/Linear conic-sweep border, stolen for
-   its craft and recolored to canon — a single warm arc that sweeps through
-   Eclipse Gold → Eclipse Glow → Re-entry Red (the eclipse heat), never a rainbow.
-   An @property --crew-glow-angle spins one conic gradient; ::before paints the lit
-   EDGE (the fill masked to a ~1.5px ring), and a blurred ::after casts the soft
-   halo beneath. It stays an outline control — no gold FILL — so the moving light
-   never competes with the Galaxy CTA's one sun (One Sun budget governs the total).
-   The button's own outline border still carries the resting frame + focus ring;
-   this is light laid on top. Reduced motion freezes it to a steady gold-lit frame. */
 /* The live-set banner pane (DESIGN.md "The Live Exception" + "The Legible Sky
    Rule"). It rides ABOVE the plate, directly over the raw cosmos backdrop where the
    gold sun-bloom is brightest, so the ground must DIM the backdrop enough to hold
@@ -4656,6 +4646,16 @@ a.catalogue-letter:focus-visible {
   color: var(--deep-field);
 }
 
+/* ── The crew button's glowing moving border (the top bar's Join button on /findings) ──
+   The Retint Rule (DESIGN.md): the Vercel/Linear conic-sweep border, stolen for
+   its craft and recolored to canon — a single warm arc that sweeps through
+   Eclipse Gold → Eclipse Glow → Re-entry Red (the eclipse heat), never a rainbow.
+   An @property --crew-glow-angle spins one conic gradient; ::before paints the lit
+   EDGE (the fill masked to a ~1.5px ring), and a blurred ::after casts the soft
+   halo beneath. It stays an outline control — no gold FILL — so the moving light
+   never competes with the Galaxy CTA's one sun (One Sun budget governs the total).
+   The button's own outline border still carries the resting frame + focus ring;
+   this is light laid on top. Reduced motion freezes it to a steady gold-lit frame. */
 @property --crew-glow-angle {
   inherits: false;
   initial-value: 0deg;
