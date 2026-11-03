@@ -3,29 +3,15 @@ import { sentryVitePlugin } from "@sentry/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
-import { execSync } from "node:child_process";
 import mdx from "fumadocs-mdx/vite";
 import { resolve } from "node:path";
 import { defineConfig, type Plugin, type PluginOption, type Rollup } from "vite";
+import { buildCommitSha } from "../../scripts/quality/build-commit.ts";
 import { clientChunkGroups } from "./scripts/client-chunk-groups";
 import { clientChunkPurityGate } from "./scripts/client-chunk-purity";
 import * as docsConfig from "./source.config";
 
-function resolveSentryRelease(): string {
-  const ciSha = process.env.WORKERS_CI_COMMIT_SHA;
-
-  if (ciSha) {
-    return ciSha;
-  }
-
-  try {
-    return execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
-  } catch {
-    return "";
-  }
-}
-
-const sentryRelease = resolveSentryRelease();
+const sentryRelease = buildCommitSha();
 
 const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN;
 const uploadSentrySourceMaps = Boolean(sentryAuthToken);

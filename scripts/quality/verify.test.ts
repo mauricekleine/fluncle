@@ -32,7 +32,13 @@ function git(root: string, ...args: string[]) {
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "fluncle-verify-")));
   fixtures.push(root);
-  for (const file of ["verify.mjs", "classifier.mjs", "run-lane.mjs", "deploy-watch-paths.json"]) {
+  for (const file of [
+    "verify.mjs",
+    "classifier.mjs",
+    "run-lane.mjs",
+    "build-commit.ts",
+    "deploy-watch-paths.json",
+  ]) {
     const target = join(root, "scripts/quality", file);
     mkdirSync(dirname(target), { recursive: true });
     cpSync(join(source, "scripts/quality", file), target);
