@@ -1398,7 +1398,7 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 60m, run by a rave-02 HOST systemd timer (docs/agents/hermes/artist-edges-timer/). The track_artists GRAPH BACKFILL (RFC artist-primary-capture, slice 0): the graph is crawl-era-only (born 2026-07-15) — only ~12.3k of ~37.5k tracks carry edges — so this folds each edge-less track's `artists_json` NAMES onto EXISTING `artists` identities and writes the `track_artists` edges, making the graph as full as honest matching allows (slice 1's identity-keyed capture authorization reads it). The matcher is IDENTITY-HONEST: each name matches by exact case-insensitive fold, then via `artist_aliases` (kind='name', status auto|confirmed — the search resolver's alias semantics); a fold two distinct identities share is ambiguous and matches nothing (fail-closed). It MINTS NOTHING — a bare name is not enough identity to create an entity — and reports the UNMATCHED RESIDUAL (credited names with no identity), which decides whether a later paced MusicBrainz credit-sweep is worth running. METADATA / GRAPH IDENTITY ONLY — it certifies nothing and publishes nothing (agent tier, the `backfill_recording_mbids` precedent). Worker-paced with NO vendor call (pure DB set-based matching, so no rate limit / circuit breaker): one bounded batch per tick folds the whole ~1.8k-row artist+alias corpus into one in-memory map and matches each track batch against it. The `tracks` row carries the durable reliability state (the `artist_edges_backfilled_at` stamp on EVERY visited row — matched, partial, or zero — so the worklist drains and a re-run is a no-op). New tracks are minted WITH edges (publish path + crawler link), so this catches history up and drains in a handful of ticks. Zero LLM tokens. Source: docs/agents/hermes/scripts/artist-edges-sweep.*. See docs/artist-relationship.md.",
     probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-artist-edges", kind: "cron" },
-    statusDescription: "folds artists_json names onto artist identities",
+    statusDescription: "matches each track's artist names to known artists",
     title: "Artist edges",
     weights: { status: "hidden" },
   },
@@ -1412,7 +1412,7 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 5m, run by a rave-02 HOST systemd timer (docs/agents/hermes/artist-credits-timer/). The MB CREDIT SWEEP (RFC artist-primary-capture, slice 1b): the sibling that completes what `backfill_artist_edges` (slice 0) could not. Slice 0's name-fold left a ~14.3k ZERO-MATCHED residual (a track it stamped but wrote no edge — no credited name folded to an existing identity), and those are exactly the tracks capture-authorization (slice 1) cannot reason about, since it matches BY IDENTITY through the `track_artists` graph. This sweep picks up that residual: for each zero-matched track carrying a MusicBrainz recording identity (`mb_recording_id`, or the `mb_<recording-mbid>` PK a crawler-born row carries), ONE paced `/recording/<mbid>?inc=artist-credits` lookup through the shared MusicBrainz client names its credited artists WITH their MB artist ids, and each resolves down a three-rung ladder: an EXACT `mbid` match, else an ADOPT (the credit name folds unambiguously onto an existing artist with no mbid — the common case, since the residual is dominated by compound credit strings like 'Sub Focus & Dimension' whose members Fluncle already holds as Spotify-keyed rows; adopting `coalesce`s the mbid onto that row instead of minting a duplicate, the split-identity guard), else a MINT of a fresh identity-true row (`mintArtistByMbid` — a real MBID is identity, the licence slice 0 lacked). Fail-closed on any ambiguity (a shared fold, or a fold whose row carries a different mbid) → mint, never a wrong merge. Then the `track_artists` edges are written. A zero-matched track with NO MB identity is TERMINALLY SKIPPED (stamped, never retried). METADATA / GRAPH IDENTITY ONLY — it certifies nothing and publishes nothing (agent tier, the `backfill_recording_mbids` precedent). Worker-paced (the box holds no MusicBrainz budget): a SMALL bounded batch per tick (each row is one ~1.1s MB call), 1 req/s, circuit-broken on a throttle, with a 60s response budget that pauses mid-page and resumes on the next request. The `tracks` row carries the durable per-row reliability state — its OWN `artist_credits_backfilled_at` stamp, DISTINCT from slice 0's `artist_edges_backfilled_at` (never disturbed). The ~14.3k residual drains at ~40/tick over ~a day and a half. Zero LLM tokens. Source: docs/agents/hermes/scripts/artist-credits-sweep.*. See docs/artist-relationship.md.",
     probeConfig: { cadenceMs: 5 * MINUTE_MS, cronName: "fluncle-artist-credits", kind: "cron" },
-    statusDescription: "mints artists from MusicBrainz credits for the residual",
+    statusDescription: "fills in each unmatched track's artists from MusicBrainz",
     title: "Artist credits",
     weights: { status: "hidden" },
   },
@@ -1860,7 +1860,7 @@ export const SURFACES: readonly Surface[] = [
       kind: "cron",
       schedule: { time: "04:00", tz: "Europe/Amsterdam" },
     },
-    statusDescription: "counts the crew and how far the probes reached",
+    statusDescription: "counts the crew and how far the findings reached",
     title: "Reach snapshot",
     weights: { status: "secondary" },
   },

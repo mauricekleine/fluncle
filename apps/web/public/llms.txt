@@ -8,7 +8,7 @@ The collection is called Fluncle's Findings. New tracks land most nights.
 
 ## Mixtapes
 
-Fluncle also logs his own DJ mixtapes. A mixtape is a checkpoint: one long set made from existing findings, with its own Log ID and its own /log page. It is not a finding and does not increase the found count. Mixtape coordinates use the same sector.mark shape, but the middle slot is the literal F, for example 019.F.1A. A finding has a digit there; a mixtape has F.
+Fluncle also logs his own DJ mixtapes. A mixtape is a checkpoint: one long set made from existing findings, with its own Log ID and its own /log page. It is not a finding and does not increase the found count. Mixtape coordinates use the same sector.orbit.mark shape, but the middle slot is the literal F, for example 019.F.1A. A finding has a digit there; a mixtape has F.
 
 ## Reading a Log ID
 

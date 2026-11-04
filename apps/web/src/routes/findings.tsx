@@ -42,6 +42,8 @@ const findingsDescription =
   "Every drum & bass banger Fluncle has certified, newest first, each one logged with the coordinate that names it.";
 
 const ARCHIVE_UNREACHABLE = "Couldn't reach the archive. The findings didn't make the trip back.";
+const NEXT_PAGE_UNREACHABLE =
+  "The next findings didn't make the trip back. Hit Load more to try again.";
 
 const fetchFindingsData = createServerFn({ method: "GET" }).handler(async () => {
   const { loadFindingsData } = await import("./-findings-data");
@@ -352,7 +354,9 @@ function FindingsPage() {
               </div>
 
               {loadFailed && tracks.length > 0 ? (
-                <p className="mt-4 text-sm text-destructive">{ARCHIVE_UNREACHABLE}</p>
+                <p className="mt-4 text-sm text-destructive">
+                  {hasNextPage ? NEXT_PAGE_UNREACHABLE : ARCHIVE_UNREACHABLE}
+                </p>
               ) : undefined}
             </section>
           </section>
