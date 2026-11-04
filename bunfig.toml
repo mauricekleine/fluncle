@@ -5,6 +5,19 @@
 linker = "hoisted"
 # Only install package versions published at least 3 days ago
 minimumReleaseAge = 259200
+# GHSA-4wq4-2ppv-q3hg and the 2026-11-03 security release; remove after 2026-11-06 21:50 UTC.
+minimumReleaseAgeExcludes = [
+  "better-auth",
+  "@better-auth/core",
+  "@better-auth/drizzle-adapter",
+  "@better-auth/expo",
+  "@better-auth/kysely-adapter",
+  "@better-auth/memory-adapter",
+  "@better-auth/mongo-adapter",
+  "@better-auth/prisma-adapter",
+  "@better-auth/telemetry",
+  "better-call",
+]
 
 [fmt]
 flavor = "oxfmt"
