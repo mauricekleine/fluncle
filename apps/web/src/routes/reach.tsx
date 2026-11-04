@@ -550,8 +550,8 @@ function ReachPage() {
           <h1 className="log-coordinate log-index-title">Reach</h1>
           <p className="log-index-intro">
             {crewTotal > 0 && !activeSlug
-              ? `${formatValue(crewTotal)} of you aboard across the Galaxy so far. This is the console where my probes report home.`
-              : "This is the console where my probes report home: every surface I've reached, and how far it's carried."}
+              ? `${formatValue(crewTotal)} crew aboard across the Galaxy. How far the findings have carried, platform by platform, over time.`
+              : "How far the findings have carried, and the crew aboard, over time."}
           </p>
         </header>
 

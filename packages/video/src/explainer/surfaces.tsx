@@ -448,9 +448,9 @@ const Galaxy: React.FC = () => (
 
 const Crawler: React.FC = () => (
   <div style={{ color: c.stardust, fontFamily: font.mono, fontSize: 24, lineHeight: 1.7 }}>
-    <div style={{ color: c.eclipseGold }}># llms.txt — for the machines that read the web</div>
-    <div>&gt; Fluncle discovers &amp; certifies drum &amp; bass bangers,</div>
-    <div>&gt; logs each as a finding, keeps the full archive…</div>
+    <div style={{ color: c.eclipseGold }}># llms.txt: for the machines that read the web</div>
+    <div>&gt; Fluncle discovers and certifies every track,</div>
+    <div>&gt; logs each as a finding, and keeps the full archive…</div>
     <div style={{ color: c.eclipseGold, marginTop: 18 }}># MCP tools</div>
     <div>&gt; list_findings · get_random_track · get_status</div>
     <div>&gt; search_tracks · submit_track</div>
