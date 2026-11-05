@@ -61,16 +61,6 @@ export type FrontierMintResult =
   | { kind: "error"; message: string }
   | { kind: "ok"; playlistUrl?: string; status: FrontierMintStatus };
 
-export function resolveGateState(
-  user: { emailVerified: boolean } | null | undefined,
-): "anonymous" | "unverified" | "verified" {
-  if (!user) {
-    return "anonymous";
-  }
-
-  return user.emailVerified ? "verified" : "unverified";
-}
-
 export function foldFrontierStatus(input: {
   body: unknown;
   ok: boolean;

@@ -45,30 +45,6 @@ export async function isSonarMixEnabled(): Promise<boolean> {
   return (await getSetting(SONAR_MIX_ENABLED_KEY)) === "true";
 }
 
-export async function setSonarSonicEnabled(enabled: boolean): Promise<void> {
-  await setSetting(SONAR_SONIC_ENABLED_KEY, enabled ? "true" : "false");
-}
-
-export async function setSonarArtistsEnabled(enabled: boolean): Promise<void> {
-  await setSetting(SONAR_ARTISTS_ENABLED_KEY, enabled ? "true" : "false");
-}
-
-export async function setSonarLogEnabled(enabled: boolean): Promise<void> {
-  await setSetting(SONAR_LOG_ENABLED_KEY, enabled ? "true" : "false");
-}
-
-export async function setSonarRecsEnabled(enabled: boolean): Promise<void> {
-  await setSetting(SONAR_RECS_ENABLED_KEY, enabled ? "true" : "false");
-}
-
-export async function setSonarRecsCatalogueEnabled(enabled: boolean): Promise<void> {
-  await setSetting(SONAR_RECS_CATALOGUE_ENABLED_KEY, enabled ? "true" : "false");
-}
-
-export async function setSonarMixEnabled(enabled: boolean): Promise<void> {
-  await setSetting(SONAR_MIX_ENABLED_KEY, enabled ? "true" : "false");
-}
-
 export async function setSonarTrackEnabled(enabled: boolean): Promise<void> {
   await setSetting(SONAR_TRACK_ENABLED_KEY, enabled ? "true" : "false");
 }

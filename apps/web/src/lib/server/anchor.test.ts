@@ -5,7 +5,7 @@ import {
   detectVersionMismatch,
   parseAnchorReview,
   pickIsrcCandidate,
-  pickVerifiedCandidate,
+  verifySearchCandidate,
 } from "./anchor";
 
 describe("anchorSearchQuery", () => {
@@ -62,21 +62,23 @@ describe("pickIsrcCandidate — the exact rung", () => {
   });
 });
 
-describe("pickVerifiedCandidate — the verified search triple", () => {
+describe("verifySearchCandidate — the verified search triple", () => {
   const base = { spotifyTrackId: "hit" };
 
   it("anchors a candidate that clears folded artist + title + ±2s duration", () => {
     const candidates = [{ ...base, artists: ["Muffler"], durationMs: 201_000, title: "Dribble" }];
 
-    expect(pickVerifiedCandidate(["Muffler"], "Dribble", 200_000, candidates)?.spotifyTrackId).toBe(
-      "hit",
-    );
+    expect(
+      verifySearchCandidate(["Muffler"], "Dribble", 200_000, candidates)?.candidate?.spotifyTrackId,
+    ).toBe("hit");
   });
 
   it("does NOT anchor when the duration is off by more than the 3s window", () => {
     const candidates = [{ ...base, artists: ["Hold Tight"], durationMs: 203_001, title: "Lounge" }];
 
-    expect(pickVerifiedCandidate(["Hold Tight"], "Lounge", 200_000, candidates)).toBeUndefined();
+    expect(
+      verifySearchCandidate(["Hold Tight"], "Lounge", 200_000, candidates)?.candidate,
+    ).toBeUndefined();
   });
 
   it("anchors at 2.6s off — the calibrated window (same-recording drift P99 ≈ 5s, wrong-recording ≥21s)", () => {
@@ -85,7 +87,8 @@ describe("pickVerifiedCandidate — the verified search triple", () => {
     ];
 
     expect(
-      pickVerifiedCandidate(["Donnie Dubson"], "Monday", 322_600, candidates)?.spotifyTrackId,
+      verifySearchCandidate(["Donnie Dubson"], "Monday", 322_600, candidates)?.candidate
+        ?.spotifyTrackId,
     ).toBe("hit");
   });
 
@@ -94,7 +97,9 @@ describe("pickVerifiedCandidate — the verified search triple", () => {
       { ...base, artists: ["DJ Fresh"], durationMs: 200_000, title: "Bad Company - VIP" },
     ];
 
-    expect(pickVerifiedCandidate(["DJ Fresh"], "Bad Company", 200_000, candidates)).toBeUndefined();
+    expect(
+      verifySearchCandidate(["DJ Fresh"], "Bad Company", 200_000, candidates)?.candidate,
+    ).toBeUndefined();
   });
 
   it("does NOT anchor when the artist set differs (disjoint is never a subset)", () => {
@@ -102,21 +107,26 @@ describe("pickVerifiedCandidate — the verified search triple", () => {
       { ...base, artists: ["Someone Else"], durationMs: 200_000, title: "Dribble" },
     ];
 
-    expect(pickVerifiedCandidate(["Muffler"], "Dribble", 200_000, candidates)).toBeUndefined();
+    expect(
+      verifySearchCandidate(["Muffler"], "Dribble", 200_000, candidates)?.candidate,
+    ).toBeUndefined();
   });
 
   it("SUBSET fallback: a primary-only credit anchors when the duration is within the tight 1s window", () => {
     const candidates = [{ ...base, artists: ["LSB"], durationMs: 340_400, title: "Could Be" }];
 
     expect(
-      pickVerifiedCandidate(["LSB", "DRS"], "Could Be", 340_000, candidates)?.spotifyTrackId,
+      verifySearchCandidate(["LSB", "DRS"], "Could Be", 340_000, candidates)?.candidate
+        ?.spotifyTrackId,
     ).toBe("hit");
   });
 
   it("SUBSET fallback refuses outside the tight window, even inside the full gate's 3s", () => {
     const candidates = [{ ...base, artists: ["LSB"], durationMs: 342_000, title: "Could Be" }];
 
-    expect(pickVerifiedCandidate(["LSB", "DRS"], "Could Be", 340_000, candidates)).toBeUndefined();
+    expect(
+      verifySearchCandidate(["LSB", "DRS"], "Could Be", 340_000, candidates)?.candidate,
+    ).toBeUndefined();
   });
 
   it("SUBSET fallback is one-way: a candidate crediting MORE artists than the row never matches", () => {
@@ -124,7 +134,9 @@ describe("pickVerifiedCandidate — the verified search triple", () => {
       { ...base, artists: ["LSB", "DRS"], durationMs: 340_000, title: "Could Be" },
     ];
 
-    expect(pickVerifiedCandidate(["LSB"], "Could Be", 340_000, candidates)).toBeUndefined();
+    expect(
+      verifySearchCandidate(["LSB"], "Could Be", 340_000, candidates)?.candidate,
+    ).toBeUndefined();
   });
 
   it("SUBSET fallback still enforces the version descriptor", () => {
@@ -132,13 +144,17 @@ describe("pickVerifiedCandidate — the verified search triple", () => {
       { ...base, artists: ["LSB"], durationMs: 340_000, title: "Could Be (Anile Remix)" },
     ];
 
-    expect(pickVerifiedCandidate(["LSB", "DRS"], "Could Be", 340_000, candidates)).toBeUndefined();
+    expect(
+      verifySearchCandidate(["LSB", "DRS"], "Could Be", 340_000, candidates)?.candidate,
+    ).toBeUndefined();
   });
 
   it("SUBSET fallback drops a candidate with no artists at all", () => {
     const candidates = [{ ...base, artists: [], durationMs: 340_000, title: "Could Be" }];
 
-    expect(pickVerifiedCandidate(["LSB", "DRS"], "Could Be", 340_000, candidates)).toBeUndefined();
+    expect(
+      verifySearchCandidate(["LSB", "DRS"], "Could Be", 340_000, candidates)?.candidate,
+    ).toBeUndefined();
   });
 
   it("the FULL gate wins over a closer-duration subset candidate", () => {
@@ -160,7 +176,8 @@ describe("pickVerifiedCandidate — the verified search triple", () => {
     ];
 
     expect(
-      pickVerifiedCandidate(["LSB", "DRS"], "Could Be", 340_000, candidates)?.spotifyTrackId,
+      verifySearchCandidate(["LSB", "DRS"], "Could Be", 340_000, candidates)?.candidate
+        ?.spotifyTrackId,
     ).toBe("full");
   });
 
@@ -189,9 +206,9 @@ describe("pickVerifiedCandidate — the verified search triple", () => {
       },
     ];
 
-    expect(pickVerifiedCandidate(["Muffler"], "Dribble", 200_000, candidates)?.spotifyTrackId).toBe(
-      "near",
-    );
+    expect(
+      verifySearchCandidate(["Muffler"], "Dribble", 200_000, candidates)?.candidate?.spotifyTrackId,
+    ).toBe("near");
   });
 });
 

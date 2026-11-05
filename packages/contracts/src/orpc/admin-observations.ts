@@ -39,6 +39,7 @@ export const ObservationRejectionSchema = z
     script: z.string(),
     title: z.string(),
     trackId: z.string(),
+    updatedAt: z.string(),
   })
   .meta({ id: "ObservationRejection" });
 
