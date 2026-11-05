@@ -8,11 +8,6 @@ const USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
 const TOKEN_TTL_SECONDS = 150 * 24 * 60 * 60;
 const TOKEN_REFRESH_SKEW_MS = 24 * 60 * 60 * 1000;
 
-export type AppleMusicLookupOutcome =
-  | { configured: false }
-  | { configured: true; ok: true; url: string | null }
-  | { authFailed?: boolean; configured: true; error: string; ok: false; rateLimited: boolean };
-
 type AppleMusicCredentials = {
   keyId: string;
   privateKeyPem: string;
@@ -119,35 +114,6 @@ async function developerToken(credentials: AppleMusicCredentials): Promise<strin
   };
 
   return token;
-}
-
-type AppleMusicSongsResponse = {
-  data?: Array<{ attributes?: { url?: string } }>;
-};
-
-export function extractAppleMusicUrl(body: unknown): string | null {
-  const url = (body as AppleMusicSongsResponse | null | undefined)?.data?.[0]?.attributes?.url;
-
-  return typeof url === "string" && url.trim() ? url.trim() : null;
-}
-
-export async function appleMusicLookupByIsrc(isrc: string): Promise<AppleMusicLookupOutcome> {
-  const clean = isrc.trim();
-
-  if (!clean) {
-    return { configured: true, ok: true, url: null };
-  }
-
-  const credentials = await readAppleMusicCredentials();
-  const outcome = await runServerEffect(
-    catalogRequest(credentials, `filter%5Bisrc%5D=${encodeURIComponent(clean)}`).pipe(
-      catalogOutcome("apple-music.lookup-failed", { isrc: clean }),
-    ),
-  );
-
-  return outcome.configured && outcome.ok
-    ? { configured: true, ok: true, url: extractAppleMusicUrl(outcome.body) }
-    : outcome;
 }
 
 export type AppleArtwork = {

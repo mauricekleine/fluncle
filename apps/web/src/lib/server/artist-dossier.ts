@@ -1,12 +1,7 @@
 import { type InStatement } from "@libsql/client/web";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
-import {
-  type EmbeddingCandidate,
-  readEmbeddingBlob,
-  rankBySimilarity,
-  toVectorProbe,
-} from "./embedding";
+import { readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { bestArtistAvatarUrl } from "../media";
 import { isSonarArtistsEnabled, searchSonar, type SonarMatch } from "./sonar";
 import { executeVectorFallback, vectorFallbackCandidateLimitSql } from "./vector-fallback";
@@ -60,95 +55,9 @@ export function meanEmbedding(vectors: number[][]): number[] | null {
   return sum.map((component) => component / vectors.length);
 }
 
-export type ArtistEmbeddingGroup = {
-  artistId: string;
-  imageUrl: string | undefined;
-  name: string;
-  slug: string;
-  vectors: number[][];
-};
-
-export function rankSimilarArtists(
-  targetArtistId: string,
-  groups: ArtistEmbeddingGroup[],
-  limit: number,
-): ArtistIdentity[] {
-  const targetGroup = groups.find((group) => group.artistId === targetArtistId);
-  const target = targetGroup ? meanEmbedding(targetGroup.vectors) : null;
-
-  if (!target) {
-    return [];
-  }
-
-  const candidates: EmbeddingCandidate<ArtistIdentity>[] = [];
-
-  for (const group of groups) {
-    if (group.artistId === targetArtistId) {
-      continue;
-    }
-
-    const mean = meanEmbedding(group.vectors);
-
-    if (mean) {
-      candidates.push({
-        embedding: mean,
-        item: { imageUrl: group.imageUrl, name: group.name, slug: group.slug },
-      });
-    }
-  }
-
-  return rankBySimilarity(target, candidates, limit);
-}
-
 export const MAX_SIMILAR_ARTISTS_INPUT = 6;
 
 export const SIMILAR_ARTISTS_LIMIT = 12;
-
-export function rankSimilarToArtists(
-  selectedArtistIds: string[],
-  groups: ArtistEmbeddingGroup[],
-  limit: number,
-): ArtistIdentity[] {
-  const selected = new Set(selectedArtistIds);
-  const selectedMeans: number[][] = [];
-
-  for (const group of groups) {
-    if (!selected.has(group.artistId)) {
-      continue;
-    }
-
-    const mean = meanEmbedding(group.vectors);
-
-    if (mean) {
-      selectedMeans.push(mean);
-    }
-  }
-
-  const target = meanEmbedding(selectedMeans);
-
-  if (!target) {
-    return [];
-  }
-
-  const candidates: EmbeddingCandidate<ArtistIdentity>[] = [];
-
-  for (const group of groups) {
-    if (selected.has(group.artistId)) {
-      continue;
-    }
-
-    const mean = meanEmbedding(group.vectors);
-
-    if (mean) {
-      candidates.push({
-        embedding: mean,
-        item: { imageUrl: group.imageUrl, name: group.name, slug: group.slug },
-      });
-    }
-  }
-
-  return rankBySimilarity(target, candidates, limit);
-}
 
 export function summarizeArtistSignature(findings: SignatureFinding[]): ArtistSignature {
   let firstFoundAt: string | undefined;

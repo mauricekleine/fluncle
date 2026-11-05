@@ -8,7 +8,6 @@ import {
   isEditionStale,
   mintToastMessage,
   type RecSeedItem,
-  resolveGateState,
   resolveOpenSummary,
   resolvePlaylistCta,
   savedFindingBody,
@@ -48,21 +47,6 @@ const AFTER = "2026-07-11T12:00:00.000Z";
 describe("SEED_CAP", () => {
   it("mirrors the server's MAX_REC_SEEDS (12) — the picked-state UI's cap", () => {
     expect(SEED_CAP).toBe(12);
-  });
-});
-
-describe("resolveGateState", () => {
-  it("no session is anonymous", () => {
-    expect(resolveGateState(null)).toBe("anonymous");
-    expect(resolveGateState(undefined)).toBe("anonymous");
-  });
-
-  it("a signed-in but unverified account is unverified", () => {
-    expect(resolveGateState({ emailVerified: false })).toBe("unverified");
-  });
-
-  it("a verified account opens the working surface", () => {
-    expect(resolveGateState({ emailVerified: true })).toBe("verified");
   });
 });
 

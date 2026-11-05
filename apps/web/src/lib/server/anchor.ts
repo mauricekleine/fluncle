@@ -91,15 +91,6 @@ function closestTo<T extends { durationMs?: null | number }>(rowDurationMs: numb
     Math.abs((right.durationMs ?? 0) - rowDurationMs);
 }
 
-export function pickVerifiedCandidate<T extends VerifiableCandidate>(
-  rowArtists: string[],
-  rowTitle: string,
-  rowDurationMs: number,
-  candidates: T[],
-): T | undefined {
-  return verifySearchCandidate(rowArtists, rowTitle, rowDurationMs, candidates)?.candidate;
-}
-
 export function verifySearchCandidate<T extends VerifiableCandidate>(
   rowArtists: string[],
   rowTitle: string,

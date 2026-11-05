@@ -47,27 +47,6 @@ beforeEach(() => {
   readOptionalEnv.mockResolvedValue(undefined);
 });
 
-describe("extractAppleMusicUrl", () => {
-  it("pulls the first datum's attributes.url", async () => {
-    const { extractAppleMusicUrl } = await import("./apple-music");
-
-    expect(
-      extractAppleMusicUrl({
-        data: [{ attributes: { url: "https://music.apple.com/us/song/x/1" } }],
-      }),
-    ).toBe("https://music.apple.com/us/song/x/1");
-  });
-
-  it("returns null for an empty result set (the ISRC matched nothing)", async () => {
-    const { extractAppleMusicUrl } = await import("./apple-music");
-
-    expect(extractAppleMusicUrl({ data: [] })).toBeNull();
-    expect(extractAppleMusicUrl({})).toBeNull();
-    expect(extractAppleMusicUrl(null)).toBeNull();
-    expect(extractAppleMusicUrl({ data: [{ attributes: {} }] })).toBeNull();
-  });
-});
-
 describe("buildAppleMusicJwt", () => {
   it("mints an ES256 JWT whose header/payload are correct and whose signature verifies", async () => {
     const { buildAppleMusicJwt } = await import("./apple-music");
@@ -116,22 +95,15 @@ describe("buildAppleMusicJwt", () => {
   });
 });
 
-describe("appleMusicLookupByIsrc — no-op until configured", () => {
-  it("returns { configured: false } when the MusicKit secrets are unset (no fetch)", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const { appleMusicLookupByIsrc } = await import("./apple-music");
-
-    const result = await appleMusicLookupByIsrc("GBABC1234567");
-
-    expect(result).toEqual({ configured: false });
-    expect(fetchSpy).not.toHaveBeenCalled();
-    fetchSpy.mockRestore();
-  });
-
+describe("appleCatalogLookupByIsrc — blank input", () => {
   it("short-circuits an empty ISRC as a clean no-match before reading any secret", async () => {
-    const { appleMusicLookupByIsrc } = await import("./apple-music");
+    const { appleCatalogLookupByIsrc } = await import("./apple-music");
 
-    expect(await appleMusicLookupByIsrc("  ")).toEqual({ configured: true, ok: true, url: null });
+    expect(await appleCatalogLookupByIsrc("  ")).toEqual({
+      bundle: null,
+      configured: true,
+      ok: true,
+    });
     expect(readOptionalEnv).not.toHaveBeenCalled();
   });
 });
@@ -495,7 +467,7 @@ describe("appleCatalogLookupByIsrc / appleCatalogLookupByIsrcs — wired", () =>
       vi.spyOn(globalThis, "fetch").mockResolvedValue(
         new Response(undefined, { status, statusText: "rejected" }),
       );
-      const { appleMusicLookupByIsrc, requestAppleCatalog } = await import("./apple-music");
+      const { appleCatalogLookupByIsrc, requestAppleCatalog } = await import("./apple-music");
       const expected = {
         ...(authFailed === undefined ? {} : { authFailed }),
         configured: true,
@@ -504,7 +476,7 @@ describe("appleCatalogLookupByIsrc / appleCatalogLookupByIsrcs — wired", () =>
         rateLimited,
       };
 
-      expect(await appleMusicLookupByIsrc("GB1111111111")).toEqual(expected);
+      expect(await appleCatalogLookupByIsrc("GB1111111111")).toEqual(expected);
       expect(await requestAppleCatalog("filter=example")).toEqual(expected);
     },
   );
@@ -530,14 +502,14 @@ describe("appleCatalogLookupByIsrc / appleCatalogLookupByIsrcs — wired", () =>
     const fetchMock = vi.spyOn(globalThis, "fetch");
     fetchMock.mockResolvedValueOnce(new Response("not-json"));
     fetchMock.mockRejectedValueOnce(new Error("offline"));
-    const { appleMusicLookupByIsrc } = await import("./apple-music");
+    const { appleCatalogLookupByIsrc } = await import("./apple-music");
 
-    expect(await appleMusicLookupByIsrc("GB1111111111")).toEqual({
+    expect(await appleCatalogLookupByIsrc("GB1111111111")).toEqual({
+      bundle: null,
       configured: true,
       ok: true,
-      url: null,
     });
-    expect(await appleMusicLookupByIsrc("GB1111111111")).toEqual({
+    expect(await appleCatalogLookupByIsrc("GB1111111111")).toEqual({
       configured: true,
       error: "offline",
       ok: false,

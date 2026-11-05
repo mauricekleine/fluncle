@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  type ArtistEmbeddingGroup,
   artistCentroidFingerprint,
   meanEmbedding,
-  rankSimilarArtists,
-  rankSimilarToArtists,
   summarizeArtistSignature,
 } from "./artist-dossier";
 
@@ -33,134 +30,6 @@ describe("meanEmbedding — the artist centroid", () => {
         [4, 4],
       ]),
     ).toEqual([4, 4, 3]);
-  });
-});
-
-describe("rankSimilarArtists — the similar-artists ranking", () => {
-  const groups: ArtistEmbeddingGroup[] = [
-    { artistId: "drift", imageUrl: undefined, name: "Drift", slug: "drift", vectors: [[1, 0]] },
-    {
-      artistId: "echo",
-      imageUrl: "https://i.scdn.co/image/echo",
-      name: "Echo",
-      slug: "echo",
-      vectors: [
-        [2, 0],
-        [4, 1],
-      ],
-    },
-    { artistId: "pulse", imageUrl: undefined, name: "Pulse", slug: "pulse", vectors: [[1, 1]] },
-    { artistId: "void", imageUrl: undefined, name: "Void", slug: "void", vectors: [[0, 1]] },
-  ];
-
-  it("ranks the other artists by mean-embedding cosine, nearest first, self excluded", () => {
-    const neighbours = rankSimilarArtists("drift", groups, 4);
-
-    expect(neighbours.map((n) => n.slug)).toEqual(["echo", "pulse", "void"]);
-
-    expect(neighbours.some((n) => n.slug === "drift")).toBe(false);
-  });
-
-  it("carries each neighbour's avatar through (undefined when the artist has none)", () => {
-    const neighbours = rankSimilarArtists("drift", groups, 4);
-
-    expect(neighbours).toContainEqual({
-      imageUrl: "https://i.scdn.co/image/echo",
-      name: "Echo",
-      slug: "echo",
-    });
-    expect(neighbours.find((n) => n.slug === "pulse")?.imageUrl).toBeUndefined();
-  });
-
-  it("honours the limit", () => {
-    expect(rankSimilarArtists("drift", groups, 1).map((n) => n.slug)).toEqual(["echo"]);
-    expect(rankSimilarArtists("drift", groups, 0)).toEqual([]);
-  });
-
-  it("returns nothing when the target artist is absent from the corpus", () => {
-    expect(rankSimilarArtists("nobody", groups, 4)).toEqual([]);
-  });
-
-  it("returns nothing when the target has no embedded finding to rank from", () => {
-    const withEmptyTarget: ArtistEmbeddingGroup[] = [
-      { artistId: "drift", imageUrl: undefined, name: "Drift", slug: "drift", vectors: [] },
-      { artistId: "echo", imageUrl: undefined, name: "Echo", slug: "echo", vectors: [[1, 0]] },
-    ];
-
-    expect(rankSimilarArtists("drift", withEmptyTarget, 4)).toEqual([]);
-  });
-
-  it("skips candidates that have no vectors (they can't be positioned)", () => {
-    const withEmptyCandidate: ArtistEmbeddingGroup[] = [
-      { artistId: "drift", imageUrl: undefined, name: "Drift", slug: "drift", vectors: [[1, 0]] },
-      { artistId: "ghost", imageUrl: undefined, name: "Ghost", slug: "ghost", vectors: [] },
-      { artistId: "echo", imageUrl: undefined, name: "Echo", slug: "echo", vectors: [[1, 0]] },
-    ];
-
-    expect(rankSimilarArtists("drift", withEmptyCandidate, 4).map((n) => n.slug)).toEqual(["echo"]);
-  });
-});
-
-describe("rankSimilarToArtists — the multi-artist 'sounds like these' probe math", () => {
-  const groups: ArtistEmbeddingGroup[] = [
-    { artistId: "drift", imageUrl: undefined, name: "Drift", slug: "drift", vectors: [[1, 0]] },
-    {
-      artistId: "echo",
-      imageUrl: "https://i.scdn.co/image/echo",
-      name: "Echo",
-      slug: "echo",
-      vectors: [
-        [2, 0],
-        [4, 1],
-      ],
-    },
-    { artistId: "pulse", imageUrl: undefined, name: "Pulse", slug: "pulse", vectors: [[1, 1]] },
-    { artistId: "void", imageUrl: undefined, name: "Void", slug: "void", vectors: [[0, 1]] },
-  ];
-
-  it("ranks by cosine to the AVERAGE of the selected artists, both selected excluded", () => {
-    const results = rankSimilarToArtists(["drift", "void"], groups, 4);
-
-    expect(results.map((artist) => artist.slug)).toEqual(["pulse", "echo"]);
-    expect(results.some((artist) => artist.slug === "drift" || artist.slug === "void")).toBe(false);
-  });
-
-  it("with a SINGLE selected artist, equals the one-target rankSimilarArtists (the degenerate case)", () => {
-    expect(rankSimilarToArtists(["drift"], groups, 4)).toEqual(
-      rankSimilarArtists("drift", groups, 4),
-    );
-  });
-
-  it("weighs each selected artist equally regardless of catalogue depth (mean of means)", () => {
-    const results = rankSimilarToArtists(["drift", "echo"], groups, 4);
-
-    expect(results.map((artist) => artist.slug)).toEqual(["pulse", "void"]);
-  });
-
-  it("honours the limit and returns [] for a non-positive one", () => {
-    expect(rankSimilarToArtists(["drift", "void"], groups, 1).map((a) => a.slug)).toEqual([
-      "pulse",
-    ]);
-    expect(rankSimilarToArtists(["drift", "void"], groups, 0)).toEqual([]);
-  });
-
-  it("returns [] when no selected artist has a vector to position from", () => {
-    expect(rankSimilarToArtists(["nobody"], groups, 4)).toEqual([]);
-
-    const withEmptySelected: ArtistEmbeddingGroup[] = [
-      { artistId: "drift", imageUrl: undefined, name: "Drift", slug: "drift", vectors: [] },
-      { artistId: "echo", imageUrl: undefined, name: "Echo", slug: "echo", vectors: [[1, 0]] },
-    ];
-    expect(rankSimilarToArtists(["drift"], withEmptySelected, 4)).toEqual([]);
-  });
-
-  it("carries each neighbour's avatar through", () => {
-    const results = rankSimilarToArtists(["drift", "void"], groups, 4);
-
-    expect(results.find((artist) => artist.slug === "echo")?.imageUrl).toBe(
-      "https://i.scdn.co/image/echo",
-    );
-    expect(results.find((artist) => artist.slug === "pulse")?.imageUrl).toBeUndefined();
   });
 });
 

@@ -32,6 +32,7 @@ export const NoteRejectionSchema = z
     resolvedAt: z.string().optional(),
     title: z.string(),
     trackId: z.string(),
+    updatedAt: z.string(),
   })
   .meta({ id: "NoteRejection" });
 

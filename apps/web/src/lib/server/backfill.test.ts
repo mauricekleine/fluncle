@@ -4,7 +4,6 @@ const listTracks = vi.fn();
 const getTracksByIds = vi.fn();
 const discogsResolveRelease = vi.fn();
 const lastfmLove = vi.fn();
-const appleMusicLookupByIsrc = vi.fn();
 const appleCatalogLookupByIsrc = vi.fn();
 const appleCatalogLookupByIsrcs = vi.fn();
 
@@ -64,7 +63,6 @@ vi.mock("./lastfm", () => ({ lastfmLove: (...a: unknown[]) => lastfmLove(...a) }
 vi.mock("./apple-music", () => ({
   appleCatalogLookupByIsrc: (...a: unknown[]) => appleCatalogLookupByIsrc(...a),
   appleCatalogLookupByIsrcs: (...a: unknown[]) => appleCatalogLookupByIsrcs(...a),
-  appleMusicLookupByIsrc: (...a: unknown[]) => appleMusicLookupByIsrc(...a),
 }));
 vi.mock("./apple-breaker", () => ({
   areAppleCallsAllowed: (...a: unknown[]) => areAppleCallsAllowed(...a),

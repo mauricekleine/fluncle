@@ -80,6 +80,8 @@ export const CatalogueSummarySchema = z
     awaitingCapture: z.number(),
     awaitingRank: z.number(),
 
+    computedAt: z.string().nullable(),
+
     dismissed: z.number(),
 
     quarantined: z.number(),

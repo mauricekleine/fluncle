@@ -187,6 +187,7 @@ export const FreshAlbumSchema = z
     releaseDate: z.string(),
 
     slug: z.string(),
+    trackCount: z.number(),
   })
   .meta({ id: "FreshAlbum" });
 
