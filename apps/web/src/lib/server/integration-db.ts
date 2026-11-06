@@ -1,3 +1,4 @@
+import { labelFold } from "@fluncle/contracts/util/galaxy-slug";
 import { type Client, createClient } from "@libsql/client";
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
@@ -226,9 +227,16 @@ export async function seedLabel(client: Client, label: SeedEntity): Promise<void
   const now = new Date().toISOString();
 
   await client.execute({
-    args: [label.id, label.name ?? "Test Label", label.slug, now, now],
-    sql: `insert into labels (id, name, slug, created_at, updated_at)
-      values (?, ?, ?, ?, ?)`,
+    args: [
+      label.id,
+      label.name ?? "Test Label",
+      labelFold(label.name ?? "Test Label"),
+      label.slug,
+      now,
+      now,
+    ],
+    sql: `insert into labels (id, name, name_fold, slug, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?)`,
   });
 }
 

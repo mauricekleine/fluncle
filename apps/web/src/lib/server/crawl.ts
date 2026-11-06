@@ -32,6 +32,11 @@ import {
   isCrawlDueCutoverEnabled,
   settleClaimedCrawlFrontierRow,
 } from "./crawl-cutover";
+import {
+  readCrawlFoldLabelRows,
+  readCrawlLabelRows,
+  type CrawlLabelScopeRow,
+} from "./crawl-labels";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
 import {
@@ -447,10 +452,9 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
 async function canonicalLabelRow(
   name: string,
   client: Pick<Client, "execute"> | undefined,
-  context: CrawlCommitContext,
 ): Promise<undefined | { id: string; mbLabelId: null | string; name: string }> {
   const key = fold(name);
-  const rows = await freshFoldLabelRows([key], client, context);
+  const rows = await readCrawlFoldLabelRows([key], client);
   const row = rows.find((candidate) => fold(candidate.name) === key);
   return row ? { id: row.id, mbLabelId: row.mb_label_id, name: row.name } : undefined;
 }
@@ -1702,7 +1706,6 @@ async function releaseLabelSlugs(
   node: FrontierRow,
   releases: readonly BrowsedRelease[],
   client: CrawlDbClient | undefined,
-  context: CrawlCommitContext,
 ): Promise<Map<string, null | string>> {
   if (node.kind === "label") {
     return new Map(releases.map((release) => [release.id, node.label_slug]));
@@ -1718,7 +1721,7 @@ async function releaseLabelSlugs(
   const keys = releases.flatMap((release) =>
     release.label?.name && !byMbid.has(release.label.id ?? "") ? [fold(release.label.name)] : [],
   );
-  const fallbackRows = await freshFoldLabelRows(keys, client, context);
+  const fallbackRows = await readCrawlFoldLabelRows(keys, client);
   const byFold = new Map<string, string | typeof AMBIGUOUS_FOLD>();
   for (const row of fallbackRows) {
     const key = fold(row.name);
@@ -1745,13 +1748,12 @@ async function enqueueReleaseNodes(
   childHop: number,
   replayWatermark: string | undefined,
   client: CrawlDbClient | undefined,
-  context: CrawlCommitContext,
 ): Promise<number> {
   if (releases.length === 0) {
     return 0;
   }
   const db = client ?? (await getDb());
-  const ownLabels = await releaseLabelSlugs(node, releases, client, context);
+  const ownLabels = await releaseLabelSlugs(node, releases, client);
   const groups: InStatement[][] = [];
 
   const insertGroups = new Set<number>();
@@ -1911,18 +1913,10 @@ async function applyForwardBrowse(
   childHop: number,
   browse: MbReleaseBrowse | null,
   client: CrawlDbClient | undefined,
-  context: CrawlCommitContext,
 ): Promise<Expansion> {
   const replayWatermark = await forwardReplayWatermark(node, client);
   const releases = browseReleases(browse, node.kind === "label" && replayWatermark !== undefined);
-  const enqueued = await enqueueReleaseNodes(
-    node,
-    releases,
-    childHop,
-    replayWatermark,
-    client,
-    context,
-  );
+  const enqueued = await enqueueReleaseNodes(node, releases, childHop, replayWatermark, client);
 
   const rawPageLength = browse?.releases?.length ?? 0;
   const consumed = node.cursor + rawPageLength;
@@ -1941,7 +1935,6 @@ async function applyRearmedBrowse(
   childHop: number,
   provider: RearmedBrowseProviderData,
   client: CrawlDbClient | undefined,
-  context: CrawlCommitContext,
 ): Promise<Expansion> {
   const { offset, page, staleTotal } = provider;
   if (node.cursor === REARM_TAIL && staleTotal !== null && staleTotal <= 0) {
@@ -1949,7 +1942,7 @@ async function applyRearmedBrowse(
   }
   const releases = browseReleases(page);
   const total = page?.["release-count"] ?? offset + releases.length;
-  const enqueued = await enqueueReleaseNodes(node, releases, childHop, undefined, client, context);
+  const enqueued = await enqueueReleaseNodes(node, releases, childHop, undefined, client);
 
   if (staleTotal !== null && total > staleTotal) {
     return {
@@ -1994,110 +1987,6 @@ function addLabelRule(map: Map<string, Set<string>>, labelId: string, artistMbid
   const artists = map.get(labelId) ?? new Set<string>();
   artists.add(artistMbid);
   map.set(labelId, artists);
-}
-
-type CrawlLabelScopeRow = {
-  founding_date: null | string;
-  id: string;
-  mb_label_id: null | string;
-  name: string;
-  seed_state: string;
-  slug: string;
-};
-
-const CRAWL_LABEL_LOOKUP_CHUNK_SIZE = 100;
-const CRAWL_LABEL_DECISION_COLUMNS =
-  "id, name, slug, mb_label_id, seed_state, founding_date, rowid as label_rowid";
-
-class CrawlCommitContext {
-  private index: Promise<Map<string, Set<string>>> | undefined;
-
-  load(client?: Pick<Client, "execute">): Promise<Map<string, Set<string>>> {
-    this.index ??= this.loadIndex(client).catch((error: unknown) => {
-      this.index = undefined;
-      throw error;
-    });
-    return this.index;
-  }
-
-  async add(id: string, name: string, client?: Pick<Client, "execute">): Promise<void> {
-    const key = fold(name);
-    if (!key) {
-      return;
-    }
-    const index = await this.load(client);
-    const ids = index.get(key) ?? new Set<string>();
-    ids.add(id);
-    index.set(key, ids);
-  }
-
-  private async loadIndex(client?: Pick<Client, "execute">): Promise<Map<string, Set<string>>> {
-    const db = client ?? (await getDb());
-    const result = await db.execute("select id, name from labels");
-    const index = new Map<string, Set<string>>();
-    for (const row of typedRows<{ id: string; name: string }>(result.rows)) {
-      const key = fold(row.name);
-      if (key) {
-        const ids = index.get(key) ?? new Set<string>();
-        ids.add(row.id);
-        index.set(key, ids);
-      }
-    }
-    return index;
-  }
-}
-
-async function readCrawlLabelRows(
-  column: "id" | "mb_label_id",
-  values: readonly string[],
-  client?: Pick<Client, "execute">,
-): Promise<CrawlLabelScopeRow[]> {
-  const keys = [...new Set(values)];
-  const rows: (CrawlLabelScopeRow & { label_rowid: number })[] = [];
-  if (keys.length === 0) {
-    return rows;
-  }
-  const db = client ?? (await getDb());
-  for (let offset = 0; offset < keys.length; offset += CRAWL_LABEL_LOOKUP_CHUNK_SIZE) {
-    const chunk = keys.slice(offset, offset + CRAWL_LABEL_LOOKUP_CHUNK_SIZE);
-    const result = await db.execute({
-      args: chunk,
-      sql: `select ${CRAWL_LABEL_DECISION_COLUMNS} from labels where ${column} in (${chunk.map(() => "?").join(", ")})${column === "id" ? " order by rowid" : ""}`,
-    });
-    rows.push(...typedRows<CrawlLabelScopeRow & { label_rowid: number }>(result.rows));
-  }
-  return column === "id" ? rows.sort((left, right) => left.label_rowid - right.label_rowid) : rows;
-}
-
-async function freshFoldLabelRows(
-  keys: readonly string[],
-  client: Pick<Client, "execute"> | undefined,
-  context: CrawlCommitContext,
-): Promise<CrawlLabelScopeRow[]> {
-  const wanted = new Set(keys.filter(Boolean));
-  if (wanted.size === 0) {
-    return [];
-  }
-  const index = await context.load(client);
-  const ids = [...wanted].flatMap((key) => [...(index.get(key) ?? [])]);
-  const rows = await readCrawlLabelRows("id", ids, client);
-  return rows.filter((row) => wanted.has(fold(row.name)));
-}
-
-async function ensureIndexedLabel(
-  name: string,
-  mbid: string,
-  client: CrawlDbClient | undefined,
-  context: CrawlCommitContext,
-): Promise<void> {
-  const id = await ensureLabel(name, mbid, client);
-  if (!id) {
-    return;
-  }
-  const [row] = await readCrawlLabelRows("id", [id], client);
-  if (row) {
-    await context.add(row.id, row.name, client);
-  }
 }
 
 async function getScopeMemo(
@@ -2164,7 +2053,6 @@ async function releaseLabelScope(
   mbLabelId: null | string,
   labelName: null | string | undefined,
   client: Pick<Client, "execute"> | undefined,
-  context: CrawlCommitContext,
 ): Promise<ReleaseLabelScope> {
   const [exact] = await readCrawlLabelRows("mb_label_id", mbLabelId ? [mbLabelId] : [], client);
   const entry = (row: CrawlLabelScopeRow): ReleaseLabelScope => ({
@@ -2177,7 +2065,7 @@ async function releaseLabelScope(
     return entry(exact);
   }
   const key = labelName ? fold(labelName) : "";
-  const candidates = await freshFoldLabelRows([key], client, context);
+  const candidates = await readCrawlFoldLabelRows([key], client);
   const [fallback] = candidates;
   if (candidates.length === 1 && fallback) {
     return entry(fallback);
@@ -2299,7 +2187,6 @@ async function applyRelease(
   maxHop: number,
   release: MbReleaseDetail | null,
   client: CrawlDbClient | undefined,
-  context: CrawlCommitContext,
 ): Promise<Expansion> {
   if (!release?.id) {
     return { ...EMPTY, next: { cursor: 0, note: "no MusicBrainz release", state: "skipped" } };
@@ -2315,7 +2202,7 @@ async function applyRelease(
   let labelName = mbLabelName;
 
   if (mbLabelName && labelSlug(mbLabelName)) {
-    const known = await canonicalLabelRow(mbLabelName, client, context);
+    const known = await canonicalLabelRow(mbLabelName, client);
 
     if (known) {
       labelName = known.name;
@@ -2324,7 +2211,7 @@ async function applyRelease(
         await adoptLabelMbLabelId(known.id, mbLabelId, client);
       }
     } else if (mbLabelId) {
-      await ensureIndexedLabel(mbLabelName, mbLabelId, client, context);
+      await ensureLabel(mbLabelName, mbLabelId, client);
       labelsDiscovered.push(mbLabelName);
     } else {
       logEvent("info", "crawl.label-discovery-unidentified", { name: mbLabelName });
@@ -2394,7 +2281,7 @@ async function applyRelease(
 
   collectReleaseCandidates();
 
-  const scope = await releaseLabelScope(mbLabelId, mbLabelName ?? labelName, client, context);
+  const scope = await releaseLabelScope(mbLabelId, mbLabelName ?? labelName, client);
   const memo = await getScopeMemo(
     candidates.flatMap((candidate) => {
       const first = candidate.creditMbids.find((mbid): mbid is string => mbid !== null);
@@ -2513,7 +2400,6 @@ async function applyCrawlProvider(
   plan: CrawlProviderPlan,
   outcome: CrawlProviderOutcome,
   client: CrawlDbClient | undefined,
-  context: CrawlCommitContext,
 ): Promise<Expansion> {
   if (outcome.kind === "failed") {
     const error = outcome.rateLimited
@@ -2551,25 +2437,21 @@ async function applyCrawlProvider(
     return applySeedLabel(node, plan, outcome.data.search, client);
   }
   if (plan.kind === "browse-forward" && outcome.data.kind === "browse-forward") {
-    return applyForwardBrowse(node, plan.childHop, outcome.data.browse, client, context);
+    return applyForwardBrowse(node, plan.childHop, outcome.data.browse, client);
   }
   if (plan.kind === "browse-rearmed" && outcome.data.kind === "browse-rearmed") {
-    return applyRearmedBrowse(node, plan.childHop, outcome.data.browse, client, context);
+    return applyRearmedBrowse(node, plan.childHop, outcome.data.browse, client);
   }
   if (plan.kind === "release" && outcome.data.kind === "release") {
-    return applyRelease(node, maxHop, outcome.data.release, client, context);
+    return applyRelease(node, maxHop, outcome.data.release, client);
   }
   throw new Error("Crawl provider result does not match its prepared node");
 }
 
-async function expandNode(
-  node: FrontierRow,
-  maxHop: number,
-  context: CrawlCommitContext,
-): Promise<Expansion> {
+async function expandNode(node: FrontierRow, maxHop: number): Promise<Expansion> {
   const plan = await planCrawlNode(node, maxHop);
   const data = await fetchCrawlProvider(plan, node);
-  return applyCrawlProvider(node, maxHop, plan, { data, kind: "success" }, undefined, context);
+  return applyCrawlProvider(node, maxHop, plan, { data, kind: "success" }, undefined);
 }
 
 const CRAWL_PHASE_TOKEN_KEY_LABEL = "fluncle/catalogue-crawl-phase/v1";
@@ -2991,7 +2873,6 @@ function expansionResult(expansion: Expansion, plan: CrawlProviderPlan): JsonVal
 
 export async function commitCrawlPhase(
   options: CrawlPhaseFetchResult,
-  context = new CrawlCommitContext(),
 ): Promise<OperationReceiptOutcome> {
   const fetched = await verifyCrawlPhaseToken<FetchedCrawlPhaseToken>(
     options.commitToken,
@@ -3066,7 +2947,6 @@ export async function commitCrawlPhase(
         fetched.plan,
         fetched.outcome,
         transaction,
-        context,
       );
       const settled = await settleClaimedCrawlFrontierRow(transaction, {
         claimToken: fetched.claimToken,
@@ -3118,10 +2998,7 @@ export type CrawlCommitBatchResult = {
 export async function commitCrawlNodes(
   items: readonly CrawlCommitBatchItem[],
   options: {
-    commit?: (
-      item: CrawlCommitBatchItem,
-      context: CrawlCommitContext,
-    ) => Promise<OperationReceiptOutcome>;
+    commit?: (item: CrawlCommitBatchItem) => Promise<OperationReceiptOutcome>;
     now?: () => number;
     wallBudgetMs?: number;
   } = {},
@@ -3145,7 +3022,6 @@ export async function commitCrawlNodes(
   const budgetMs = options.wallBudgetMs ?? CRAWL_COMMIT_BATCH_WALL_BUDGET_MS;
   const startedAt = now();
   const receipts: CrawlCommitBatchReceipt[] = [];
-  const context = new CrawlCommitContext();
   let deferred = 0;
 
   for (const [index, item] of items.entries()) {
@@ -3161,7 +3037,7 @@ export async function commitCrawlNodes(
     }
     const itemStartedAt = now();
     try {
-      const receipt = await (options.commit ?? commitCrawlPhase)(item, context);
+      const receipt = await (options.commit ?? commitCrawlPhase)(item);
       receipts.push({
         elapsedMs: Math.max(0, Math.round(now() - itemStartedAt)),
         operationKey: item.operationKey,
@@ -3265,11 +3141,10 @@ export async function crawlCatalogue({
     });
   };
 
-  const context = new CrawlCommitContext();
   for (const node of nodes) {
     let expansion: Expansion;
     try {
-      expansion = await expandNode(node, hopLimit, context);
+      expansion = await expandNode(node, hopLimit);
     } catch (error) {
       const throttled = error instanceof ThrottledError;
 
