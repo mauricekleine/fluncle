@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AVATAR_MAX_BYTES,
   readAvatarBody,
+  sniffAvatarType,
   validateAvatarUpload,
   verifyAvatarMutation,
 } from "./avatar";
@@ -19,6 +20,40 @@ function pngBytes(width: number, height: number): ArrayBuffer {
   return buffer;
 }
 
+function jpegBytes(width: number, height: number): ArrayBuffer {
+  const buffer = new ArrayBuffer(32);
+  const view = new DataView(buffer);
+
+  view.setUint16(0, 0xffd8);
+  view.setUint8(2, 0xff);
+  view.setUint8(3, 0xc0);
+  view.setUint16(4, 17);
+  view.setUint8(6, 8);
+  view.setUint16(7, height);
+  view.setUint16(9, width);
+
+  return buffer;
+}
+
+function webpBytes(width: number, height: number): ArrayBuffer {
+  const buffer = new ArrayBuffer(30);
+  const view = new DataView(buffer);
+
+  view.setUint32(0, 0x52494646);
+  view.setUint32(8, 0x57454250);
+  view.setUint32(12, 0x56503858);
+  view.setUint16(24, (width - 1) & 0xffff, true);
+  view.setUint8(26, ((width - 1) >> 16) & 0xff);
+  view.setUint16(27, (height - 1) & 0xffff, true);
+  view.setUint8(29, ((height - 1) >> 16) & 0xff);
+
+  return buffer;
+}
+
+function bytesOf(text: string): ArrayBuffer {
+  return new TextEncoder().encode(text).buffer as ArrayBuffer;
+}
+
 const user: PublicUser = {
   createdAt: new Date().toISOString(),
   email: "raver@example.com",
@@ -29,13 +64,63 @@ const user: PublicUser = {
 
 describe("validateAvatarUpload", () => {
   it("accepts a supported, small, in-bounds image and derives the extension", () => {
-    expect(validateAvatarUpload("image/jpeg", pngBytes(64, 64))).toEqual({ ext: "jpg", ok: true });
-    expect(validateAvatarUpload("image/png", pngBytes(512, 512))).toEqual({ ext: "png", ok: true });
-
-    expect(validateAvatarUpload("image/webp; charset=binary", pngBytes(200, 200))).toEqual({
-      ext: "webp",
+    expect(validateAvatarUpload("image/jpeg", jpegBytes(64, 64))).toEqual({
+      ext: "jpg",
+      mime: "image/jpeg",
       ok: true,
     });
+    expect(validateAvatarUpload("image/png", pngBytes(512, 512))).toEqual({
+      ext: "png",
+      mime: "image/png",
+      ok: true,
+    });
+
+    expect(validateAvatarUpload("image/webp; charset=binary", webpBytes(200, 200))).toEqual({
+      ext: "webp",
+      mime: "image/webp",
+      ok: true,
+    });
+  });
+
+  it("rejects bytes whose image signature does not match the declared content-type", () => {
+    expect(validateAvatarUpload("image/jpeg", pngBytes(64, 64))).toMatchObject({
+      code: "unsupported_type",
+      ok: false,
+      status: 415,
+    });
+    expect(validateAvatarUpload("image/png", webpBytes(64, 64))).toMatchObject({
+      code: "unsupported_type",
+      status: 415,
+    });
+  });
+
+  it("rejects a body that is not a readable image under an image content-type", () => {
+    const html = bytesOf("<!doctype html><script>alert(1)</script>");
+
+    expect(validateAvatarUpload("image/png", html)).toMatchObject({
+      code: "unsupported_type",
+      ok: false,
+      status: 415,
+    });
+    expect(validateAvatarUpload("image/jpeg", new ArrayBuffer(64))).toMatchObject({
+      code: "unsupported_type",
+      status: 415,
+    });
+  });
+
+  it("rejects a GIF even when it is labelled as an allowed type", () => {
+    const gif = new ArrayBuffer(32);
+    new DataView(gif).setUint32(0, 0x47494638);
+
+    expect(sniffAvatarType(gif)).toBeUndefined();
+    expect(validateAvatarUpload("image/png", gif)).toMatchObject({ code: "unsupported_type" });
+  });
+
+  it("sniffs the three accepted formats from their signatures", () => {
+    expect(sniffAvatarType(pngBytes(1, 1))).toBe("image/png");
+    expect(sniffAvatarType(jpegBytes(1, 1))).toBe("image/jpeg");
+    expect(sniffAvatarType(webpBytes(1, 1))).toBe("image/webp");
+    expect(sniffAvatarType(new ArrayBuffer(0))).toBeUndefined();
   });
 
   it("rejects an unsupported content-type", () => {
@@ -61,6 +146,15 @@ describe("validateAvatarUpload", () => {
     const result = validateAvatarUpload("image/png", pngBytes(513, 64));
 
     expect(result).toMatchObject({ code: "dimensions_too_large", ok: false, status: 422 });
+    expect(validateAvatarUpload("image/jpeg", jpegBytes(64, 513))).toMatchObject({
+      code: "dimensions_too_large",
+    });
+  });
+
+  it("accepts an image exactly 512px on a side", () => {
+    const result = validateAvatarUpload("image/webp", webpBytes(512, 512));
+
+    expect(result).toMatchObject({ ok: true });
   });
 });
 

@@ -77,7 +77,13 @@ export const serverHandlers: ApiHandlers = {
         return jsonError(validation.status, validation.code, validation.message);
       }
 
-      const result = await storeAvatar(env.VIDEOS, user, body.bytes, contentType, validation.ext);
+      const result = await storeAvatar(
+        env.VIDEOS,
+        user,
+        body.bytes,
+        validation.mime,
+        validation.ext,
+      );
 
       return Response.json({ ...result, ok: true });
     } catch (error) {
