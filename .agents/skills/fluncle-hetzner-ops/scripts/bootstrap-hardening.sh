@@ -62,6 +62,11 @@ if [[ -z "${REBOOT_STATUS_PORT:-}" ]]; then
 	exit 1
 fi
 
+if [[ -z "${NODE_EXPORTER_INSTALLER:-}" || ! -f "${NODE_EXPORTER_INSTALLER}" ]]; then
+	printf 'NODE_EXPORTER_INSTALLER must name the private companion host metrics installer\n' >&2
+	exit 1
+fi
+
 if [[ -z "${TS_AUTHKEY:-}" ]]; then
 	printf 'TS_AUTHKEY is missing in environment or %s. Add a fresh Tailscale auth key before running bootstrap.\n' "${ENV_FILE}" >&2
 	exit 1
@@ -104,8 +109,14 @@ cat >"$reboot_bundle/reboot-status.py" <<'REBOOT_SERVER_BUNDLE'
 BUNDLE_SERVER
 	cat "${SCRIPT_DIR}/reboot-status.py"
 	printf '\nREBOOT_SERVER_BUNDLE\n'
+	cat <<'BUNDLE_METRICS'
+cat >"$reboot_bundle/install-node-exporter.sh" <<'NODE_EXPORTER_INSTALLER_BUNDLE'
+BUNDLE_METRICS
+	cat "${NODE_EXPORTER_INSTALLER}"
+	printf '\nNODE_EXPORTER_INSTALLER_BUNDLE\n'
 	cat <<'BUNDLE_INSTALLER'
 export REBOOT_STATUS_INSTALLER="$reboot_bundle/install-reboot-status.sh"
+export NODE_EXPORTER_INSTALLER="$reboot_bundle/install-node-exporter.sh"
 BUNDLE_INSTALLER
 	cat "${BOOTSTRAP_SCRIPT}"
 } | ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 "root@${SERVER_IPV4}" 'bash -s'
