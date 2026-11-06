@@ -16,6 +16,11 @@ if [[ -z "${REBOOT_STATUS_PORT:-}" || ! -f "${REBOOT_STATUS_INSTALLER}" ]]; then
 fi
 export REBOOT_STATUS_PORT
 
+if [[ -z "${NODE_EXPORTER_INSTALLER:-}" || ! -f "${NODE_EXPORTER_INSTALLER}" ]]; then
+	printf 'NODE_EXPORTER_INSTALLER must name the private companion host metrics installer\n' >&2
+	exit 1
+fi
+
 if [[ "${EUID}" -ne 0 ]]; then
 	printf 'bootstrap-rave-vps.sh must run as root\n' >&2
 	exit 1
@@ -79,6 +84,9 @@ tailscale set --auto-update
 
 log "Installing read-only reboot status"
 bash "${REBOOT_STATUS_INSTALLER}"
+
+log "Installing tailnet-only host metrics"
+bash "${NODE_EXPORTER_INSTALLER}"
 
 log "Creating locked app user ${APP_USER}"
 if ! getent group "${APP_GROUP}" >/dev/null 2>&1; then
