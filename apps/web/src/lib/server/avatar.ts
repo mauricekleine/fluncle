@@ -21,7 +21,14 @@ const CSRF_HEADER = "x-fluncle-csrf";
 
 type AvatarRejection = { code: string; message: string; ok: false; status: number };
 
-export type AvatarValidation = AvatarRejection | { ext: string; ok: true };
+export type AvatarValidation = AvatarRejection | { ext: string; mime: string; ok: true };
+
+const AVATAR_UNSUPPORTED_TYPE: AvatarRejection = {
+  code: "unsupported_type",
+  message: "Upload a JPEG, PNG, or WebP image.",
+  ok: false,
+  status: 415,
+};
 
 const AVATAR_TOO_LARGE: AvatarRejection = {
   code: "too_large",
@@ -82,12 +89,7 @@ export function validateAvatarUpload(contentType: string, bytes: ArrayBuffer): A
   const ext = AVATAR_CONTENT_TYPES[mime];
 
   if (!ext) {
-    return {
-      code: "unsupported_type",
-      message: "Upload a JPEG, PNG, or WebP image.",
-      ok: false,
-      status: 415,
-    };
+    return AVATAR_UNSUPPORTED_TYPE;
   }
 
   if (bytes.byteLength === 0) {
@@ -98,9 +100,13 @@ export function validateAvatarUpload(contentType: string, bytes: ArrayBuffer): A
     return AVATAR_TOO_LARGE;
   }
 
-  const size = readImageSize(bytes);
+  const size = sniffAvatarType(bytes) === mime ? readImageSize(bytes) : undefined;
 
-  if (size && (size.width > AVATAR_MAX_DIMENSION || size.height > AVATAR_MAX_DIMENSION)) {
+  if (!size) {
+    return AVATAR_UNSUPPORTED_TYPE;
+  }
+
+  if (size.width > AVATAR_MAX_DIMENSION || size.height > AVATAR_MAX_DIMENSION) {
     return {
       code: "dimensions_too_large",
       message: `The image is larger than ${AVATAR_MAX_DIMENSION}px on a side.`,
@@ -109,7 +115,33 @@ export function validateAvatarUpload(contentType: string, bytes: ArrayBuffer): A
     };
   }
 
-  return { ext, ok: true };
+  return { ext, mime, ok: true };
+}
+
+export function sniffAvatarType(bytes: ArrayBuffer): string | undefined {
+  const view = new DataView(bytes);
+
+  if (
+    view.byteLength >= 8 &&
+    view.getUint32(0) === 0x89504e47 &&
+    view.getUint32(4) === 0x0d0a1a0a
+  ) {
+    return "image/png";
+  }
+
+  if (view.byteLength >= 3 && view.getUint16(0) === 0xffd8 && view.getUint8(2) === 0xff) {
+    return "image/jpeg";
+  }
+
+  if (
+    view.byteLength >= 12 &&
+    view.getUint32(0) === 0x52494646 &&
+    view.getUint32(8) === 0x57454250
+  ) {
+    return "image/webp";
+  }
+
+  return undefined;
 }
 
 export function verifyAvatarMutation(request: Request, user: PublicUser): Response | undefined {
