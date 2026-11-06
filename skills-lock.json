@@ -45,7 +45,7 @@
     "fluncle-hetzner-ops": {
       "source": "./packages/skills/fluncle-hetzner-ops",
       "sourceType": "local",
-      "computedHash": "391e938ee1038160cc4057d1461e84093825bcb292a4478d77cb06a683bcc94c"
+      "computedHash": "cc1f1f6a8c1c11c6a87e6ea8266e4014765a5208e23f896f201d2d592fd05cfc"
     },
     "fluncle-label-triage": {
       "source": "./packages/skills/fluncle-label-triage",
