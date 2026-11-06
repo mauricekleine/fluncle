@@ -31,7 +31,7 @@ describe("production migration journal", () => {
     );
     const entries = parseMigrationJournal(journal);
 
-    expect(entries.at(-1)?.tag).toBe("0202_tearful_spacker_dave");
+    expect(entries.at(-1)?.tag).toBe("0203_curly_hardball");
     expect(entries.map((entry) => entry.idx)).toEqual(entries.map((_, index) => index));
   });
 
@@ -149,12 +149,12 @@ describe("production deploy migration boundary", () => {
     readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
   ) as { scripts: Record<string, string> };
 
-  it("keeps local migration unchanged and gives production one complete journal command", () => {
+  it("runs the label-fold backfill after both primary migration commands", () => {
     expect(pkg.scripts["db:migrate"]).toBe(
-      "drizzle-kit migrate && bun run scripts/ensure-search-index.ts",
+      "drizzle-kit migrate && bun run scripts/backfill-label-name-folds.ts && bun run scripts/ensure-search-index.ts",
     );
     expect(pkg.scripts["db:migrate:production"]).toBe(
-      "bun run scripts/migrate.ts && bun run scripts/ensure-search-index.ts",
+      "bun run scripts/migrate.ts && bun run scripts/backfill-label-name-folds.ts && bun run scripts/ensure-search-index.ts",
     );
     expect(pkg.scripts["db:migrate:production:h4"]).toBeUndefined();
     expect(pkg.scripts["db:migrate:production:h8"]).toBeUndefined();

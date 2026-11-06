@@ -2432,6 +2432,8 @@ export const labels = sqliteTable(
 
     name: text("name").notNull(),
 
+    nameFold: text("name_fold"),
+
     parentLabelId: text("parent_label_id"),
 
     renderableTrackCount: integer("renderable_track_count").notNull().default(0),
@@ -2458,6 +2460,8 @@ export const labels = sqliteTable(
   },
   (table) => [
     uniqueIndex("labels_mb_label_id_idx").on(table.mbLabelId),
+
+    index("labels_name_fold_idx").on(table.nameFold),
 
     index("labels_parent_label_id_idx").on(table.parentLabelId),
 

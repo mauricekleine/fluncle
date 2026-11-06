@@ -172,9 +172,9 @@ export async function ensureLabel(
   await db.batch(
     [
       {
-        args: [labelId, raw.trim(), slug, mbid, now, now],
-        sql: `insert into labels (id, name, slug, mb_label_id, created_at, updated_at)
-              values (?, ?, ?, ?, ?, ?)
+        args: [labelId, raw.trim(), labelFold(raw.trim()), slug, mbid, now, now],
+        sql: `insert into labels (id, name, name_fold, slug, mb_label_id, created_at, updated_at)
+              values (?, ?, ?, ?, ?, ?, ?)
               on conflict (slug) do nothing`,
       },
       ...markDueWorkSourceMaintenanceStatements([{ subjectId: labelId, subjectType: "label" }], {
@@ -1495,9 +1495,9 @@ export async function reconcileLabels(): Promise<number> {
     const [inserted] = await db.batch(
       [
         {
-          args: [labelId, name, slug, now, now],
-          sql: `insert into labels (id, name, slug, created_at, updated_at)
-                values (?, ?, ?, ?, ?)
+          args: [labelId, name, labelFold(name), slug, now, now],
+          sql: `insert into labels (id, name, name_fold, slug, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?)
                 on conflict (slug) do nothing`,
         },
         ...markDueWorkSourceMaintenanceStatements([{ subjectId: labelId, subjectType: "label" }], {

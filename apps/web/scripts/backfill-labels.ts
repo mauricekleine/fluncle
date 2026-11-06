@@ -2,7 +2,7 @@
 
 import { type Client, createClient } from "@libsql/client";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
-import { slugify } from "@fluncle/contracts/util/galaxy-slug";
+import { labelFold, slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { config } from "dotenv";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -185,9 +185,9 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
       client,
       [
         {
-          args: [labelId, name, slug, now, now],
-          sql: `insert into labels (id, name, slug, created_at, updated_at)
-                values (?, ?, ?, ?, ?)
+          args: [labelId, name, labelFold(name), slug, now, now],
+          sql: `insert into labels (id, name, name_fold, slug, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?)
                 on conflict (slug) do nothing`,
         },
       ],

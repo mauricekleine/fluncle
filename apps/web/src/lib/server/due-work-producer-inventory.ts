@@ -432,7 +432,7 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
       "integration-db.ts:update:tracks:e05d9ca6",
       "integration-db.ts:update:tracks:e05d9ca6:2",
       "integration-db.ts:insert:artists:8c220465",
-      "integration-db.ts:insert:labels:a39abea2",
+      "integration-db.ts:insert:labels:8502ee8c",
       "integration-db.ts:insert:albums:cb1fa531",
     ],
   },
@@ -578,6 +578,13 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     file: "scripts/backfill-label-aliases.ts",
     rationale: "Backfills candidate label aliases outside label bio/image predicates.",
     sites: ["scripts/backfill-label-aliases.ts:insert:label_aliases:90829f41"],
+  },
+  {
+    disposition: "non-eligibility",
+    file: "scripts/backfill-label-name-folds.ts",
+    rationale:
+      "Fills the derived Unicode name-fold lookup key without changing label identity or due-work eligibility inputs.",
+    sites: ["scripts/backfill-label-name-folds.ts:update:labels:ef8649d9"],
   },
   {
     disposition: "non-eligibility",
@@ -776,7 +783,7 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
       "integration-db.ts:insert:tracks:0192c825",
       "integration-db.ts:update:tracks:e05d9ca6",
       "integration-db.ts:update:tracks:e05d9ca6:2",
-      "integration-db.ts:insert:labels:a39abea2",
+      "integration-db.ts:insert:labels:8502ee8c",
     ],
   },
   {
@@ -900,6 +907,13 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     file: "scripts/derive-device-db.ts",
     rationale: "Writes an isolated derived device database, not application source truth.",
     sites: ["scripts/derive-device-db.ts:insert:dynamic:eb0180a3"],
+  },
+  {
+    disposition: "derived-projection-write",
+    file: "scripts/backfill-label-name-folds.ts",
+    rationale:
+      "Fills only the derived name-fold key; Goal D source names, label rulings and crawl scope stay unchanged.",
+    sites: ["scripts/backfill-label-name-folds.ts:update:labels:ef8649d9"],
   },
   {
     disposition: "non-projection-fact",

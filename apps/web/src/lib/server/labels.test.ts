@@ -173,6 +173,9 @@ describe("ensureLabel — the MusicBrainz label MBID fold (the discovered-label 
     expect(id).toBeDefined();
     expect(await labelSlugs()).toEqual(["med-school"]);
     expect(await mbLabelIdOf("med-school")).toBe("mbid-medschool");
+    expect(
+      (await db.execute("select name_fold from labels where slug = 'med-school'")).rows,
+    ).toEqual([{ name_fold: "medschool" }]);
   });
 
   it("collapses two spellings that slugify apart onto ONE row when they share an MBID", async () => {
@@ -247,6 +250,10 @@ describe("reconcileLabels (the deterministic backstop)", () => {
     await seedFinding("t4", null);
 
     expect(await reconcileLabels()).toBe(2);
+    expect((await db.execute("select slug, name_fold from labels order by slug")).rows).toEqual([
+      { name_fold: "hospitalrecords", slug: "hospital-records" },
+      { name_fold: "pilot", slug: "pilot" },
+    ]);
 
     await linkTracksToLabels(db);
 
@@ -677,6 +684,11 @@ describe("the D7 bootstrap (scripts/backfill-labels.ts)", () => {
 
     expect(first.bootstrapped).toBe(true);
     expect(first.minted).toBe(6);
+    expect(
+      (await db.execute("select name_fold from labels order by slug")).rows.map(
+        (row) => row.name_fold,
+      ),
+    ).toEqual(["anjunabeats", "chelou", "hospitalrecords", "spirationmusic", "ukf", "zerothree"]);
     expect(await seedStateOf("hospital-records")).toBe("enabled");
     expect(await seedStateOf("anjunabeats")).toBe("disabled");
     expect(await seedStateOf("zerothree")).toBe("disabled");

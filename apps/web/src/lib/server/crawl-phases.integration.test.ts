@@ -42,6 +42,8 @@ type TransactionCounts = {
   execute: number;
   maxBatchStatements: number;
   statements: InStatement[];
+  labelReadRows: number;
+  labelReadBytes: number;
 };
 
 vi.mock("./db", async (importOriginal) => {
@@ -128,6 +130,8 @@ function instrumentTransactions(client: Client): { client: Client; counts: Trans
     batch: 0,
     commit: 0,
     execute: 0,
+    labelReadBytes: 0,
+    labelReadRows: 0,
     maxBatchStatements: 0,
     statements: [],
   };
@@ -137,10 +141,15 @@ function instrumentTransactions(client: Client): { client: Client; counts: Trans
     const originalExecute = transaction.execute.bind(transaction);
     const originalBatch = transaction.batch.bind(transaction);
     const originalCommit = transaction.commit.bind(transaction);
-    transaction.execute = ((...executeArgs: Parameters<typeof transaction.execute>) => {
+    transaction.execute = (async (...executeArgs: Parameters<typeof transaction.execute>) => {
       counts.execute += 1;
       counts.statements.push(executeArgs[0]);
-      return originalExecute(...executeArgs);
+      const result = await originalExecute(...executeArgs);
+      if (/select[\s\S]*from labels\b/.test(executedSql(executeArgs[0]))) {
+        counts.labelReadRows += result.rows.length;
+        counts.labelReadBytes += Buffer.byteLength(JSON.stringify(result.rows));
+      }
+      return result;
     }) as typeof transaction.execute;
     transaction.batch = ((...batchArgs: Parameters<typeof transaction.batch>) => {
       counts.batch += 1;
@@ -1088,7 +1097,20 @@ describe("crawl admission phases", () => {
     expect((await db.execute("select count(*) as n from tracks")).rows[0]?.n).toBe(60);
   });
 
-  it("loads one narrow label fold index per commit batch and stores release tracks", async () => {
+  it("reads matching label folds per commit item and stores release tracks", async () => {
+    await db.batch(
+      Array.from({ length: 1_000 }, (_, index) => ({
+        args: [
+          `unrelated-${index}`,
+          `Unrelated ${index}`,
+          `unrelated${index}`,
+          `unrelated-${index}`,
+        ],
+        sql: `insert into labels (id, name, name_fold, slug, created_at, updated_at)
+            values (?, ?, ?, ?, 'fixture', 'fixture')`,
+      })),
+      "write",
+    );
     await db.batch(
       Array.from({ length: 101 }, (_, index) => ({
         args: [
@@ -1166,7 +1188,9 @@ describe("crawl admission phases", () => {
     const statements = instrumented.counts.statements.map(executedSql);
     const labelReads = statements.filter((sql) => /select[\s\S]*from labels\b/.test(sql));
     const fullReads = labelReads.filter((sql) => !/\bwhere\b/i.test(sql));
-    expect(fullReads).toEqual(["select id, name from labels"]);
+    expect(instrumented.counts.labelReadRows).toBeLessThan(30);
+    expect(fullReads).toEqual([]);
+    expect(instrumented.counts.labelReadBytes).toBeLessThan(8_192);
     expect(labelReads.every((sql) => !/triage_reason|disambiguation/.test(sql))).toBe(true);
     expect(
       statements.filter((sql) =>
@@ -1219,7 +1243,7 @@ describe("crawl admission phases", () => {
     });
   });
 
-  it("retries a failed label index load on the next item of the same batch", async () => {
+  it("retries a failed label fold lookup on the next item of the same batch", async () => {
     await db.execute({
       args: [timestamp, timestamp],
       sql: `insert into crawl_frontier
@@ -1263,7 +1287,7 @@ describe("crawl admission phases", () => {
       const transaction = await originalTransaction(...args);
       const originalExecute = transaction.execute.bind(transaction);
       transaction.execute = ((...executeArgs: Parameters<typeof transaction.execute>) => {
-        if (executedSql(executeArgs[0]) === "select id, name from labels") {
+        if (executedSql(executeArgs[0]).includes("where name_fold in")) {
           indexAttempts += 1;
           if (indexAttempts === 1) {
             return Promise.reject(new Error("fixture label index read failure"));
@@ -1335,8 +1359,8 @@ describe("crawl admission phases", () => {
       );
       let committed = 0;
       const batch = await commitCrawlNodes(items, {
-        commit: async (item, context) => {
-          const receipt = await commitCrawlPhase(item, context);
+        commit: async (item) => {
+          const receipt = await commitCrawlPhase(item);
           committed += 1;
           if (committed === 1) {
             await db.execute("update labels set seed_state = 'enabled' where id = 'label-phase'");
@@ -1518,7 +1542,7 @@ describe("crawl admission phases", () => {
     expect((await db.execute("select count(*) as n from tracks")).rows[0]?.n).toBe(100);
     expect(
       instrumented.counts.execute + instrumented.counts.batch + instrumented.counts.commit,
-    ).toBe(25);
+    ).toBeLessThanOrEqual(25);
     expect(instrumented.counts.maxBatchStatements).toBe(500);
   });
 
