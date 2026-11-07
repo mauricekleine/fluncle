@@ -8,6 +8,7 @@ import {
   artistMetaDescription,
   artistPageTitle,
   completeAlbumArtistCredit,
+  completeAlbumCreditedArtists,
   labelMetaDescription,
   labelPageTitle,
   trackMetaDescription,
@@ -100,6 +101,34 @@ describe("completeAlbumArtistCredit", () => {
 
     expect(completeAlbumArtistCredit({ catalogue, catalogueTotal: 1, findings })).toBe("Seba");
     expect(completeAlbumArtistCredit({ catalogue, catalogueTotal: 2, findings })).toBeUndefined();
+  });
+});
+
+describe("completeAlbumCreditedArtists", () => {
+  it("lists the same names the title credits, and none on a partial or various-artists record", () => {
+    const catalogue = [{ artists: ["Calibre", "DRS"] }, { artists: ["DRS", "Calibre"] }];
+
+    expect(completeAlbumCreditedArtists({ catalogue, catalogueTotal: 2, findings: [] })).toEqual([
+      "Calibre",
+      "DRS",
+    ]);
+    expect(completeAlbumCreditedArtists({ catalogue, catalogueTotal: 3, findings: [] })).toEqual(
+      [],
+    );
+    expect(
+      completeAlbumCreditedArtists({
+        catalogue: [{ artists: ["Seba"] }, { artists: ["Paradox"] }],
+        catalogueTotal: 2,
+        findings: [],
+      }),
+    ).toEqual([]);
+    expect(
+      completeAlbumCreditedArtists({
+        catalogue: [{ artists: ["A", "B", "C"] }, { artists: ["C", "B", "A"] }],
+        catalogueTotal: 2,
+        findings: [],
+      }),
+    ).toEqual([]);
   });
 });
 

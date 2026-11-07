@@ -105,11 +105,13 @@ export function labelPageTitle(name: string): string {
   ]);
 }
 
-export function albumArtistCredit(tracks: Array<{ artists: string[] }>): string | undefined {
+const ALBUM_CREDIT_MAX_ARTISTS = 2;
+
+function albumCreditedArtists(tracks: Array<{ artists: string[] }>): string[] {
   const [first, ...rest] = tracks;
 
   if (first === undefined) {
-    return undefined;
+    return [];
   }
 
   const shared = uniqueNames(first.artists).filter((name) =>
@@ -118,19 +120,33 @@ export function albumArtistCredit(tracks: Array<{ artists: string[] }>): string 
     ),
   );
 
-  return shared.length > 0 && shared.length <= 2 ? shared.join(" & ") : undefined;
+  return shared.length <= ALBUM_CREDIT_MAX_ARTISTS ? shared : [];
 }
 
-export function completeAlbumArtistCredit(album: {
+export function albumArtistCredit(tracks: Array<{ artists: string[] }>): string | undefined {
+  const credited = albumCreditedArtists(tracks);
+
+  return credited.length > 0 ? credited.join(" & ") : undefined;
+}
+
+type AlbumTrackSlices = {
   catalogue: Array<{ artists: string[] }>;
   catalogueTotal: number;
   findings: Array<{ artists: string[] }>;
-}): string | undefined {
+};
+
+export function completeAlbumCreditedArtists(album: AlbumTrackSlices): string[] {
   if (album.catalogue.length < album.catalogueTotal) {
-    return undefined;
+    return [];
   }
 
-  return albumArtistCredit([...album.findings, ...album.catalogue]);
+  return albumCreditedArtists([...album.findings, ...album.catalogue]);
+}
+
+export function completeAlbumArtistCredit(album: AlbumTrackSlices): string | undefined {
+  const credited = completeAlbumCreditedArtists(album);
+
+  return credited.length > 0 ? credited.join(" & ") : undefined;
 }
 
 export function albumPageTitle(album: {

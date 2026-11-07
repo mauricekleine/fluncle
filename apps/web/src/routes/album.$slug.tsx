@@ -13,7 +13,12 @@ import { jsonLdScript } from "@/lib/json-ld";
 import { albumBreadcrumbsJsonLd, musicAlbumJsonLd } from "@/lib/log-schema";
 import { FINDING_COVER_SIZES } from "@/components/graph-sections";
 import { albumCoverAtSize, coverPreloadLink } from "@/lib/media";
-import { albumMetaDescription, albumPageTitle, completeAlbumArtistCredit } from "@/lib/page-meta";
+import {
+  albumMetaDescription,
+  albumPageTitle,
+  completeAlbumArtistCredit,
+  completeAlbumCreditedArtists,
+} from "@/lib/page-meta";
 import { type AlbumPageData } from "./-album-page-data";
 
 const fetchAlbum = createServerFn({ method: "GET" })
@@ -90,6 +95,7 @@ function albumHead(loaderData: AlbumPageData | undefined) {
           artists,
           bio,
           catalogNumber,
+          creditedArtists: completeAlbumCreditedArtists({ catalogue, catalogueTotal, findings }),
 
           imageUrl: albumCoverAtSize(coverImageUrl, "large"),
           label: label ? { name: label.name, slug: label.slug } : undefined,

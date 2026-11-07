@@ -5,15 +5,19 @@ import { useEffect, useRef } from "react";
 const title = "Fluncle's Galaxy factory";
 const description =
   "Follow a banger through every machine Fluncle built, from the first CMD+F to the launch into the Galaxy.";
+const pageUrl = `${siteUrl}/pipeline`;
 
 export const Route = createFileRoute("/pipeline")({
   component: PipelinePage,
   head: () => ({
-    links: [{ href: `${siteUrl}/pipeline`, rel: "canonical" }],
+    links: [{ href: pageUrl, rel: "canonical" }],
     meta: [
       { title },
       { content: description, name: "description" },
       { content: "noindex", name: "robots" },
+      { content: title, property: "og:title" },
+      { content: description, property: "og:description" },
+      { content: pageUrl, property: "og:url" },
     ],
   }),
 });
