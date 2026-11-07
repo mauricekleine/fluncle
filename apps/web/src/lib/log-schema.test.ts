@@ -677,6 +677,25 @@ describe("musicAlbumJsonLd (the album page schema)", () => {
 
   it("omits byArtist on a various-artists record (never `byArtist: []`)", () => {
     expect(musicAlbumJsonLd({ ...base, artists: [] })).not.toHaveProperty("byArtist");
+    expect(musicAlbumJsonLd({ ...base, artists: [], creditedArtists: [] })).not.toHaveProperty(
+      "byArtist",
+    );
+  });
+
+  it("names the record's shared credit as byArtist when no certified artist links it", () => {
+    expect(
+      musicAlbumJsonLd({ ...base, artists: [], creditedArtists: ["Pete Cannon"] }).byArtist,
+    ).toEqual([{ "@type": "MusicGroup", name: "Pete Cannon" }]);
+  });
+
+  it("keeps the linked artist nodes over the shared credit when both exist", () => {
+    expect(musicAlbumJsonLd({ ...base, creditedArtists: ["Someone Else"] }).byArtist).toEqual([
+      {
+        "@id": "https://www.fluncle.com/artist/netsky",
+        "@type": "MusicGroup",
+        name: "Netsky",
+      },
+    ]);
   });
 
   it("carries the factual bio as description only when one is authored", () => {

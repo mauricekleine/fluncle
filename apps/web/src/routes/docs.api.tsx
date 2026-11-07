@@ -5,12 +5,17 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
 import { docsBreadcrumbsJsonLd } from "@/lib/log-schema";
 
+const title = "Fluncle API reference";
+const description =
+  "The Fluncle API, every endpoint and schema, read live from the OpenAPI document.";
+const pageUrl = `${siteUrl}/docs/api`;
+
 export const Route = createFileRoute("/docs/api")({
   component: ApiReference,
   head: () => ({
     links: [
       {
-        href: `${siteUrl}/docs/api`,
+        href: pageUrl,
         rel: "canonical",
       },
       {
@@ -19,13 +24,11 @@ export const Route = createFileRoute("/docs/api")({
       },
     ],
     meta: [
-      {
-        title: "Fluncle API reference",
-      },
-      {
-        content: "The Fluncle API, every endpoint and schema, read live from the OpenAPI document.",
-        name: "description",
-      },
+      { title },
+      { content: description, name: "description" },
+      { content: title, property: "og:title" },
+      { content: description, property: "og:description" },
+      { content: pageUrl, property: "og:url" },
     ],
 
     scripts: [jsonLdScript(docsBreadcrumbsJsonLd("API reference"))],

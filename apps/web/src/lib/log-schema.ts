@@ -628,6 +628,8 @@ export type MusicAlbumInput = {
   bio?: string;
 
   catalogNumber?: string;
+
+  creditedArtists?: string[];
   imageUrl?: string;
 
   label?: { name: string; slug: string };
@@ -644,6 +646,14 @@ export type MusicAlbumInput = {
 export function musicAlbumJsonLd(album: MusicAlbumInput): Record<string, unknown> {
   const pageUrl = albumPageUrl(album.slug);
   const labelUrl = album.label ? labelPageUrl(album.label.slug) : undefined;
+  const byArtist =
+    album.artists.length > 0
+      ? album.artists.map((artist) => ({
+          "@id": artistPageUrl(artist.slug),
+          "@type": "MusicGroup",
+          name: artist.name,
+        }))
+      : (album.creditedArtists ?? []).map((name) => byArtistNode(name, undefined));
 
   return {
     "@context": "https://schema.org",
@@ -674,15 +684,7 @@ export function musicAlbumJsonLd(album: MusicAlbumInput): Record<string, unknown
           }
         : {}),
 
-    ...(album.artists.length > 0
-      ? {
-          byArtist: album.artists.map((artist) => ({
-            "@id": artistPageUrl(artist.slug),
-            "@type": "MusicGroup",
-            name: artist.name,
-          })),
-        }
-      : {}),
+    ...(byArtist.length > 0 ? { byArtist } : {}),
 
     ...(album.bio ? { description: album.bio } : {}),
     genre: "Drum and Bass",
