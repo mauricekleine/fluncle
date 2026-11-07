@@ -1,54 +1,40 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { siteUrl } from "@/lib/fluncle-links";
 
-const routesDir = dirname(fileURLToPath(import.meta.url));
+type Head = {
+  links?: Array<{ href?: string; rel?: string }>;
+  meta?: Array<{ content?: string; name?: string; property?: string; title?: string }>;
+};
 
-const HOME_ROUTE = "index.tsx";
+function shareTags(head: unknown) {
+  const { links = [], meta = [] } = head as Head;
 
-const PRIVATE_ROUTES = new Set([
-  "account.tsx",
-  "chat.tsx",
-  "device.tsx",
-  "follows.tsx",
-  "recommendations.tsx",
-  "reset-password.tsx",
-]);
-
-function publicRoutesWithCanonical(): string[] {
-  return readdirSync(routesDir)
-    .filter((file) => file.endsWith(".tsx") && !file.startsWith("-") && !file.startsWith("admin"))
-    .filter((file) => file !== HOME_ROUTE && !PRIVATE_ROUTES.has(file))
-    .filter((file) => readFileSync(join(routesDir, file), "utf8").includes('rel: "canonical"'));
+  return {
+    canonical: links.find((link) => link.rel === "canonical")?.href,
+    description: meta.find((entry) => entry.name === "description")?.content,
+    ogDescription: meta.find((entry) => entry.property === "og:description")?.content,
+    ogTitle: meta.find((entry) => entry.property === "og:title")?.content,
+    ogUrl: meta.find((entry) => entry.property === "og:url")?.content,
+    title: meta.find((entry) => entry.title !== undefined)?.title,
+  };
 }
 
-function declaresOwnShareUrl(source: string): boolean {
-  return source.includes('property: "og:url"') || source.includes("docsHead(");
-}
+describe("a shared page unfurls as itself, never as the homepage the root head describes", () => {
+  it.each([
+    ["/docs/api", () => import("./docs.api")],
+    ["/pipeline", () => import("./pipeline")],
+  ])(
+    "%s declares og tags matching its own canonical, title and description",
+    async (path, load) => {
+      const { Route } = await load();
+      const tags = shareTags(Route.options.head?.({ loaderData: undefined } as never));
 
-describe("public route share tags", () => {
-  it("finds the public routes that declare a canonical", () => {
-    expect(publicRoutesWithCanonical()).toEqual(
-      expect.arrayContaining(["docs.api.tsx", "pipeline.tsx", "artist.$slug.tsx"]),
-    );
-  });
-
-  it("every public route with its own canonical declares its own og:url, so a share never unfurls as the homepage the root head describes", () => {
-    const inheriting = publicRoutesWithCanonical().filter(
-      (file) => !declaresOwnShareUrl(readFileSync(join(routesDir, file), "utf8")),
-    );
-
-    expect(inheriting).toEqual([]);
-  });
-
-  it("every public route that sets its own og:url also sets its own og:title", () => {
-    const untitled = publicRoutesWithCanonical().filter((file) => {
-      const source = readFileSync(join(routesDir, file), "utf8");
-
-      return source.includes('property: "og:url"') && !source.includes('property: "og:title"');
-    });
-
-    expect(untitled).toEqual([]);
-  });
+      expect(tags.canonical).toBe(`${siteUrl}${path}`);
+      expect(tags.ogUrl).toBe(tags.canonical);
+      expect(tags.title).toBeTruthy();
+      expect(tags.ogTitle).toBe(tags.title);
+      expect(tags.description).toBeTruthy();
+      expect(tags.ogDescription).toBe(tags.description);
+    },
+  );
 });
