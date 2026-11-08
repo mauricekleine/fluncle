@@ -44,7 +44,7 @@ Four modules under `src/set-video/` (`chapter-prep.ts` and `render-set.ts` have 
 
 ## Chunking & resume
 
-`render-set` renders `~40 s` chunks (`--chunk-sec N` to tune) to `set-out/<mixtapeLogId>/chunks/`. Each chunk starts on an IDR frame, so `ffmpeg -f concat -c copy` stitches them without re-encoding. A crashed or interrupted run **resumes** — a chunk already on disk (non-empty) is skipped, so only the missing frames re-render. The final `-c copy` concat + single audio mux is cheap.
+`render-set` renders `~40 s` chunks (`--chunk-sec N` to tune) to `set-out/<mixtapeLogId>/chunks/`. Each chunk starts on an IDR frame, so `ffmpeg -f concat -c copy` stitches them without re-encoding. A crashed or interrupted run **resumes** — a chunk already on disk (larger than 1 KiB) is skipped, so only the missing frames re-render. The final `-c copy` concat + single audio mux is cheap.
 
 Full renders use the RFC §6 encode (h264, `crf 20` under a `~22 Mbit` VBV cap, `bt709`, PNG intermediates); `--draft` drops to half-res / `veryfast` / jpeg for a fast proof and is never shippable.
 

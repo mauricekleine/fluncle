@@ -31,7 +31,7 @@ It exists because the PUBLIC page asks a question the admin surface never did. F
 
 ## How a row gets minted
 
-Albums are catalogue-scale entities minted through two idempotent paths: publishing links a certified finding, and `expandRelease` connects or creates the album by MusicBrainz release-group MBID, with the slug as fallback. `scripts/backfill-album-graph.ts` links rows that lack graph pointers. Catalogue-minted albums participate in the public graph while uncertified tracks remain in the unlit register.
+Albums are catalogue-scale entities minted through two idempotent paths: publishing links a certified finding, and `applyRelease` connects or creates the album by MusicBrainz release-group MBID, with the slug as fallback. `scripts/backfill-album-graph.ts` links rows that lack graph pointers. Catalogue-minted albums participate in the public graph while uncertified tracks remain in the unlit register.
 
 ## The public surfaces
 
