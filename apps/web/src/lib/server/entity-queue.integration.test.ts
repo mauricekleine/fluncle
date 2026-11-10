@@ -199,6 +199,16 @@ it("carries the playable flag on album, artist and label hub tiles", async () =>
   expect(await hubPlayable()).toEqual([[true], [true], [true]]);
 });
 
+it("reads an artist or label tile's certification from the maintained flag, not the findings table", async () => {
+  for (const kind of ["artist", "label"] as const) {
+    const result = await db.execute({
+      args: [ENTITY_IDS[kind]],
+      sql: `explain query plan select ${entityPlayableSql(kind, "e.id")} from ${ENTITY_TABLES[kind]} e where e.id = ?`,
+    });
+    expect(result.rows.map((row) => String(row.detail)).join("\n")).not.toContain("findings");
+  }
+});
+
 it("answers a tile's playability through the entity's own track index", async () => {
   const indexes = {
     album: "tracks_album_id_idx",

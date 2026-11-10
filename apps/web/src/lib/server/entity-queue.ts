@@ -68,8 +68,7 @@ export function entityPlayableSql(kind: EntityQueueKind, idExpr: string): string
 
   return `exists (select 1 from ${source}
                   where ${pointer} and ${playable}
-                    and (exists (select 1 from findings f where f.track_id = t.track_id)
-                         or (t.is_catalogue = 1 and ${catalogueTrackPublicWhere("t")})))`;
+                    and (t.is_catalogue = 0 or ${catalogueTrackPublicWhere("t")}))`;
 }
 
 function toEntityQueueTrack(row: QueueRow): EntityQueueTrack {

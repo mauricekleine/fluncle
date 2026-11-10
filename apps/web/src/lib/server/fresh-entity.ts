@@ -7,7 +7,7 @@ import { catalogueTrackPublicWhere } from "../../db/public-track-visibility";
 import { releaseWindowLowerBound } from "./release-day";
 import {
   FINDINGS_FROM,
-  TRACK_SELECT,
+  LEAN_TRACK_SELECT,
   toPublicTrackListItem,
   toTrackListItem,
   type TrackRow,
@@ -51,7 +51,7 @@ async function listEntityFreshTracks(
   const [findingsResult, catalogueResult] = await Promise.all([
     db.execute({
       args: [entityId, windowStart, today, limit],
-      sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+      sql: `select ${LEAN_TRACK_SELECT} from ${FINDINGS_FROM}
             ${join}
             where ${where}
               and tracks.release_date >= ? and tracks.release_date <= ?

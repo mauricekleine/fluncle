@@ -1,4 +1,4 @@
-import { type Client } from "@libsql/client";
+import { type Client, type InValue } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
@@ -14,6 +14,7 @@ import { listLabelFreshTracks } from "./fresh-entity";
 import { LONG_FORM_MS } from "../catalogue-eligibility";
 import {
   FRESH_FINDINGS_LIMIT,
+  FRESH_RECORDS_LIMIT,
   FRESH_WINDOW_DAYS,
   listFreshRecords,
   listFreshReleases,
@@ -571,6 +572,52 @@ describe("listFreshRecords", () => {
 
     const records = await listFreshRecords(NOW);
     expect(records.find((record) => record.slug === "two-track-ep")?.trackCount).toBe(2);
+  });
+
+  it("looks up a cover only for the records it returns, never for every album in the window", async () => {
+    for (let index = 0; index < FRESH_RECORDS_LIMIT + 6; index++) {
+      const id = String(index).padStart(2, "0");
+      await seedAlbumTrack({
+        albumId: `alb_${id}`,
+        albumName: `Record ${id}`,
+        albumSlug: `record-${id}`,
+        artists: ["Workforce"],
+        releaseDate: `2026-07-${String(1 + (index % 14)).padStart(2, "0")}`,
+        trackId: `rec_${id}`,
+      });
+    }
+    const execute = vi.spyOn(db, "execute");
+
+    try {
+      const records = await listFreshRecords(NOW);
+      const statement = execute.mock.calls[0]?.[0];
+      if (statement === undefined) {
+        throw new Error("listFreshRecords issued no statement");
+      }
+      const args: unknown =
+        typeof statement === "string" ? [] : (statement as { args?: unknown }).args;
+      const plan = await db.execute({
+        args: Array.isArray(args) ? (args as InValue[]) : [],
+        sql: `explain query plan ${sqlOf(statement)}`,
+      });
+      const coverLookup = plan.rows.find(
+        (row) =>
+          String(row.detail).startsWith("SEARCH t2") &&
+          String(row.detail).includes("tracks_album_id_idx"),
+      );
+      const coverSubquery = plan.rows.find((row) => row.id === coverLookup?.parent);
+      const grouping = plan.rows.find(
+        (row) => String(row.detail) === "USE TEMP B-TREE FOR GROUP BY",
+      );
+
+      expect(records).toHaveLength(FRESH_RECORDS_LIMIT);
+      expect(records[0]?.releaseDate).toBe("2026-07-14");
+      expect(coverSubquery).toBeDefined();
+      expect(grouping).toBeDefined();
+      expect(coverSubquery?.parent).not.toBe(grouping?.parent);
+    } finally {
+      execute.mockRestore();
+    }
   });
 });
 

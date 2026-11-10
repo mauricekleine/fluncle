@@ -1,5 +1,6 @@
 import { type Client } from "@libsql/client";
 
+import { labelFold } from "@fluncle/contracts/util/galaxy-slug";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { createIntegrationDb } from "../../src/lib/server/integration-db";
@@ -77,6 +78,15 @@ describe("seedScale seeds the maintained mirrors, not their DDL defaults", () =>
     expect(await count("select count(*) as n from tracks where is_catalogue = 1")).toBe(
       SCALE - FINDINGS,
     );
+  });
+
+  it("keeps labels.name_fold equal to the application labelFold of the name on every row", async () => {
+    const result = await db.execute("select name, name_fold from labels");
+
+    expect(result.rows.length).toBeGreaterThan(0);
+    for (const row of result.rows) {
+      expect(row.name_fold).toBe(labelFold(String(row.name)));
+    }
   });
 
   it("keeps each entity's hub counters equal to the edges it actually holds", async () => {

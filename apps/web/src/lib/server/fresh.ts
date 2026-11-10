@@ -284,26 +284,32 @@ export async function listFreshRecords(now: Date = new Date()): Promise<FreshRec
   const { today, windowStart } = freshWindow(now);
   const result = await db.execute({
     args: [windowStart, today, FRESH_RECORDS_LIMIT],
-    sql: `select al.slug as slug, min(al.name) as name,
-                 max(tracks.release_date) as release_date,
-                 count(distinct tracks.track_id) as track_count,
-                 group_concat(distinct credit.value) as artists,
-                 al.image_key as image_key, al.image_state as image_state,
-                 al.image_updated_at as image_updated_at,
+    sql: `with picked as materialized (
+            select al.id as album_id, al.slug as slug, min(al.name) as name,
+                   max(tracks.release_date) as release_date,
+                   count(distinct tracks.track_id) as track_count,
+                   group_concat(distinct credit.value) as artists,
+                   al.image_key as image_key, al.image_state as image_state,
+                   al.image_updated_at as image_updated_at
+            from tracks
+            join albums al on al.id = tracks.album_id
+            join json_each(tracks.artists_json) credit
+            where tracks.release_date >= ? and ${datedReleaseByTodaySql("tracks.release_date")}
+              and ${publicTrackWhere("tracks")}
+            group by al.id
+            order by max(tracks.release_date) desc, min(al.name) collate nocase asc
+            limit ?
+          )
+          select picked.slug, picked.name, picked.release_date, picked.track_count,
+                 picked.artists, picked.image_key, picked.image_state, picked.image_updated_at,
                  (select t2.album_image_url
                     from tracks t2
-                    where t2.album_id = al.id and t2.album_image_url is not null
+                    where t2.album_id = picked.album_id and t2.album_image_url is not null
                       and ${publicTrackWhere("t2")}
                     order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
                     limit 1) as cover_url
-          from tracks
-          join albums al on al.id = tracks.album_id
-          join json_each(tracks.artists_json) credit
-          where tracks.release_date >= ? and ${datedReleaseByTodaySql("tracks.release_date")}
-            and ${publicTrackWhere("tracks")}
-          group by al.id
-          order by max(tracks.release_date) desc, min(al.name) collate nocase asc
-          limit ?`,
+          from picked
+          order by picked.release_date desc, picked.name collate nocase asc`,
   });
 
   return typedRows<FreshRecordRow>(result.rows).map((row) => ({

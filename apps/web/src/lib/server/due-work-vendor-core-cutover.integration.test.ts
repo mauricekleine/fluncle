@@ -204,6 +204,29 @@ describe("Goal C core vendor selector cutovers", () => {
     expect(credits.nextCursor).toBe("credit_a");
   });
 
+  it("reports the artist-edge queue depth from the due-work projection, not a source scan", async () => {
+    await seedArtist(db, { id: "artist-logistics", name: "Logistics", slug: "logistics" });
+    for (const trackId of ["edge_a", "edge_b", "edge_unscheduled"]) {
+      await seedCatalogueTrack(db, { artists: ["Logistics"], trackId });
+    }
+    await enableCutover();
+    await schedule("artist-edges", "edge_a");
+    await schedule("artist-edges", "edge_b");
+    const execute = vi.spyOn(db, "execute");
+
+    const pass = await resolveArtistEdges(1, true);
+
+    expect(pass.queueDepth).toBe(2);
+    expect(
+      execute.mock.calls.some(([statement]) =>
+        (typeof statement === "string" ? statement : (statement as { sql: string }).sql).includes(
+          "artist_edges_backfilled_at is null",
+        ),
+      ),
+    ).toBe(false);
+    execute.mockRestore();
+  });
+
   it("ranks only promoted catalogue subjects and uses the projection has-more sentinel", async () => {
     await seedCatalogueTrack(db, { trackId: "rank_a" });
     await seedCatalogueTrack(db, { trackId: "rank_b" });

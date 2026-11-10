@@ -1,6 +1,7 @@
 import { getDb, typedRows } from "./db";
 import {
   batchDueWorkSourceMutation,
+  countDueWorkNow,
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
   markDueWorkSourceMaintenanceStatements,
 } from "./due-work";
@@ -250,7 +251,14 @@ export const ARTIST_EDGES_QUEUE_DEPTH_SQL = `select count(*) as queued
               select 1 from track_artists ta where ta.track_id = t.track_id
             )`;
 
-async function countWork(db: Awaited<ReturnType<typeof getDb>>): Promise<number> {
+async function countWork(
+  db: Awaited<ReturnType<typeof getDb>>,
+  dueWorkCutoverEnabled: boolean,
+): Promise<number> {
+  if (dueWorkCutoverEnabled) {
+    return countDueWorkNow(db, "artist-edges");
+  }
+
   const result = await db.execute({
     args: [],
     sql: ARTIST_EDGES_QUEUE_DEPTH_SQL,
@@ -396,7 +404,7 @@ export async function resolveArtistEdges(
       ok: true,
       partiallyMatched,
       partiallyMatchedCount: 0,
-      queueDepth: await countWork(db),
+      queueDepth: await countWork(db, dueWorkCutoverEnabled),
       scanned: 0,
       unmatchedNames: 0,
       zeroMatched,
@@ -452,7 +460,7 @@ export async function resolveArtistEdges(
     await stampVisited(db, visited);
   }
 
-  const queueDepth = await countWork(db);
+  const queueDepth = await countWork(db, dueWorkCutoverEnabled);
   const lastTrackId = rows.at(-1)?.track_id ?? null;
   const nextCursor = rows.length < batchLimit ? null : lastTrackId;
 
