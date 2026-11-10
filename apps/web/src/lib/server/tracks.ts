@@ -1819,7 +1819,9 @@ export async function getMixTracksByTokens(tokens: string[]): Promise<MixTrackDT
   const clauses: string[] = [];
 
   if (logIds.length > 0) {
-    clauses.push(`findings.log_id in (${logIds.map(() => "?").join(", ")})`);
+    clauses.push(
+      `tracks.track_id in (select track_id from findings where log_id in (${logIds.map(() => "?").join(", ")}))`,
+    );
   }
   if (trackIds.length > 0) {
     clauses.push(`tracks.track_id in (${trackIds.map(() => "?").join(", ")})`);

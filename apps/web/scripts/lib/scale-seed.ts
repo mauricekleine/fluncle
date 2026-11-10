@@ -1,4 +1,5 @@
 import { type Client } from "@libsql/client/web";
+import { labelFold } from "@fluncle/contracts/util/galaxy-slug";
 
 export const SEED_NOW = "2026-07-24T00:00:00.000Z";
 
@@ -356,12 +357,13 @@ export async function seedScale(client: Client, opts: ScaleSeedOptions = {}): Pr
   await writeChunked(client, opts, "labels", resolved.labels, (index) => {
     const seedState = index < 5 ? "enabled" : index % 7 === 0 ? "disabled" : "undecided";
     const stamp = isoDaysBefore(nowMs, index % 400);
+    const name = `Label ${index}`;
 
     return [
       {
-        args: [`label-${index}`, `Label ${index}`, `label-${index}`, seedState, stamp, stamp],
-        sql: `insert or ignore into labels (id, name, slug, seed_state, created_at, updated_at)
-              values (?, ?, ?, ?, ?, ?)`,
+        args: [`label-${index}`, name, labelFold(name), `label-${index}`, seedState, stamp, stamp],
+        sql: `insert or ignore into labels (id, name, name_fold, slug, seed_state, created_at, updated_at)
+              values (?, ?, ?, ?, ?, ?, ?)`,
       },
     ];
   });

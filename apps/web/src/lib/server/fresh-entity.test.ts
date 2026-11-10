@@ -144,6 +144,31 @@ describe("listArtistFreshTracks", () => {
     expect(unlit?.coverImageUrl).toBeUndefined();
   });
 
+  it("reads the artist's fresh findings through the lean list projection", async () => {
+    await seedArtist("art_a", "Camo & Krooked", "camo-and-krooked");
+    await seedTrack({
+      artistIds: ["art_a"],
+      artists: ["Camo & Krooked"],
+      certified: true,
+      releaseDate: "2026-07-15",
+      trackId: "a_finding",
+    });
+    const execute = vi.spyOn(db, "execute");
+
+    try {
+      const feed = await listArtistFreshTracks("camo-and-krooked", { now: NOW });
+      const statements = execute.mock.calls.map(([statement]) =>
+        typeof statement === "string" ? statement : (statement as { sql: string }).sql,
+      );
+
+      expect(feed?.tracks.map((track) => track.logId)).toEqual(["200.7.a_finding"]);
+      expect(statements.some((sql) => sql.includes("findings.log_id"))).toBe(true);
+      expect(statements.some((sql) => sql.includes("features_json"))).toBe(false);
+    } finally {
+      execute.mockRestore();
+    }
+  });
+
   it("honours the 30-day release window (excludes an old release and a future pre-order)", async () => {
     await seedArtist("art_a", "Camo & Krooked", "camo-and-krooked");
     await seedTrack({
