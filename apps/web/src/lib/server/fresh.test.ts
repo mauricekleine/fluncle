@@ -600,15 +600,12 @@ describe("listFreshRecords", () => {
         args: Array.isArray(args) ? (args as InValue[]) : [],
         sql: `explain query plan ${sqlOf(statement)}`,
       });
-      const coverLookup = plan.rows.find(
-        (row) =>
-          String(row.detail).startsWith("SEARCH t2") &&
-          String(row.detail).includes("tracks_album_id_idx"),
+      const planRows = plan.rows as unknown as { detail: string; id: number; parent: number }[];
+      const coverLookup = planRows.find(
+        (row) => row.detail.startsWith("SEARCH t2") && row.detail.includes("tracks_album_id_idx"),
       );
-      const coverSubquery = plan.rows.find((row) => row.id === coverLookup?.parent);
-      const grouping = plan.rows.find(
-        (row) => String(row.detail) === "USE TEMP B-TREE FOR GROUP BY",
-      );
+      const coverSubquery = planRows.find((row) => row.id === coverLookup?.parent);
+      const grouping = planRows.find((row) => row.detail === "USE TEMP B-TREE FOR GROUP BY");
 
       expect(records).toHaveLength(FRESH_RECORDS_LIMIT);
       expect(records[0]?.releaseDate).toBe("2026-07-14");

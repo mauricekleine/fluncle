@@ -84,8 +84,8 @@ describe("seedScale seeds the maintained mirrors, not their DDL defaults", () =>
     const result = await db.execute("select name, name_fold from labels");
 
     expect(result.rows.length).toBeGreaterThan(0);
-    for (const row of result.rows) {
-      expect(row.name_fold).toBe(labelFold(String(row.name)));
+    for (const row of result.rows as unknown as { name: string; name_fold: null | string }[]) {
+      expect(row.name_fold).toBe(labelFold(row.name));
     }
   });
 

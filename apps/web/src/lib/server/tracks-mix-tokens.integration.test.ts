@@ -33,7 +33,7 @@ beforeEach(async () => {
 async function planOf(statement: InStatement): Promise<string[]> {
   const { args, sql } = typeof statement === "string" ? { args: [], sql: statement } : statement;
   const result = await db.execute({ args: args ?? [], sql: `explain query plan ${sql}` });
-  return result.rows.map((row) => String(row.detail));
+  return (result.rows as unknown as { detail: string }[]).map((row) => row.detail);
 }
 
 it("resolves a set mixing log ids and track ids by key, never by walking tracks", async () => {

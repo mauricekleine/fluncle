@@ -205,7 +205,8 @@ it("reads an artist or label tile's certification from the maintained flag, not 
       args: [ENTITY_IDS[kind]],
       sql: `explain query plan select ${entityPlayableSql(kind, "e.id")} from ${ENTITY_TABLES[kind]} e where e.id = ?`,
     });
-    expect(result.rows.map((row) => String(row.detail)).join("\n")).not.toContain("findings");
+    const planRows = result.rows as unknown as { detail: string }[];
+    expect(planRows.map((row) => row.detail).join("\n")).not.toContain("findings");
   }
 });
 
