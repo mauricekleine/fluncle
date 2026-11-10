@@ -39,7 +39,7 @@ async function planOf(statement: InStatement): Promise<string[]> {
 it("resolves a set mixing log ids and track ids by key, never by walking tracks", async () => {
   const items = await getMixTracksByTokens(["001.0.1A", "cat-1", "found-2"]);
 
-  expect(items.map((item) => item.trackId).toSorted()).toEqual(["cat-1", "found-1", "found-2"]);
+  expect(items.map((item) => item.trackId).sort()).toEqual(["cat-1", "found-1", "found-2"]);
   const statement = executed.at(-1);
   if (statement === undefined) {
     throw new Error("getMixTracksByTokens issued no statement");
