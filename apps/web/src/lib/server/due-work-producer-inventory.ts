@@ -700,7 +700,7 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
       "scripts/lib/scale-seed.ts:insert:tracks:8bb8038d",
       "scripts/lib/scale-seed.ts:insert:track_embeddings:82abc46b",
       "scripts/lib/scale-seed.ts:insert:findings:354cf5e9",
-      "scripts/lib/scale-seed.ts:insert:labels:fd1c42fd",
+      "scripts/lib/scale-seed.ts:insert:labels:ca2b64a1",
       "scripts/lib/scale-seed.ts:insert:albums:2effd7a4",
       "scripts/lib/scale-seed.ts:insert:artists:3f37a759",
       "scripts/lib/scale-seed.ts:insert:track_artists:32e13993",
@@ -993,7 +993,7 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     sites: [
       "scripts/lib/scale-seed.ts:insert:tracks:8bb8038d",
       "scripts/lib/scale-seed.ts:insert:findings:354cf5e9",
-      "scripts/lib/scale-seed.ts:insert:labels:fd1c42fd",
+      "scripts/lib/scale-seed.ts:insert:labels:ca2b64a1",
       "scripts/lib/scale-seed.ts:insert:track_artists:32e13993",
       "scripts/lib/scale-seed.ts:insert:track_artists:32e13993:2",
       "scripts/lib/scale-seed.ts:insert:crawl_frontier:574e0cf1",
