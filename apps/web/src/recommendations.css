@@ -458,6 +458,23 @@
   background: var(--dust-veil);
 }
 
+/* An uncertified candidate shows its real cover desaturated and dimmed (DESIGN.md §5, Track Row:
+   the light is the register), the same step down `.rec-row--unlit` and `.search-row--unlit` take. */
+.rec-candidate--unlit .rec-cover {
+  filter: saturate(0.55) brightness(0.8);
+  opacity: 0.75;
+}
+
+/* No eclipse tint on an unlit row's missing cover: its gold-to-red is the certification light's
+   colour, so a catalogue track with no art is dust and grain, as on the discovery row. */
+.rec-candidate--unlit .rec-cover--empty,
+.rec-row--unlit .rec-cover--empty {
+  background:
+    var(--grain-tile) repeat,
+    var(--muted);
+  background-blend-mode: overlay;
+}
+
 .rec-candidate-body {
   display: flex;
   flex-direction: column;
@@ -571,6 +588,13 @@
 .rec-row--unlit:hover .rec-row-title,
 .rec-row--unlit:focus-within .rec-row-title {
   color: var(--starlight-cream);
+}
+
+/* The unlit cover lifts on hover (motion, not light) but never takes the gold-tinted edge a
+   finding's cover heats to; its border stays neutral, as `.saves-row--unlit` keeps it. */
+.rec-row--unlit:hover .rec-cover,
+.rec-row--unlit:focus-within .rec-cover {
+  border-color: var(--border);
 }
 
 /* THE FLUNCLE SEAL — the gold coordinate pill a certified finding wears first in

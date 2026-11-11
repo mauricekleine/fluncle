@@ -8417,8 +8417,12 @@ html[data-player-docked] .nav-shell--workbench {
 }
 
 /* No eclipse tint on an unlit fallback: its gold-to-red is the certification
-   light's colour, so a catalogue row's missing cover is dust and grain. */
-.discovery-row:not([data-lit]) .track-artwork-fallback {
+   light's colour, so a catalogue row's missing cover is dust and grain. The other unlit rows
+   that render the shared artwork take the same tile. */
+.discovery-row:not([data-lit]) .track-artwork-fallback,
+.saves-row--unlit .track-artwork-fallback,
+.device-saves-row[data-unlit] .track-artwork-fallback,
+.chain-step--unlit .track-artwork-fallback {
   background:
     var(--grain-tile) repeat,
     var(--muted);
