@@ -41,6 +41,7 @@ type Tick = {
   orphanLedger?: string;
 
   probeFailures?: number;
+  provisionExitCode?: number;
   queueExitCode?: number;
   queueResponse?: string;
   queueStderr?: string;
@@ -199,7 +200,7 @@ exec "$@"
 `;
 
 const PROVISION_STUB = `#!/usr/bin/env bash
-exit 1
+exit "\${STUB_PROVISION_EXIT:-1}"
 `;
 
 const CURL_STUB = `#!/usr/bin/env bash
@@ -285,6 +286,7 @@ function stubEnv(tick: Tick, home: string, stub: string): Record<string, string>
     STUB_LOG_TAIL: tick.logTail ?? "",
     STUB_MARKER_STATE: tick.markerState ?? (tick.doneResult ? "present" : "absent"),
     STUB_ORPHAN_ID: ORPHAN_ID,
+    STUB_PROVISION_EXIT: String(tick.provisionExitCode ?? 1),
     STUB_QUEUE_EXIT_CODE: String(tick.queueExitCode ?? 0),
     STUB_QUEUE_RESPONSE: tick.queueResponse ?? `{"ok":true,"tracks":[{"logId":"${QUEUE_HEAD}"}]}`,
     STUB_QUEUE_STDERR: tick.queueStderr ?? "",
@@ -741,6 +743,32 @@ describe("the bounded resume", () => {
 
       expect(tick.exitCode).toBe(1);
       expect(tick.stdout).toContain("render-conductor: provision failed");
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        errors: 1,
+        ok: false,
+        reason: "render_provision_failed",
+      });
+    },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+  );
+
+  test(
+    "a provision boat.dev refuses for billing names the refusal",
+    () => {
+      const tick = runTick({
+        listHasBox: false,
+        provisionExitCode: 3,
+        restoringCalls: 0,
+        resumeExitCode: 1,
+      });
+
+      expect(tick.exitCode).toBe(1);
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        errors: 1,
+        ok: false,
+        reason: "render_provision_billing_required",
+        summary: "render-conductor: provision refused — boat.dev requires a billing plan",
+      });
     },
     { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );
@@ -1263,6 +1291,36 @@ describe("the provision parser", () => {
           ].join("\n"),
         ),
       ).toBe("bx_8pqt6dup");
+    },
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+  );
+
+  test(
+    "exits 3 when boat.dev refuses for billing",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "provision-billing-"));
+      try {
+        const stub = join(root, "stub");
+        mkdirSync(stub, { recursive: true });
+        write(
+          join(stub, "boat"),
+          `#!/usr/bin/env bash\nprintf '%s\\n' '{"code":"billing_required","event":"error","status":402}'\nexit 1\n`,
+        );
+        const run = spawnSync("bash", [PROVISION], {
+          encoding: "utf8",
+          env: {
+            BOAT_BIN: join(stub, "boat"),
+            BUN_BIN: process.execPath,
+            PATH: `${stub}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+          },
+          timeout: SUBPROCESS_TIMEOUT_MS,
+        });
+        expect(run.status).toBe(3);
+        expect(run.stdout).toBe("");
+        expect(run.stderr).toContain("billing_required");
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
     },
     { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
   );

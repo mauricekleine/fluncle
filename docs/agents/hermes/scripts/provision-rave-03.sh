@@ -15,6 +15,9 @@ boat_cli() { "$BOAT_BIN" --no-update "$@"; }
 
 new_json="$(boat_cli new --json --no-auto-stop 2>&1)" || {
 	err "boat new failed: $new_json"
+	case "$new_json" in
+	*'"code":"billing_required"'*) exit 3 ;;
+	esac
 	exit 1
 }
 

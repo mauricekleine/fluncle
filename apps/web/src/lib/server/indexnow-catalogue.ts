@@ -330,7 +330,7 @@ function backfillStatement(
     return {
       args: [...args, limit],
       sql: `select ${columns} from ${due}
-        cross join tracks on tracks.track_id = subject_id
+        cross join tracks indexed by sqlite_autoindex_tracks_1 on tracks.track_id = subject_id
         where ${where} and ${TRACK_PAGE_INDEXABLE_WHERE}
         order by tracks.release_date desc nulls last, subject_id limit ?`,
     };

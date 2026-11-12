@@ -707,6 +707,11 @@ describe("catalogue claims and acknowledgements", () => {
         /^SEARCH search_page_versions USING INDEX search_page_versions_due_idx \(<expr>=\?/,
       );
       expect(outer.filter((detail) => detail.startsWith("SCAN "))).toStrictEqual([]);
+      for (const joined of outer.filter((detail) =>
+        /^SEARCH (tracks|artists|labels|albums) /.test(detail),
+      )) {
+        expect(joined).toMatch(/ \((track_id|slug)=\?\)$/);
+      }
     }
   });
 
