@@ -835,8 +835,17 @@ fi
 
 if [ -z "$boxid" ]; then
 	log "no usable box — reprovisioning"
-	if ! boxid="$(BOAT_BIN="$BOAT_BIN" BUN_BIN="$BUN_BIN" FLUNCLE_BIN="$FLUNCLE_BIN" bash "$PROVISION" 2>>"$LOG_FILE")" || [ -z "$boxid" ]; then
+	provision_rc=0
+	boxid="$(BOAT_BIN="$BOAT_BIN" BUN_BIN="$BUN_BIN" FLUNCLE_BIN="$FLUNCLE_BIN" bash "$PROVISION" 2>>"$LOG_FILE")" || provision_rc=$?
+	if [ "$provision_rc" = "3" ]; then
+		log "provision refused — boat.dev requires a billing plan"
+		EMIT_REASON=render_provision_billing_required
+		emit_fail "render-conductor: provision refused — boat.dev requires a billing plan"
+		exit 1
+	fi
+	if [ "$provision_rc" != "0" ] || [ -z "$boxid" ]; then
 		log "provision failed"
+		EMIT_REASON=render_provision_failed
 		emit_fail "render-conductor: provision failed"
 		exit 1
 	fi
