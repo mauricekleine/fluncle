@@ -1342,6 +1342,12 @@ describe("the provision parser", () => {
 });
 
 describe("the scripts themselves", () => {
+  test("never run npx inside the checkout, whose Bun overrides npm rejects", () => {
+    for (const script of ["render-conductor.sh", "provision-rave-03.sh"]) {
+      expect(readFileSync(join(import.meta.dir, script), "utf8")).not.toMatch(/\bnpx\b/);
+    }
+  });
+
   for (const script of ["render-conductor.sh", "provision-rave-03.sh", "render-detached.sh"]) {
     test(`${script} parses`, () => {
       const path = join(import.meta.dir, script);
