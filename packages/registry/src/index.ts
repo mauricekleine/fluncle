@@ -1036,7 +1036,7 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     command: "fluncle mixtapes",
-    exposedContent: ["Fluncle's checkpoint sets"],
+    exposedContent: ["Fluncle's own DJ mixtapes"],
     kind: "cli",
     name: "cli.mixtapes",
     weights: { cli: "secondary" },
@@ -1440,7 +1440,7 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 60m, run by a rave-02 HOST systemd timer (docs/agents/hermes/cover-masters-timer/). The DURABLE other half of the album/artist cover (RFC musickit-second-authority U3b): the publish path + catalogue crawl MINT albums/artists (each `image_state='pending'`) and this cron gives each its OWN ≤1200²-capped cover derivative in R2 (found.fluncle.com, `albums/<slug>.<ext>` / `artists/<slug>.<ext>`) instead of hotlinking a third party — the label-logo posture, two entities over. IMAGE ONLY — a downscaled display derivative, reversible, the REF-05-conscious 1200 line (docs/album-artwork.md); it certifies nothing and publishes nothing (agent tier, the `backfill_label_images` precedent). Worker-paced: one bounded batch of albums (Apple template → Cover Art Archive → Spotify floor), then one of artists (Spotify floor), per tick; every rung requests a ≤1200 rendition and a byte read enforces the cap before the R2 put, so no un-downscaled original is ever stored. The `albums`/`artists` row carries the durable reliability state (image_state/image_attempted_at/image_failures), so a resolved/none entity is terminal. Served via Cloudflare Images `/cdn-cgi/image/…` (decision B). Zero LLM tokens. Source: docs/agents/hermes/scripts/cover-masters-sweep.*. See docs/album-artwork.md.",
     probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-cover-masters", kind: "cron" },
-    statusDescription: "owns each album and artist its cover master",
+    statusDescription: "gives each album and artist its own cover master",
     title: "Cover masters",
     weights: { status: "hidden" },
   },

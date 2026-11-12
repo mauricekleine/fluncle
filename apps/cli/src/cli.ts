@@ -739,7 +739,7 @@ function addListenCommands(program: Command): void {
 
   program
     .command("mixtapes")
-    .description("Fluncle's checkpoint sets")
+    .description("Fluncle's own DJ mixtapes")
     .option("--json", "Print JSON", false)
     .action(async (options: JsonOptions) => {
       const { mixtapesCommand } = await import("./commands/mixtapes");
