@@ -173,7 +173,7 @@ The SSH Log ID pre-filter in `apps/ssh/main.go` (`looksLikeLogID`) is deliberate
 | -------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------- | --------- |
 | `cli.recent`         | `fluncle recent`         | the latest bangers, newest first (alias `list`)                                                                   | primary   |
 | `cli.fresh`          | `fluncle fresh`          | the newest drum & bass releases, newest out first (release-dated, not found-dated)                                | secondary |
-| `cli.mixtapes`       | `fluncle mixtapes`       | Fluncle's checkpoint sets                                                                                         | secondary |
+| `cli.mixtapes`       | `fluncle mixtapes`       | Fluncle's own DJ mixtapes                                                                                         | secondary |
 | `cli.artists`        | `fluncle artists`        | every artist Fluncle holds, A to Z (a bare `slug` looks one up)                                                   | secondary |
 | `cli.albums`         | `fluncle albums`         | every album Fluncle holds, A to Z (a bare `slug` looks one up)                                                    | secondary |
 | `cli.labels`         | `fluncle labels`         | every label Fluncle holds, A to Z (a bare `slug` looks one up)                                                    | secondary |
