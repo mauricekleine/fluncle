@@ -28,8 +28,18 @@ def unique_index(pairs: list[tuple[str, str]]) -> dict[str, str]:
     return {key: next(iter(slugs)) for key, slugs in candidates.items() if len(slugs) == 1}
 
 
+def round_id(value: str) -> int | str:
+    if value.isdigit():
+        if int(value) < 1:
+            raise argparse.ArgumentTypeError("a numeric round must be positive")
+        return int(value)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", value):
+        raise argparse.ArgumentTypeError("a round name uses letters, digits, '.', '_' or '-'")
+    return value
+
+
 def merge_round(
-    scope: list[dict[str, Any]], journals: list[list[dict[str, Any]]], round_number: int | None = None
+    scope: list[dict[str, Any]], journals: list[list[dict[str, Any]]], round_number: int | str | None = None
 ) -> tuple[dict[str, Any], list[str]]:
     by_slug = {row["slug"]: row for row in scope}
     if len(by_slug) != len(scope):
@@ -39,20 +49,20 @@ def merge_round(
     research: dict[str, dict[str, Any]] = {}
     census: dict[str, dict[str, Any]] = {}
     for entries in journals:
-        labels = {
-            entry["key"]: entry.get("label") or ""
-            for entry in entries
-            if entry.get("type") == "started"
-        }
-        results = {
-            entry["key"]: entry.get("result") or {}
-            for entry in entries
-            if entry.get("type") == "result"
-        }
-        for key, result in results.items():
-            if key not in labels:
-                raise MergeError(f"result {key!r} has no started task label")
-            destination = census if labels[key].startswith("census") else research
+        labels: dict[str, str] = {}
+        latest_by_task: dict[str, dict[str, Any]] = {}
+        for entry in entries:
+            if entry.get("type") == "started":
+                labels[entry["key"]] = entry.get("label") or ""
+            elif entry.get("type") == "result":
+                key = entry["key"]
+                if key not in labels:
+                    raise MergeError(f"result {key!r} has no started task label")
+                task = labels[key] or key
+                latest_by_task.pop(task, None)
+                latest_by_task[task] = entry.get("result") or {}
+        for task, result in latest_by_task.items():
+            destination = census if task.startswith("census") else research
             for verdict in result.get("verdicts") or []:
                 raw_slug = verdict.get("slug")
                 if verdict.get("verdict") not in BUCKETS or "agrees" in verdict:
@@ -97,11 +107,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Stage research and census journal verdicts before merge-verify.")
     parser.add_argument("--journal", action="append", required=True, help="workflow journal.jsonl; repeat for separate research/census runs")
     parser.add_argument("--scope", required=True, help="JSON label array supplied to the research workflow")
-    parser.add_argument("--round", type=int, help="optional positive round number recorded in the staged JSON")
+    parser.add_argument("--round", type=round_id, help="optional round id recorded in the staged JSON: a positive number or a name such as 20261113-splits")
     parser.add_argument("--out", help="output JSON path; defaults to stdout")
     args = parser.parse_args()
-    if args.round is not None and args.round < 1:
-        parser.error("--round must be positive")
     try:
         scope = json.loads(Path(args.scope).read_text())
         journals = [[json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()] for path in args.journal]

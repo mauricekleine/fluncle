@@ -42,7 +42,7 @@ if (!cfg.roundDir) {
 const manifest = `${cfg.roundDir}/manifest.jsonl`;
 const shellPath = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 const evidenceCommand = (slice, count, census = false) =>
-  `\`fluncle admin labels evidence <mb_label_id> [<mb_label_id> ...]${census ? " --census" : ""} --out ${shellPath(`${cfg.roundDir}/${slice}`)} --manifest ${shellPath(manifest)} --timeout ${Math.min(540, 240 * count)}\` (repo root; use \`bun apps/cli/src/cli.ts admin labels evidence …\` when the installed CLI predates batch evidence)`;
+  `\`fluncle admin labels evidence <mb_label_id> [<mb_label_id> ...]${census ? " --census" : ""}${cfg.refresh === true ? " --refresh" : ""} --out ${shellPath(`${cfg.roundDir}/${slice}`)} --manifest ${shellPath(manifest)} --timeout ${Math.min(540, 240 * count)}\` (repo root; use \`bun apps/cli/src/cli.ts admin labels evidence …\` when the installed CLI predates batch evidence)`;
 
 const starts = [];
 for (let s = 0; s < total; s += batch) {

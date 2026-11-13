@@ -79,7 +79,7 @@ Workflow({ scriptPath: "<skill>/scripts/triage-workflow.js",
                    roundDir: "<durable round directory>" } })
 ```
 
-`concurrency` defaults to 6 and caps workers in each phase. Give the round a durable directory outside session scratch, for example `$XDG_STATE_HOME/fluncle/label-triage/<run-id>` (use `~/.local/state` when unset). Pass its absolute path as `roundDir` to both workflows. Each batch appends its run id, slice, label states and output files to `<roundDir>/manifest.jsonl`; the latest attempt for a slice describes its current state. Keep that manifest with the workflow journal for resume and transcript measurement.
+`concurrency` defaults to 6 and caps workers in each phase. Give the round a durable directory outside session scratch, for example `$XDG_STATE_HOME/fluncle/label-triage/<run-id>` (use `~/.local/state` when unset). Pass its absolute path as `roundDir` to both workflows. Each batch appends its run id, slice, label states and output files to `<roundDir>/manifest.jsonl`; the latest attempt for a slice describes its current state. Keep that manifest with the workflow journal for resume and transcript measurement. `refresh: true` adds `--refresh` to every evidence command in either workflow; set it when MusicBrainz changed since the cache was written (see _Picking up a split_ below).
 
 The phases are **Research** (about 10 labels per agent) and **Census** (5 mixed labels per agent). Census verdicts replace provisional research verdicts. Every worker reads [worker-rulings.md](references/worker-rulings.md) once with the file-read tool for the standing boundary and oracle ladder; the full coordinator skill stays here.
 
@@ -106,7 +106,7 @@ python3 <skill>/scripts/merge-round.py \
   --round <round number> --out label-triage.json
 ```
 
-`--scope` is the exact label array the research workflow read; use its subset file when the round only researched part of the pile. Repeat `--journal` for separate research and census runs. Paths are explicit, `--round` optionally records the round number, and omitting `--out` emits JSON on stdout. Census results replace provisional research verdicts after both phases resolve their slugs against the scope: an exact slug, a unique punctuation-free slug, or a unique label name. A repaired row retains `_slugFixedFrom`. Ambiguous matches, conflicting slug/name identities, duplicate verdicts and verify answers are refused before writing output; repeated results for the same task key use the latest result once. The counts describe the final buckets, applied census replacements and proposed rules.
+`--scope` is the exact label array the research workflow read; use its subset file when the round only researched part of the pile. Repeat `--journal` for separate research and census runs. Paths are explicit, `--round` optionally records the round id (a positive number or a name such as `20261113-splits`), and omitting `--out` emits JSON on stdout. Census results replace provisional research verdicts after both phases resolve their slugs against the scope: an exact slug, a unique punctuation-free slug, or a unique label name. A repaired row retains `_slugFixedFrom`. Ambiguous matches, conflicting slug/name identities, duplicate verdicts and verify answers are refused before writing output; repeated results for the same task use the latest result once. A task is identified by its started label (`labels 60-69`), so a slice that a resumed run re-ran under a new task key counts as the same task. The counts describe the final buckets, applied census replacements and proposed rules.
 
 Read stderr before continuing: missing research labels and pending census labels are named there, and a census-only label is reported without adding it to the round. Resume missing workflow tasks and re-run this merge from their journals until every scoped label has a research verdict and every `needsCensus` label has its census. This stages the first pass; `merge-verify.py` below handles second opinions.
 
@@ -153,6 +153,14 @@ python3 <skill>/scripts/render-conflation-brief.py   # writes mb-split-brief.md
 ```
 
 The brief is self-contained for an editing agent driving musicbrainz.org, and it bakes in the two rules that decided real outcomes. **Group A before Group B**: a conflation with a drum & bass catalogue trapped inside unblocks a crawl seed, while one where no strand is in lane is correct MusicBrainz hygiene that earns Fluncle nothing — so the brief orders A first and says to stop rather than spend the account's standing on B. A current round rules a no-DnB conflation `not_dnb`, so Group B only fills from an older round's staged verdicts. And **the notes are a hypothesis**, confirmed against the live catalogue rather than taken as fact, with an ambiguous release left in place and reported. Both earned their place: a measured round was 10-of-23 pure hygiene, and three premises in a hand-written brief were wrong and were caught only because the editor was told to doubt them.
+
+**Picking up a split.** Read the editor's report per label, then:
+
+- **The DnB strand stayed on the row's entity** (the usual case): nothing to repoint.
+- **It moved to an entity Fluncle already holds** (Divided → the enabled Divided Audio): the row's own entity is now off-lane and the next ruling disables it.
+- **It moved to an entity Fluncle does not hold, under the same name** (a reverse split): the operator re-points the row with `fluncle admin labels mint <mbid> --take-over <slug>` before it is re-triaged, or the round will rule the leftover strand ([docs/label-entity.md](../../../docs/label-entity.md)). The mint is operator-tier; an agent token gets a 403.
+
+Then re-triage the split labels as a subset round with `refresh: true` on BOTH workflows. Evidence and census responses are cached for a week, so without it the research and the verify census read the catalogue from before the split. A verdict that rests on a release the report says moved is checked against live `GET /ws/2/release?label=<mbid>` before it is presented.
 
 ### 4 · Apply
 
