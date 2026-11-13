@@ -17,6 +17,7 @@ export const WatchSchema = z
 
 const SaveWatchBodySchema = z.looseObject({
   entityId: z.unknown().optional(),
+  intent: z.unknown().optional(),
   kind: z.unknown().optional(),
 });
 

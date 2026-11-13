@@ -33,29 +33,33 @@ export async function getObservationEchoThresholds(): Promise<NoteEchoThresholds
 export async function setObservationEchoThresholds(
   next: Partial<NoteEchoThresholds>,
 ): Promise<NoteEchoThresholds> {
+  if (
+    next.minPhraseWords !== undefined &&
+    (!Number.isInteger(next.minPhraseWords) || next.minPhraseWords < 2 || next.minPhraseWords > 20)
+  ) {
+    throw new ApiError(
+      "invalid_request",
+      "minPhraseWords must be a whole number between 2 and 20 (a lift is a run of words; below 2 it would catch every sentence).",
+      400,
+    );
+  }
+
+  if (
+    next.maxOverlap !== undefined &&
+    (!Number.isFinite(next.maxOverlap) || next.maxOverlap < 0.05 || next.maxOverlap > 1)
+  ) {
+    throw new ApiError(
+      "invalid_request",
+      "maxOverlap must be between 0.05 and 1 (it is a Jaccard overlap; at 0 the gate would reject every script).",
+      400,
+    );
+  }
+
   if (next.minPhraseWords !== undefined) {
-    if (
-      !Number.isInteger(next.minPhraseWords) ||
-      next.minPhraseWords < 2 ||
-      next.minPhraseWords > 20
-    ) {
-      throw new ApiError(
-        "invalid_request",
-        "minPhraseWords must be a whole number between 2 and 20 (a lift is a run of words; below 2 it would catch every sentence).",
-        400,
-      );
-    }
     await setSetting(MIN_PHRASE_WORDS_KEY, String(next.minPhraseWords));
   }
 
   if (next.maxOverlap !== undefined) {
-    if (!Number.isFinite(next.maxOverlap) || next.maxOverlap < 0.05 || next.maxOverlap > 1) {
-      throw new ApiError(
-        "invalid_request",
-        "maxOverlap must be between 0.05 and 1 (it is a Jaccard overlap; at 0 the gate would reject every script).",
-        400,
-      );
-    }
     await setSetting(MAX_OVERLAP_KEY, String(next.maxOverlap));
   }
 

@@ -407,6 +407,44 @@ describe("oRPC set_clip_schedule (PATCH /admin/clips/{clipId}/schedule)", () => 
     const body = (await readJson(response)) as { ok: boolean; post: { scheduledFor: string } };
     expect(body.post.scheduledFor).toBe("2026-07-07T12:00:00.000Z");
   });
+
+  it("stores an offset slot as UTC, since the drip compares slots as UTC ISO strings", async () => {
+    getClip.mockResolvedValue({ id: "clip-1" });
+    getClipPost.mockResolvedValue({
+      clipId: "clip-1",
+      createdAt: "2026-07-05T00:00:00.000Z",
+      platform: "instagram",
+      scheduledFor: "2026-07-07T10:00:00.000Z",
+      status: "scheduled",
+      updatedAt: "2026-07-05T00:00:00.000Z",
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/clips/clip-1/schedule", "PATCH", OPERATOR_TOKEN, {
+        scheduledFor: "2026-07-07T12:00:00+02:00",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(upsertClipPost).toHaveBeenCalledWith({
+      caption: "caption for clip-1",
+      clipId: "clip-1",
+      scheduledFor: "2026-07-07T10:00:00.000Z",
+    });
+  });
+
+  it("refuses a slot that is not an ISO datetime instead of storing it", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/clips/clip-1/schedule", "PATCH", OPERATOR_TOKEN, {
+        scheduledFor: "2026-07-07 12:00",
+      }),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(upsertClipPost).not.toHaveBeenCalled();
+  });
 });
 
 describe("oRPC set_clip_schedules (POST /admin/clips/schedule)", () => {

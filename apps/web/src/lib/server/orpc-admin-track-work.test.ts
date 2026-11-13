@@ -54,6 +54,14 @@ describe("oRPC list_track_work (GET /admin/tracks/work)", () => {
     expect(readCatalogueCaptureAdmission).not.toHaveBeenCalled();
   });
 
+  it("refuses a page above the worklist's 200-row ceiling instead of clamping it", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(work("?kind=capture&limit=201", AGENT_TOKEN));
+
+    expect(response?.status).toBe(400);
+    expect(listTrackWork).not.toHaveBeenCalled();
+  });
+
   it("reports a closed catalogue capture budget and hands the same admission to list and count", async () => {
     const admission = { closedReason: "tracks_spent", open: false, remainingTracks: 0 };
     readCatalogueCaptureAdmission.mockResolvedValueOnce(admission);

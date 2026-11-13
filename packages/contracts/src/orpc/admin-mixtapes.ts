@@ -332,7 +332,7 @@ export const setClipSchedule = oc
     summary: "Set or override a clip's Instagram drip slot",
     tags: ["Admin"],
   })
-  .input(z.object({ clipId: z.string(), scheduledFor: z.string() }))
+  .input(z.object({ clipId: z.string(), scheduledFor: z.string().datetime({ offset: true }) }))
   .output(z.object({ ok: z.literal(true), post: ClipSocialPostSchema }));
 
 export const setClipSchedules = oc

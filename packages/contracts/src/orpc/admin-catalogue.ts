@@ -122,7 +122,7 @@ export const rankCatalogue = oc
   })
   .input(
     z.object({
-      countRemaining: z.coerce.boolean().default(false),
+      countRemaining: z.boolean().default(false),
       limit: z.coerce.number().int().min(1).max(1000).default(250),
     }),
   )

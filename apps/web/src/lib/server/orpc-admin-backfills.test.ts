@@ -4,10 +4,16 @@ import { warmOrpcRouter } from "./orpc-test-kit";
 
 const backfillDiscogsIds = vi.fn();
 const backfillLastfmLoves = vi.fn();
+const resolveCoverMasters = vi.fn();
 
 vi.mock("./backfill", () => ({
   backfillDiscogsIds: (...args: unknown[]) => backfillDiscogsIds(...args),
   backfillLastfmLoves: (...args: unknown[]) => backfillLastfmLoves(...args),
+}));
+
+vi.mock("./cover-masters", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cover-masters")>()),
+  resolveCoverMasters: (...args: unknown[]) => resolveCoverMasters(...args),
 }));
 
 const OPERATOR_TOKEN = "test-token-admin-operator";
@@ -23,6 +29,7 @@ warmOrpcRouter();
 beforeEach(() => {
   backfillDiscogsIds.mockReset();
   backfillLastfmLoves.mockReset();
+  resolveCoverMasters.mockReset();
 });
 
 function post(path: string, token: string | undefined): Request {
@@ -159,5 +166,27 @@ describe("oRPC backfill_lastfm (POST /admin/backfill/lastfm)", () => {
     });
 
     expect(backfillLastfmLoves).toHaveBeenCalledWith(50, true, undefined);
+  });
+});
+
+describe("oRPC backfill_cover_masters (POST /admin/backfill/cover-masters)", () => {
+  it("refuses an unknown kind instead of draining albums", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/admin/backfill/cover-masters?kind=artists&dryRun=true", OPERATOR_TOKEN),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(resolveCoverMasters).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unknown retry mode", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/admin/backfill/cover-masters?retry=all&dryRun=true", OPERATOR_TOKEN),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(resolveCoverMasters).not.toHaveBeenCalled();
   });
 });

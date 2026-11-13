@@ -514,8 +514,13 @@ describe("oRPC /me — POST /me/delete (delete_private_account)", () => {
     signIn();
     const summary = {
       credentials: "deleted",
+      followDigest: "deleted",
+      follows: "deleted",
       galaxyProgress: "deleted",
+      preferences: "deleted",
+      recSeeds: "deleted",
       savedFindings: "deleted",
+      savedSets: "deleted",
       sessions: "revoked",
       submissions: "anonymized",
       user: "marked_deleted",
@@ -537,12 +542,17 @@ describe("oRPC /me — POST /me/export (export_private_account_data)", () => {
     const payload = {
       export: {
         account: USER,
+        followDigest: null,
+        followDigestDeliveries: [],
+        follows: [],
         generatedAt: "2026-01-01T00:00:00.000Z",
         id: "exp-1",
         preferences: { keyNotation: "camelot" },
         privacyNotes: ["a", "b"],
         progress: { collectedLogIds: [], deaths: 0, ok: true, wins: 0 },
+        recSeeds: [],
         savedFindings: [],
+        savedSets: [],
         submissions: [],
       },
       ok: true,

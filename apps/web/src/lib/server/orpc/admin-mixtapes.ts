@@ -687,7 +687,7 @@ export function adminMixtapesHandlers(os: Implementer) {
         await upsertClipPost({
           caption: built.builtCaption,
           clipId: input.clipId,
-          scheduledFor: input.scheduledFor,
+          scheduledFor: new Date(input.scheduledFor).toISOString(),
         });
 
         const post = await getClipPost(input.clipId);

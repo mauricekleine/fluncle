@@ -4,9 +4,11 @@ import {
   ANCHOR_CANDIDATE_LIMIT,
   DEEZER_CANDIDATE_LIMIT,
   anchorTrack,
+  rankCatalogue,
   resolveAnchor,
 } from "./admin-catalogue";
 import {
+  backfillCoverMasters,
   backfillDiscogs,
   backfillDiscogsFacts,
   backfillLabelImages,
@@ -16,6 +18,9 @@ import {
   DISCOGS_RELEASE_WORK_LIMIT,
 } from "./admin-backfills";
 import { recordCost } from "./admin-costs";
+import { rankArtists } from "./admin-artists";
+import { migratePreviewArchive } from "./admin-migrations";
+import { listTrackWork } from "./admin-tracks";
 import {
   HEALTH_SNAPSHOT_CHECKS_MAX,
   HEALTH_SNAPSHOT_SERVICE_MAX,
@@ -36,7 +41,7 @@ import {
   recordRun,
 } from "./admin-telemetry";
 import { updateGalaxyMap } from "./admin-galaxies";
-import { presignClipUpload, presignSetVideoUpload } from "./admin-mixtapes";
+import { presignClipUpload, presignSetVideoUpload, setClipSchedule } from "./admin-mixtapes";
 import { LIVE_STATE_TIMESTAMP_MAX, recordLiveState } from "./admin-twitch";
 import { presignRecordingUpload } from "./admin-recordings";
 import {
@@ -970,6 +975,61 @@ function accepts(op: unknown, input: unknown): boolean {
     accepts(recordLiveState, { ...live, startedAt: "x".repeat(LIVE_STATE_TIMESTAMP_MAX + 1) }),
     false,
     "a stream start one character past the length cap is rejected",
+  );
+}
+
+{
+  for (const op of [rankArtists, rankCatalogue]) {
+    assert.equal(accepts(op, { countRemaining: true }), true, "a real boolean asks for the count");
+    assert.equal(
+      accepts(op, { countRemaining: "false" }),
+      false,
+      "the string false is rejected, never coerced to true",
+    );
+  }
+
+  assert.equal(
+    accepts(listTrackWork, { kind: "capture", limit: "200" }),
+    true,
+    "a worklist page at the 200-row ceiling is accepted",
+  );
+  assert.equal(
+    accepts(listTrackWork, { kind: "capture", limit: "201" }),
+    false,
+    "a worklist page past the ceiling the library serves is rejected",
+  );
+
+  assert.equal(
+    accepts(setClipSchedule, { clipId: "clip-1", scheduledFor: "2026-07-07T12:00:00+02:00" }),
+    true,
+    "a drip slot with an offset is accepted",
+  );
+  assert.equal(
+    accepts(setClipSchedule, { clipId: "clip-1", scheduledFor: "2026-07-07 12:00" }),
+    false,
+    "a drip slot that is not an ISO datetime is rejected",
+  );
+
+  assert.equal(
+    accepts(backfillCoverMasters, { query: { kind: "artist", retry: "none" } }),
+    true,
+    "the artist kind and the none retry are accepted",
+  );
+  assert.equal(
+    accepts(backfillCoverMasters, { query: { kind: "artists" } }),
+    false,
+    "an unknown cover-master kind is rejected, never drained as albums",
+  );
+
+  assert.equal(
+    accepts(migratePreviewArchive, { query: { mode: "verify" } }),
+    true,
+    "a known migration mode is accepted",
+  );
+  assert.equal(
+    accepts(migratePreviewArchive, { query: { mode: "delete-public" } }),
+    false,
+    "an unknown migration mode is rejected, never run as a copy",
   );
 }
 

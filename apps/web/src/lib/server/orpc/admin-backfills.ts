@@ -318,7 +318,7 @@ export function adminBackfillsHandlers(os: Implementer) {
       try {
         const { query } = input;
 
-        const kind: CoverMasterKind = query.kind === "artist" ? "artist" : "album";
+        const kind: CoverMasterKind = query.kind ?? "album";
 
         const retryNone = query.retry === "none";
         const result = await resolveCoverMasters(
