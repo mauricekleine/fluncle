@@ -5493,7 +5493,13 @@ async function runBackfillCoverMasters(
   backfillCoverMastersCommand: typeof import("./commands/admin-covers").backfillCoverMastersCommand,
 ): Promise<void> {
   const limit = parseListLimit(options.limit);
-  const kind = options.kind === "artist" ? "artist" : "album";
+
+  const kind = options.kind ?? "album";
+
+  if (kind !== "album" && kind !== "artist") {
+    throw new Error(`--kind must be one of: album, artist (got "${kind}")`);
+  }
+
   const retryNone = options.retryNone ?? false;
   const resolved: string[] = [];
   const none: string[] = [];

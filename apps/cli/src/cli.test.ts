@@ -2011,6 +2011,28 @@ describe("sweep commands surface partial failure", () => {
     },
   );
 
+  testCli("cover-masters refuses an unknown --kind before any request", async () => {
+    let requests = 0;
+    await withStubApi(
+      () => {
+        requests += 1;
+        return Response.json({ ok: false }, { status: 404 });
+      },
+      async (baseUrl) => {
+        const result = await runCli(
+          ["admin", "backfills", "cover-masters", "--kind", "artists", "--dry-run", "--json"],
+          { FLUNCLE_API_BASE_URL: baseUrl, FLUNCLE_API_TOKEN: "test-token" },
+        );
+
+        expect(result.exitCode).not.toBe(0);
+        expect(`${result.stdout}${result.stderr}`).toContain(
+          "--kind must be one of: album, artist",
+        );
+        expect(requests).toBe(0);
+      },
+    );
+  });
+
   testCli("cover-master retry keeps retry=none and the retry cursor on every page", async () => {
     const calls: Array<{ cursor: string | null; retry: string | null }> = [];
     const retryCursor = JSON.stringify([0, "z-public"]);

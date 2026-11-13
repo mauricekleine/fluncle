@@ -248,6 +248,19 @@ describe("the observation echo gate's dials", () => {
     });
   });
 
+  it("refuses a retune with one bad dial whole, saving neither dial", async () => {
+    const { getObservationEchoThresholds, setObservationEchoThresholds } =
+      await import("./observation-rejections");
+
+    await expect(
+      setObservationEchoThresholds({ maxOverlap: 5, minPhraseWords: 6 }),
+    ).rejects.toMatchObject({
+      code: "invalid_request",
+    });
+
+    expect(await getObservationEchoThresholds()).toEqual({ maxOverlap: 0.3, minPhraseWords: 4 });
+  });
+
   it("degrades a corrupted KV value to the default rather than opening the gate", async () => {
     const { getObservationEchoThresholds } = await import("./observation-rejections");
     const { setSetting } = await import("./settings");

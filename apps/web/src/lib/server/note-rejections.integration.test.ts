@@ -212,6 +212,18 @@ describe("the echo gate's dials", () => {
     });
   });
 
+  it("refuses a retune with one bad dial whole, saving neither dial", async () => {
+    const { getNoteEchoThresholds, setNoteEchoThresholds } = await import("./note-rejections");
+
+    await expect(setNoteEchoThresholds({ maxOverlap: 5, minPhraseWords: 6 })).rejects.toMatchObject(
+      {
+        code: "invalid_request",
+      },
+    );
+
+    expect(await getNoteEchoThresholds()).toEqual({ maxOverlap: 0.3, minPhraseWords: 4 });
+  });
+
   it("degrades a corrupted KV value to the default rather than opening the gate", async () => {
     const { getNoteEchoThresholds } = await import("./note-rejections");
     const { setSetting } = await import("./settings");

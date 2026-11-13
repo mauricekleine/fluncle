@@ -47,7 +47,7 @@ export const migratePreviewArchive = oc
         dryRun: z.string().optional(),
         limit: z.string().optional(),
 
-        mode: z.string().optional(),
+        mode: z.enum(["copy", "delete", "verify"]).optional(),
       }),
     }),
   )

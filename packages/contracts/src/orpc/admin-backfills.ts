@@ -692,10 +692,10 @@ export const backfillCoverMasters = oc
         cursor: z.string().optional(),
         dryRun: z.string().optional(),
 
-        kind: z.string().optional(),
+        kind: z.enum(["album", "artist"]).optional(),
         limit: z.string().optional(),
 
-        retry: z.string().optional(),
+        retry: z.enum(["none"]).optional(),
       }),
     }),
   )
@@ -714,8 +714,8 @@ export const backfillCoverMasters = oc
 
       rateLimited: z.boolean(),
 
-      requeued: z.array(z.string()).optional(),
-      requeuedCount: z.number().optional(),
+      requeued: z.array(z.string()),
+      requeuedCount: z.number(),
       resolved: z.array(z.string()),
       resolvedCount: z.number(),
     }),

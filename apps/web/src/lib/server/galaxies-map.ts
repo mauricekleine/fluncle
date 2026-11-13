@@ -6,6 +6,7 @@ import {
   type TrackListItem,
 } from "@fluncle/contracts";
 import { galaxySlug } from "@fluncle/contracts/util/galaxy-slug";
+import { ApiError } from "./api-error";
 import { getDb, typedRow, typedRows } from "./db";
 import { cosineSimilarity, readEmbeddingBlob } from "./embedding";
 import {
@@ -401,7 +402,11 @@ export async function updateGalaxyFields(
   }
 
   if (sets.length === 0) {
-    throw new Error("update_galaxy needs at least one of name, slug, requestSplit");
+    throw new ApiError(
+      "invalid_request",
+      "update_galaxy needs at least one of name, slug, requestSplit",
+      400,
+    );
   }
 
   const materialChanges: string[] = [];

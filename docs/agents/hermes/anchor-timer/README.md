@@ -30,7 +30,7 @@ A handled row stamps `spotify_anchor_attempted_at`, a **14-day re-ask backoff** 
 
 **It calls the oRPC HTTP endpoints directly** (the `verify-captures.ts` precedent), never a `fluncle admin …` subcommand — the box's baked CLI is a PINNED release and must not gain a new dependency.
 
-- `FLUNCLE_ANCHOR_BATCH` (code default `15`; this unit ships **`250`** via `ExecStart`) — rows per tick. The sweep reads the worklist in pages of up to 200 rows (`PAGE_LIMIT` in `scripts/anchor-sweep.ts`), so the batch is not capped by the contract's per-request `.max(250)`. Safe to run at the ceiling because the free rungs resolve most rows at no Apify cost. This number decides how many rows a HEALTHY tick drains and nothing else — it is NOT the lever for breaker yields (see below).
+- `FLUNCLE_ANCHOR_BATCH` (code default `15`; this unit ships **`250`** via `ExecStart`) — rows per tick. The sweep reads the worklist in pages of up to 200 rows (`PAGE_LIMIT` in `scripts/anchor-sweep.ts`), so the batch is not capped by the contract's per-request `.max(200)`. Safe to run at the ceiling because the free rungs resolve most rows at no Apify cost. This number decides how many rows a HEALTHY tick drains and nothing else — it is NOT the lever for breaker yields (see below).
 - `--limit N` — an attended backlog burn (overrides the batch for one run, paged the same way); rows are still chunked into Apify runs of `FLUNCLE_ANCHOR_APIFY_CHUNK` (default 15).
 
 ## The cost, and how to control it

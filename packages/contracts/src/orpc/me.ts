@@ -80,14 +80,14 @@ export const deletePrivateAccount = oc
       ok: z.literal(true),
       summary: z.object({
         credentials: z.string(),
-        followDigest: z.string().optional(),
-        follows: z.string().optional(),
+        followDigest: z.string(),
+        follows: z.string(),
         galaxyProgress: z.string(),
 
-        preferences: z.string().optional(),
-        recSeeds: z.string().optional(),
+        preferences: z.string(),
+        recSeeds: z.string(),
         savedFindings: z.string(),
-        savedSets: z.string().optional(),
+        savedSets: z.string(),
         sessions: z.string(),
         submissions: z.string(),
         user: z.string(),
@@ -116,31 +116,28 @@ export const exportPrivateAccountData = oc
             unsubscribedAt: z.string().nullable(),
             updatedAt: z.string(),
           })
-          .nullable()
-          .optional(),
-        followDigestDeliveries: z
-          .array(
-            z.object({
-              attempts: z.number(),
-              claimedAt: z.string(),
-              id: z.string(),
-              payloadJson: z.string(),
-              sentAt: z.string().nullable(),
-              status: z.string(),
-              weekKey: z.string(),
-            }),
-          )
-          .optional(),
-        follows: z.array(FollowSchema).optional(),
+          .nullable(),
+        followDigestDeliveries: z.array(
+          z.object({
+            attempts: z.number(),
+            claimedAt: z.string(),
+            id: z.string(),
+            payloadJson: z.string(),
+            sentAt: z.string().nullable(),
+            status: z.string(),
+            weekKey: z.string(),
+          }),
+        ),
+        follows: z.array(FollowSchema),
         generatedAt: z.string(),
         id: z.string(),
         preferences: UserPreferencesSchema,
         privacyNotes: z.array(z.string()),
         progress: GalaxyProgressSchema,
 
-        recSeeds: z.array(RecSeedSchema).optional(),
+        recSeeds: z.array(RecSeedSchema),
         savedFindings: z.array(SavedFindingSchema),
-        savedSets: z.array(SavedSetSchema).optional(),
+        savedSets: z.array(SavedSetSchema),
         submissions: z.array(PrivateSubmissionSchema),
       }),
       ok: z.literal(true),

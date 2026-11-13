@@ -1,19 +1,11 @@
 import { env } from "cloudflare:workers";
 import { getDb } from "../db";
-import { type MigrationMode, migratePreviewArchive } from "../preview-bucket-migration";
+import { migratePreviewArchive } from "../preview-bucket-migration";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
 
 const MIGRATE_DEFAULT_LIMIT = 50;
 const MIGRATE_MAX_LIMIT = 500;
-
-function parseMode(value: string | undefined): MigrationMode {
-  if (value === "delete" || value === "verify") {
-    return value;
-  }
-
-  return "copy";
-}
 
 export function adminMigrationsHandlers(os: Implementer) {
   const migratePreviewArchiveHandler = os.migrate_preview_archive
@@ -29,7 +21,7 @@ export function adminMigrationsHandlers(os: Implementer) {
 
           dryRun: query.dryRun === undefined ? true : parseBool(query.dryRun),
           limit: parseLimit(query.limit, MIGRATE_DEFAULT_LIMIT, MIGRATE_MAX_LIMIT),
-          mode: parseMode(query.mode),
+          mode: query.mode ?? "copy",
           privateBucket: env.SOURCE_AUDIO,
           publicBucket: env.VIDEOS,
         });
