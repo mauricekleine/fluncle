@@ -133,6 +133,16 @@ describe("worker briefs", () => {
       );
     });
 
+    test(`${script} bypasses the evidence cache in every command only when refresh is set`, async () => {
+      const cached = (await runWorkflow(script, [mixed])).briefs;
+      const refreshed = (await runWorkflow(script, [mixed], { refresh: true })).briefs;
+      expect(cached.some((brief) => brief.includes("--refresh "))).toBe(false);
+      expect(refreshed.length).toBeGreaterThan(0);
+      for (const brief of refreshed) {
+        expect(brief).toMatch(/labels evidence [^`]*--refresh --out/);
+      }
+    });
+
     test(`${script} scales each slice deadline below the Bash tool timeout`, async () => {
       const research = Array.from({ length: 6 }, (_, index) => ({
         ...mixed,

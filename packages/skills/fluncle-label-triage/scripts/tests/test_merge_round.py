@@ -84,6 +84,27 @@ class MergeRoundTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["counts"]["not_dnb"], 1)
 
+    def test_resumed_slice_under_a_new_task_key_keeps_only_its_latest_result(self):
+        entries = task("first-attempt", "labels 0-0", [verdict("label")])
+        entries.extend(task("resumed-attempt", "labels 0-0", [verdict("label", "not_dnb")]))
+        result = self.run_merge([{"slug": "label", "name": "Label"}], [entries])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["counts"]["not_dnb"], 1)
+
+    def test_one_label_ruled_by_two_different_slices_is_refused(self):
+        entries = task("a", "labels 0-0", [verdict("label")]) + task("b", "labels 1-1", [verdict("label")])
+        result = self.run_merge([{"slug": "label", "name": "Label"}], [entries])
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("duplicate research verdict", result.stderr)
+
+    def test_round_accepts_a_named_round(self):
+        result = self.run_merge([{"slug": "label", "name": "Label"}], [task("r", "labels 0-0", [verdict("label")])], "--round", "20261113-splits")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["round"], "20261113-splits")
+        for bad in ["0", "", "../escape"]:
+            with self.subTest(bad=bad):
+                self.assertEqual(self.run_merge([], [[]], "--round", bad).returncode, 2)
+
     def test_invalid_journals_are_refused(self):
         scope = [{"slug": "label", "name": "Label"}]
         for entries in [
