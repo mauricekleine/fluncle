@@ -17,7 +17,15 @@ import {
   DISCOGS_RELEASES_PER_TRACK_LIMIT,
   DISCOGS_RELEASE_WORK_LIMIT,
 } from "./admin-backfills";
-import { recordCost } from "./admin-costs";
+import {
+  COST_EVENT_ID_MAX,
+  COST_EVENT_LOG_ID_MAX,
+  COST_EVENT_MODEL_MAX,
+  COST_EVENT_TIMESTAMP_MAX,
+  COST_EVENT_TRACK_ID_MAX,
+  recordCost,
+} from "./admin-costs";
+import { LABEL_OUTLIER_TIMESTAMP_MAX, recordLabelOutliers } from "./admin-label-outliers";
 import { rankArtists } from "./admin-artists";
 import { migratePreviewArchive } from "./admin-migrations";
 import { listTrackWork } from "./admin-tracks";
@@ -327,6 +335,34 @@ function accepts(op: unknown, input: unknown): boolean {
     ),
     false,
     "one row past the cap is rejected",
+  );
+
+  const capped: [string, number][] = [
+    ["id", COST_EVENT_ID_MAX],
+    ["logId", COST_EVENT_LOG_ID_MAX],
+    ["model", COST_EVENT_MODEL_MAX],
+    ["occurredAt", COST_EVENT_TIMESTAMP_MAX],
+    ["trackId", COST_EVENT_TRACK_ID_MAX],
+  ];
+
+  for (const [field, max] of capped) {
+    assert.equal(
+      accepts(recordCost, [{ ...event(0), [field]: "x".repeat(max) }]),
+      true,
+      `a cost event whose ${field} is AT its cap is accepted`,
+    );
+    assert.equal(
+      accepts(recordCost, [{ ...event(0), [field]: "x".repeat(max + 1) }]),
+      false,
+      `a cost event whose ${field} is one character past its cap is rejected`,
+    );
+  }
+
+  const boxEventId = `studio-clip:${"x".repeat(COST_EVENT_TRACK_ID_MAX)}:openrouter:characters:${"x".repeat(COST_EVENT_TIMESTAMP_MAX)}`;
+
+  assert.ok(
+    boxEventId.length * 2 <= COST_EVENT_ID_MAX,
+    "the event id cap holds twice the longest id cost-emit can build from capped parts",
   );
 }
 
@@ -1034,3 +1070,35 @@ function accepts(op: unknown, input: unknown): boolean {
 }
 
 console.log("input-caps: ok");
+
+{
+  const run = (replicaSyncedAt: string | null) => ({
+    labelsScored: 1,
+    outliers: [],
+    replicaSyncedAt,
+    totalFlagged: 0,
+    tracksScored: 1,
+    unitsScored: 1,
+  });
+
+  assert.equal(
+    accepts(recordLabelOutliers, run(new Date(0).toISOString())),
+    true,
+    "the sweep's ISO read stamp is accepted",
+  );
+  assert.equal(
+    accepts(recordLabelOutliers, run(null)),
+    true,
+    "a run with no replica stamp is accepted",
+  );
+  assert.equal(
+    accepts(recordLabelOutliers, run("x".repeat(LABEL_OUTLIER_TIMESTAMP_MAX))),
+    true,
+    "a replica stamp AT the cap is accepted",
+  );
+  assert.equal(
+    accepts(recordLabelOutliers, run("x".repeat(LABEL_OUTLIER_TIMESTAMP_MAX + 1))),
+    false,
+    "a replica stamp one character past the cap is rejected",
+  );
+}
