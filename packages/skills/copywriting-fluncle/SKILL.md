@@ -53,7 +53,7 @@ These are reminders, not the spec; the spec is `references/voice.md`.
 Before returning copy, verify against `references/voice.md`:
 
 - No banned identity words: "transmission(s)", "signal(s)", "anomaly", "curated / curation", "content", "stream / streaming" as identity, or marketing buzzwords. Use only the sanctioned emoji set defined below. Fluncle finds and logs; he does not transmit, pick up signals, or curate.
-- Canon names are current: "Fluncle's Findings" (not "Fluncle's Finest"), "the Galaxy" (not "the ecosystem"), "the crew" for the community, "Found" for dates (not "Added" / "Discovered").
+- Canon names: "Fluncle's Findings", "the Galaxy" (not "the ecosystem"), "the crew" for the community, "Found" for dates (not "Added" / "Discovered").
 - "Banger" appears at most once per paragraph; repeats became track or tune (the Banger Budget).
 - Every pro-form points at a noun written earlier in the same copy (the Name It Rule): scan for "ones", "things", "stuff", bare "more" — if the antecedent is not in the string the reader sees, write the noun.
 - No exclamation marks. No em dashes in prose (the `Artist — Title` separator is the only sanctioned use). Mechanical sweep: grep the draft for `—` (U+2014); every hit must be an `Artist — Title` separator, rewrite the rest into commas, colons, or separate sentences. Use the grep as the mechanical backstop for this rule.

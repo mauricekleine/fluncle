@@ -79,7 +79,7 @@ Treat auto-advance as the sole autonomous publishing path. Agent-tier YouTube pu
 
 ## Instagram — manual for FINDINGS; automated for set CLIPS
 
-**A set CLIP is the exception, and it is built for automation** (the clip drip-feed — a separate object from a finding). Set clips use their live-mixed set audio and queue for the automated Instagram clip drip documented in the `fluncle-mixtapes` skill, whose sweep is parked (no host timer yet; see that skill's §B4). This skill stays finding-only: **no `--platform instagram` for a finding.**
+**A set CLIP is the exception, and it is built for automation** (the clip drip-feed — a separate object from a finding). Set clips use their live-mixed set audio and queue for the automated Instagram clip drip documented in the `fluncle-mixtapes` skill, whose sweep is parked with no host timer (see that skill's §B4). This skill stays finding-only: **no `--platform instagram` for a finding.**
 
 ## Platforms
 

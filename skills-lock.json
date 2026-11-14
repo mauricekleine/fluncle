@@ -4,7 +4,7 @@
     "copywriting-fluncle": {
       "source": "./packages/skills/copywriting-fluncle",
       "sourceType": "local",
-      "computedHash": "1e2447431f8365c7c9a47288f91efc32893b503cc54d6d0153c00f340af9e0ce"
+      "computedHash": "797a26ae45b3c74238d2732e644f88231268a67ebf335e16af900be8522b404c"
     },
     "email-best-practices": {
       "source": "resend/resend-skills",
@@ -25,7 +25,7 @@
     "fluncle-catalogue-prune": {
       "source": "./packages/skills/fluncle-catalogue-prune",
       "sourceType": "local",
-      "computedHash": "dc32d46de5544037cac429bee359463a3e04729a7b991225c2fad1cd20f6b172"
+      "computedHash": "398fa3dc775294563d39ba24bb9efef1fc4d06fd31d1f3e482171555136f4c59"
     },
     "fluncle-embed-batch": {
       "source": "./packages/skills/fluncle-embed-batch",
@@ -65,7 +65,7 @@
     "fluncle-mixtapes": {
       "source": "./packages/skills/fluncle-mixtapes",
       "sourceType": "local",
-      "computedHash": "d4134069af5a68174675df790d612cdb805a71db2553c7b574e8b49e4f60036b"
+      "computedHash": "a02916acec221f2101280133d3e287c717e2b53a1092d7ebe9bf5a9736ee4684"
     },
     "fluncle-operator": {
       "source": "./packages/skills/fluncle-operator",
@@ -75,7 +75,7 @@
     "fluncle-publish": {
       "source": "./packages/skills/fluncle-publish",
       "sourceType": "local",
-      "computedHash": "99974c3910fb634d7557a8f6852c48678e4ae42e45686c44db6c3bfffc87b7bb"
+      "computedHash": "48b89907bb68657fe1ca4f5407f8fec64e65be7e491ffcc1c5371681a2ee61d1"
     },
     "fluncle-rekordbox-sync": {
       "source": "./packages/skills/fluncle-rekordbox-sync",
@@ -105,7 +105,7 @@
     "fluncle-video": {
       "source": "./packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "8b8eea891919f10160a169569cab0efc2e86d643fc692419b314a6b84504fb82"
+      "computedHash": "8854042cc1bdee318ff44ea6a7da030ece0337455d598ba472eb8e681f39b213"
     },
     "improve": {
       "source": "shadcn/improve",
