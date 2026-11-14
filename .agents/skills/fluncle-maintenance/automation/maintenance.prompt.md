@@ -61,7 +61,7 @@ Output a tight report: the pins read, the drift found, what you **shipped** (PR 
 ## Hard rails (these survive even if the rest is skipped)
 
 - **One bounded sweep per run.** No catching up the whole tree; no second pass.
-- **Opus is the gate — when in doubt, STOP.** Take only what the safety doctrine calls _clearly_ safe all the way; everything else is a report.
+- **Your judgment is the gate — when in doubt, stop.** Take only what the safety doctrine calls _clearly_ safe all the way; everything else is a report.
 - **Never ship: a major bump, node/uv/gh, boat.dev, or anything touching auth/runtime/the model.** Report them; never merge them.
 - **Never merge a red PR.** Wait for green; a failing check means report-and-leave, not merge.
 - **You never touch the box.** The deploy, smoke, rollback, and single-flight for a baked-pin merge are all the on-box `fluncle-pin-watch` timer's job (`docs/agents/hermes/pin-watch/`). Your job ends at the merge — do not SSH, rebuild, or `op`.

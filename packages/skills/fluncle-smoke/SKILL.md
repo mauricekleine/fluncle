@@ -1,16 +1,7 @@
 ---
 name: fluncle-smoke
 description: >-
-  Smoke-test that Fluncle's surfaces still RESOLVE after a refactor, route/contract
-  change, or deploy — the route-resolution layer that complements /status
-  service-health. Use after deleting or moving HTTP routes / oRPC contracts / registry
-  surfaces, after a big merge, before trusting a deploy, or when asked to "smoke test",
-  "probe the surfaces", "check nothing broke", "did the refactor break anything",
-  "verify everything still works across surfaces". Derives its target list LIVE from
-  @fluncle/registry + @fluncle/contracts each run so it never drifts, and flexes to
-  probe recently-changed + undocumented surfaces. This is an agent-run cross-surface
-  sweep — deliberately a skill, not a public `fluncle` CLI command, and distinct from
-  /status (which is service health, not route resolution).
+  Smoke-test that Fluncle's surfaces still resolve, deriving the target list live from @fluncle/registry and @fluncle/contracts. Use after moving or deleting HTTP routes, oRPC contracts or registry surfaces, after a big merge, before trusting a deploy, or when asked to check that nothing broke across surfaces. Service health is /status, not this skill.
 ---
 
 # Fluncle surface smoke
@@ -39,7 +30,7 @@ Default prod `https://www.fluncle.com`. For a pre-merge PR, smoke its Cloudflare
 4. **CLI.** Dry-run the thin client's read paths against the target: `bun run --cwd apps/cli fluncle recent --limit 1 --json`, `fluncle tracks get <logId> --json`, `fluncle status`. Confirms the CLI→API contract end to end.
 5. **MCP / SSH / DNS.** MCP at `/mcp` (GET `405` / POST `400` = served). SSH terminal `rave.fluncle.com:22` TCP-open (`bash -c 'cat </dev/null >/dev/tcp/rave.fluncle.com/22'`). DNS `dig +short @rave.fluncle.com <name> TXT`.
 6. **/api/v1/status aggregate.** The box's own view: `services` all `ok`, `secondsSinceFreshestReport` small (the host-timer healthcheck is fresh).
-7. **Interactive surfaces — only when the change touched them.** The video players and admin UI need a real browser past hydration, not a `200`. Drive the chrome-devtools MCP (logged-out: the public `/log/<mixtape>` player) or claude-in-chrome (the authed admin): verify playback / seek / overlay / the actual interaction.
+7. **Interactive surfaces — only when the change touched them.** The video players and admin UI need a real browser past hydration, not a `200`. Drive a real browser with the `agent-browser` skill (logged-out: the public `/log/<mixtape>` player; authed: the admin) and verify playback / seek / overlay / the actual interaction.
 
 ## Judgment (what a frozen script gets wrong)
 

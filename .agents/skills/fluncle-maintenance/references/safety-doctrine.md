@@ -1,4 +1,4 @@
-# Safety doctrine — Opus is the gate
+# Safety doctrine — your judgment is the gate
 
 This routine runs with **no human approving a merge**. There is no approval prompt before a bump **ships** — merged to `main`, and for a baked pin the box self-deploys it. So the model's judgment is the only safety mechanism on the repo side — and the doctrine is built around one asymmetry:
 

@@ -1,17 +1,7 @@
 ---
 name: fluncle-catalogue-prune
 description: >-
-  Run an off-genre pruning pass on Fluncle's drum & bass catalogue — find and remove
-  non-DnB artists, tracks, and albums (reggae, pop, jazz, house/EDM…) that leaked in via
-  the catalogue crawler and got public /artist and /album pages. USE THIS whenever the task touches
-  off-genre catalogue entities: an artist page that shouldn't exist (Bob Marley, Adele on a DnB
-  site), "why is this non-DnB artist/album live", catalogue hygiene/cleanup, disabling an off-genre
-  seed label and removing its tracks, or the "original-of-remix" problem (a DnB remix billed to a
-  pop original). ALSO the artist-identity repairs the same crawl leaves behind: one row holding TWO
-  real acts, TWO duplicate rows holding ONE act ("merge these duplicate artist pages", "two pages
-  for the same artist"), a row wearing the WRONG MusicBrainz mbid, and RESTORING tracks a purge
-  should not have deleted ("undo that purge"). Operator-driven and DESTRUCTIVE on production, so
-  dry-run-first with backups and rollbacks. Triggers without the word "prune" too.
+  Remove off-genre artists, tracks and albums (non-drum & bass leaks from the catalogue crawler) from Fluncle's catalogue, and repair the artist identities the crawl breaks: one row holding two acts, duplicate rows for one act, a wrong MusicBrainz mbid, or tracks a purge should have kept. Use for catalogue hygiene, an artist or album page that should not exist, disabling an off-genre seed label, or the original-of-remix problem. Destructive on production: dry run first, with backups and rollbacks.
 ---
 
 # Fluncle catalogue off-genre pruning pass

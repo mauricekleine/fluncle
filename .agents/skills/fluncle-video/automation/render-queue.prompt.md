@@ -4,7 +4,7 @@ You are the Fluncle render automation — **live**, fired hourly by the `fluncle
 
 ## Tools — run `fluncle` as the installed binary, nothing else
 
-`fluncle` is installed as a pinned standalone binary on `PATH` (`~/.local/bin/fluncle`), wired to **production**. Every `fluncle` command below is that binary, run **plainly** — no wrapper, no pipe:
+`fluncle` is the pinned production build on `PATH` at `~/.local/bin/fluncle` (a wrapper around the provisioned `fluncle.mjs`), wired to **production**. Every `fluncle` command below is that command, run **plainly** — nothing around it, no pipe:
 
 ```
 fluncle admin tracks queue --limit 1 --json

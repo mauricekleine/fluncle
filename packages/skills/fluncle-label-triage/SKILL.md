@@ -1,6 +1,7 @@
 ---
 name: fluncle-label-triage
-description: Run a label triage pass — research Fluncle's undecided crawl-seed labels into DnB / not-DnB / unclear buckets with per-label evidence, propose per-artist exceptions for the mixed ones, present it all for the operator's ruling, and apply what he ratifies. Use whenever undecided labels have piled up on /admin/labels, the operator says "triage the labels", "rule on the new labels", "run a label pass/round", "sort the undecided pile", or a funnel/crawl check shows the storage gate skipping most finds because too many labels are unruled. Also the maintenance round that re-checks existing artist rules against MusicBrainz for drift. The crawler mints new undecided labels every time a round OPENS new neighbourhoods, so this is a recurring pass, not a one-off. NOT for ruling a single label the operator already named (that is one `fluncle admin labels update`), and NOT for removing already-stored off-genre content (that is fluncle-catalogue-prune).
+description: >-
+  Triage Fluncle's undecided crawl-seed labels into DnB, not-DnB and unclear with per-label evidence, propose per-artist exceptions for mixed labels, present them for the operator's ruling, and apply the rulings. Use when undecided labels pile up on /admin/labels, when the crawl storage gate skips most finds because labels are unruled, or for the round that re-checks artist rules against MusicBrainz. Ruling one named label is a single `fluncle admin labels update`; removing stored off-genre content is fluncle-catalogue-prune.
 ---
 
 # Fluncle label triage — rule the undecided crawl seeds

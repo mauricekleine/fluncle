@@ -42,7 +42,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 
 ## Which machine am I on?
 
-- This repo is worked from two Macs; the machine determines what is SAFE, so detect it before large uploads or commits. Detect with `sysctl -n machdep.cpu.brand_string` and match loosely on the chip generation (the string is like `Apple M5 Pro` / `Apple M2` — key off `M5` / `M2`). The physical rig behind this split is [docs/live-show-setup.md](./docs/live-show-setup.md).
+- This repo is worked from two Macs and from Linux agent hosts; the machine determines what is SAFE, so detect it before large uploads or commits. Run `uname -s` first: on Linux neither Mac role applies. On a Mac, detect with `sysctl -n machdep.cpu.brand_string` and match loosely on the chip generation (the string is like `Apple M5 Pro` / `Apple M2` — key off `M5` / `M2`). The physical rig behind this split is [docs/live-show-setup.md](./docs/live-show-setup.md).
 - **M5 (build/compose + capture/stream):** browser + prod `fluncle` CLI; OBS + the audio/video masters + the recording upload + `ffmpeg` + distribute + the live glass/bridge all live here. Orchestrate, dev, capture, and stream here. Heavy render batches run as a sliding window — 3 concurrent attended, 4 max overnight, never wider (this CPU is also the show rig).
 - **M2 (mixing):** Rekordbox + the DDJ-FLX4 + `master.db` — the `fluncle-mixtapes` Rekordbox scripts and the `fluncle-rekordbox-sync` key/BPM sync run here (they read `master.db`), and during an unordered live set the `m2-sender` + `deckwatch` scripts (they need the controller's MIDI and Rekordbox on screen). No OBS, no browser.
 - Large media uploads (`fluncle admin recordings create --video`, `fluncle admin mixtapes distribute`) run on the M5 and must be started by the operator in a direct Terminal session. Agent shell sessions do not reliably sustain multi-GB transfers. Use `dangerouslyDisableSandbox` for SSH-signed commits through the 1Password agent socket and moderate transfers; follow the [fluncle-mixtapes](./packages/skills/fluncle-mixtapes) skill for the upload workflow.
@@ -82,7 +82,7 @@ Use the globally installed `mk-agent-orchestration` skill for provider, model, e
 - Edit hooks format the touched file. Quality Checks owns the full matrix; `deploy:gate` checks what the Worker build deploys. For docs-only changes, verify formatting, links, and readability.
 - Read [docs/development.md#quality-checks](./docs/development.md#quality-checks) for package-specific commands; read [docs/quality-system.md](./docs/quality-system.md) before changing CI, the classifier, or deploy verification.
 - Use guards, early returns, `??`, or `?.` instead of TypeScript non-null assertions, enforced by lint.
-- Formatting uses the pinned Bun release's `bun fmt`, with `flavor = "oxfmt"` in `bunfig.toml` and exclusions in `.oxfmtrc.json`. Lint still trials Bun canary through `scripts/bun-canary.ts` and `.oxlintrc.json`; CI, `deploy:gate` and the audit box install it from npm when absent. Retire the lint trial once a Bun release ships `bun lint`.
+- Formatting uses the pinned Bun release's `bun fmt`, with `flavor = "oxfmt"` in `bunfig.toml` and exclusions in `.oxfmtrc.json`. Lint still trials Bun canary through `scripts/bun-canary.ts` and `.oxlintrc.json`; CI, `deploy:gate` and the audit box install it from npm when absent.
 - For browser inspection use the global `agent-browser` skill; use Chrome DevTools MCP for performance traces.
 
 ## Library and API Docs

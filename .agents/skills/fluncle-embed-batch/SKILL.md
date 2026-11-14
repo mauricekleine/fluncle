@@ -1,13 +1,7 @@
 ---
 name: fluncle-embed-batch
 description: >-
-  Clear Fluncle's catalogue MuQ embedding backlog by running the embed batch off-box — on the M5 (CPU,
-  overnight, free) or a rented RunPod GPU (fast, paid). Use whenever the embed queue is backed up, the
-  operator wants more catalogue tracks recommendation-eligible, someone says "run the embed batch", "fire
-  the GPU batch", "embed the catalogue", "clear the embed backlog", "MuQ embeddings at scale", "RunPod
-  embed", or "overnight embed on the M5" — or when a funnel/health check shows embedding is the bottleneck.
-  This is the CATALOGUE-SCALE batch (`embed-batch.ts`), not the per-track BPM/key enrichment (that is
-  fluncle-track-enrichment) and not the automatic on-box `fluncle-embed` trickle (that runs itself).
+  Clear Fluncle's catalogue MuQ embedding backlog with the off-box `embed-batch.ts` run, on the M5 overnight (CPU, free) or a rented RunPod GPU (fast, paid). Use when the embed queue is backed up, more catalogue tracks should become recommendation-eligible, or a funnel check shows embedding is the bottleneck. Per-track BPM/key analysis is fluncle-track-enrichment; the on-box `fluncle-embed` trickle runs itself.
 ---
 
 # Fluncle embed batch — clear the catalogue embedding backlog

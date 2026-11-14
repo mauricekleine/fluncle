@@ -28,7 +28,7 @@ The rebuild, smoke, rollback, and single-flight for a baked-pin merge are all th
 - **A BRAKE item** never reaches merge, so it never reaches the box — it's a report.
 - **A bun major** (a new base image) is a BRAKE: report it, let the operator take it deliberately. A same-major bun bump self-deploys like any other baked pin.
 - **node, uv, and gh** are pinned but MANUAL-watch: the routine reports their drift; the operator bumps them by hand and pin-watch deploys the merge.
-- **boat.dev** is pinned but MANUAL-watch: the routine never bumps it, and the pin-watch post-smoke re-verifies the conductor after any rebuild it does.
+- **boat.dev** is pinned but MANUAL-watch: the routine never bumps it. Pin-watch's post-swap smoke checks only a running container and `fluncle version`, so re-verify the conductor with `render-conductor.sh --preflight` after a boat.dev bump or a base rebuild.
 
 ## Public-repo rule (applies to every file in this skill)
 

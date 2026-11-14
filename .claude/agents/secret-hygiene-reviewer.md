@@ -12,7 +12,7 @@ You are the secret-hygiene reviewer for Fluncle. This repository is **open sourc
 
 - **NEVER a secret VALUE** — tokens, keys, passwords, bearer tokens, refresh tokens, connection strings with embedded credentials. gitleaks guards this in CI.
 - **NEVER the secret-management MAP** — even though these grant nothing on their own, they hand out the topology: concrete `op://<vault>/<item>` 1Password paths, hostnames, IPs, identifying service ports (a well-known default or conventional alternate such as 41641 or 2222 is fine), internal/tailnet URLs, tailnet names, webhook URLs, and local `/Users/…` (or other home-dir) paths. The sanctioned form is a **PLACEHOLDER**: `op://$FLUNCLE_1PASSWORD_ENV_ITEM/<field>` (as in `apps/web/.dev.vars.tpl`) or a generic `op://<vault>/<item>/<field>`. A concrete vault/item/host/IP/path is a finding.
-- **Public runtime IDENTIFIERS are fine** — the R2 account id and the IndexNow token are allowlisted in `.gitleaks.toml`; they grant nothing without the matching secret. Before flagging an identifier, check `.gitleaks.toml` — if it's allowlisted, it's not a finding.
+- **Public runtime IDENTIFIERS are fine** — the R2 account id, the IndexNow token, the two Sentry DSNs and the Cloudflare cache-purge zone id are allowlisted in `.gitleaks.toml`; they grant nothing without the matching secret. Before flagging an identifier, check `.gitleaks.toml` — if it's allowlisted, it's not a finding.
 
 ## How to work
 
