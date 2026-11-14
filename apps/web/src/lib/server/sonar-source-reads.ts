@@ -6,6 +6,7 @@ import {
   buildArtifactSnapshotStatement,
   encodeSnapshotCursor,
   snapshotMaterial,
+  sonarTrackSnapshotDigestHeader,
   SONAR_TRACK_SOURCE_COLUMNS,
   type ArtifactSnapshotItem,
 } from "./artifact-changes";
@@ -98,6 +99,82 @@ export function buildSonarTrackDigestStatement(
   };
 }
 
+const TRACK_DIGEST_INPUT_COLUMNS = [
+  "key",
+  "bpm",
+  "spotify_uri",
+  "finding_id",
+  "finding_log_id",
+  "dismissed_at",
+  "duplicate_of_track_id",
+  "nearest_finding_score",
+  "duration_ms",
+] as const;
+
+function buildSonarTrackDigestMetadataStatement(after: string | undefined, limit: number) {
+  const source = buildSonarTrackDigestStatement(after, limit);
+  return { ...source, sql: source.sql.replace("e.embedding_blob,", "null as embedding_blob,") };
+}
+
+function buildSonarTrackSqlDigestStatement(
+  after: string | undefined,
+  limit: number,
+  rows: Record<string, unknown>[],
+) {
+  const source = buildSonarTrackDigestStatement(after, limit);
+  const headers = rows.slice(0, limit).map((row) => ({
+    ...Object.fromEntries(TRACK_DIGEST_INPUT_COLUMNS.map((column) => [column, row[column]])),
+    header: sonarTrackSnapshotDigestHeader(row),
+    track_id: row.track_id,
+  }));
+  const matches = TRACK_DIGEST_INPUT_COLUMNS.map(
+    (column) => `source.${column} is json_extract(h.value, '$.${column}')`,
+  ).join(" and ");
+  const valid = `h.track_id is not null and typeof(source.embedding_blob) = 'blob' and ${matches}`;
+  const columns = TRACK_DIGEST_INPUT_COLUMNS.map((column) => `source.${column}`).join(", ");
+  return {
+    args: [JSON.stringify(headers), ...source.args],
+    sql: `with headers as materialized (
+        select json_extract(value, '$.track_id') as track_id, value from json_each(?)
+      ), source as materialized (
+        select source.*, row_number() over (order by source.track_id) as page_position
+        from (${source.sql}) source
+      )
+      select source.track_id, source.revision, ${columns},
+        case when source.page_position > ${limit} or ${valid} then null else source.embedding_blob end as embedding_blob,
+        case when ${valid} then lower(hex(crypto_sha256(cast(
+          json_extract(h.value, '$.header') || x'0000000000001000' || source.embedding_blob as blob
+        )))) else null end as payload_digest
+      from source left join headers h on h.track_id = source.track_id
+      order by source.track_id`,
+  };
+}
+
+async function readSonarTrackDigestRows(
+  client: Pick<Client, "execute">,
+  after: string | undefined,
+  limit: number,
+) {
+  const metadata = typedRows<Record<string, unknown>>(
+    (await client.execute(buildSonarTrackDigestMetadataStatement(after, limit))).rows,
+  );
+  if (metadata.length === 0) {
+    return metadata;
+  }
+  try {
+    return typedRows<Record<string, unknown>>(
+      (await client.execute(buildSonarTrackSqlDigestStatement(after, limit, metadata))).rows,
+    );
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("no such function: crypto_sha256")) {
+      throw error;
+    }
+    return typedRows<Record<string, unknown>>(
+      (await client.execute(buildSonarTrackDigestStatement(after, limit))).rows,
+    );
+  }
+}
+
 export function buildSonarCentroidDigestStatement(
   after: string | undefined,
   limit: number,
@@ -136,12 +213,13 @@ export async function listSonarTrackDigests(
 
   while (items.length < limit) {
     const requested = Math.min(200, limit - items.length);
-    const rows = typedRows<Record<string, unknown>>(
-      (await client.execute(buildSonarTrackDigestStatement(after, requested))).rows,
-    );
+    const rows = await readSonarTrackDigestRows(client, after, requested);
     const page = await Promise.all(
       rows.slice(0, requested).map(async (row) => ({
-        payloadDigest: (await snapshotMaterial("sonar.track", row)).payloadDigest,
+        payloadDigest:
+          typeof row.payload_digest === "string"
+            ? row.payload_digest
+            : (await snapshotMaterial("sonar.track", row)).payloadDigest,
         revision: Number(row.revision),
         subjectId: String(row.track_id),
       })),

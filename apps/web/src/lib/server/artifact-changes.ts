@@ -1523,6 +1523,43 @@ function optionalU32(value: unknown): number | null {
     : null;
 }
 
+function sonarTrackSourcePayload(row: Record<string, unknown>): Record<string, JsonValue> {
+  return {
+    anchored: row.spotify_uri !== null,
+    bpm: optionalF32(row.bpm),
+    certified: row.finding_log_id !== null,
+    dismissed: row.dismissed_at !== null,
+    durationMs: optionalU32(row.duration_ms),
+    hasFinding: row.finding_id !== null,
+    isDuplicate: row.duplicate_of_track_id !== null,
+    key: typeof row.key === "string" ? row.key : null,
+    nearestFindingScore: optionalF32(row.nearest_finding_score),
+  };
+}
+
+function snapshotDigestEnvelope(stream: ArtifactStream, subjectId: string, payloadJson: string) {
+  const contract = artifactContract(stream);
+  return {
+    formatVersion: contract.formatVersion,
+    operation: "upsert",
+    payloadJson,
+    stream,
+    streamVersion: contract.streamVersion,
+    subjectId,
+    subjectType: ARTIFACT_STREAM_REGISTRY[stream].subjectType,
+  } satisfies Record<string, JsonValue>;
+}
+
+export function sonarTrackSnapshotDigestHeader(row: Record<string, unknown>): string {
+  return canonicalArtifactJson(
+    snapshotDigestEnvelope(
+      "sonar.track",
+      String(row.track_id),
+      canonicalArtifactJson(sonarTrackSourcePayload(row)),
+    ),
+  );
+}
+
 function sonarTrackSourceProjection(row: Record<string, unknown>): {
   payload: Record<string, JsonValue>;
   payloadBlob: Uint8Array;
@@ -1538,17 +1575,7 @@ function sonarTrackSourceProjection(row: Record<string, unknown>): {
   }
 
   return {
-    payload: {
-      anchored: row.spotify_uri !== null,
-      bpm: optionalF32(row.bpm),
-      certified: row.finding_log_id !== null,
-      dismissed: row.dismissed_at !== null,
-      durationMs: optionalU32(row.duration_ms),
-      hasFinding: row.finding_id !== null,
-      isDuplicate: row.duplicate_of_track_id !== null,
-      key: typeof row.key === "string" ? row.key : null,
-      nearestFindingScore: optionalF32(row.nearest_finding_score),
-    },
+    payload: sonarTrackSourcePayload(row),
     payloadBlob,
   };
 }
@@ -1658,15 +1685,7 @@ export async function snapshotMaterial(
   }
 
   const payloadJson = canonicalArtifactJson(payload);
-  const envelope = {
-    formatVersion: contract.formatVersion,
-    operation: "upsert",
-    payloadJson,
-    stream,
-    streamVersion: contract.streamVersion,
-    subjectId,
-    subjectType: definition.subjectType,
-  } satisfies Record<string, JsonValue>;
+  const envelope = snapshotDigestEnvelope(stream, subjectId, payloadJson);
 
   return {
     cursorValues,
