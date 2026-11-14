@@ -14,12 +14,12 @@ The prompt is triggered by the **`fluncle-render.timer` host systemd timer on ra
 
 ## The per-tick behaviors (what a healthy tick does)
 
-1. **Films the queue head.** With at least one finding waiting, the run picks `tracks[0]` from `fluncle admin tracks queue --limit 1 --json` (the oldest finding with no video), does the diversity check, renders via the `fluncle-video` skill, passes `judge:metrics` (the beat-pull, flash-safety and arc/deadness hard gates), ships it, and `fluncle admin tracks video` sets the finding's `video_url` — so that finding leaves the queue.
+1. **Films the queue head.** With at least one finding waiting, the run films the conductor-assigned `FLUNCLE_RENDER_LOG_ID` (the oldest queued finding minus any poison-skipped), and reads `tracks[0]` from `fluncle admin tracks queue --limit 1 --json` only on a manual run, does the diversity check, renders via the `fluncle-video` skill, passes `judge:metrics` (the beat-pull, flash-safety and arc/deadness hard gates), ships it, and `fluncle admin tracks video` sets the finding's `video_url` — so that finding leaves the queue.
 2. **Empty-queue no-op.** With every finding already filmed (queue returns `tracks: []`), the run stops immediately: no render, no upload, no output beyond a one-line "queue empty". This is the common steady-state tick.
-3. **Double-run doesn't double-render.** Under at-least-once delivery, a second run does NOT re-render the finding the first just shipped — once `video_url` is set, that finding has left the queue. The worst acceptable case is one wasted render on a tight race (the conductor's single-flight also prevents two concurrent renders), never two published videos for one finding.
+3. **Double-run doesn't double-render.** A re-run does NOT re-render the finding the first just shipped — once `video_url` is set, that finding has left the queue. The worst acceptable case is one wasted render on a tight race (the conductor's single-flight also prevents two concurrent renders), never two published videos for one finding.
 
 ## Operating notes
 
 - **One finding per tick by design.** The hourly tick is the throttle; the prompt never films more than one finding per run. Backlogs drain one-per-hour. Raise the cadence (`START_INTERVAL` in the conductor) only if the queue grows faster than it drains.
-- **Posting stays manual.** This ships to R2 and sets `video_url`; it never posts to TikTok or any social platform. Publishing is a separate, approval-gated step (the `fluncle-publish` skill).
+- **This conductor never posts.** It ships to R2 and sets `video_url`; the render→publish auto-advance (the `fluncle-publish` skill) owns posting.
 - **Pause it** by disabling the host timer on rave-02 (`sudo systemctl disable --now fluncle-render.timer`) — there is no in-repo state to clean up, since the composition lives in the gitignored `workbench/` and nothing is committed.

@@ -1,17 +1,7 @@
 ---
 name: fluncle-catalogue-prune
 description: >-
-  Run an off-genre pruning pass on Fluncle's drum & bass catalogue — find and remove
-  non-DnB artists, tracks, and albums (reggae, pop, jazz, house/EDM…) that leaked in via
-  the catalogue crawler and got public /artist and /album pages. USE THIS whenever the task touches
-  off-genre catalogue entities: an artist page that shouldn't exist (Bob Marley, Adele on a DnB
-  site), "why is this non-DnB artist/album live", catalogue hygiene/cleanup, disabling an off-genre
-  seed label and removing its tracks, or the "original-of-remix" problem (a DnB remix billed to a
-  pop original). ALSO the artist-identity repairs the same crawl leaves behind: one row holding TWO
-  real acts, TWO duplicate rows holding ONE act ("merge these duplicate artist pages", "two pages
-  for the same artist"), a row wearing the WRONG MusicBrainz mbid, and RESTORING tracks a purge
-  should not have deleted ("undo that purge"). Operator-driven and DESTRUCTIVE on production, so
-  dry-run-first with backups and rollbacks. Triggers without the word "prune" too.
+  Remove off-genre artists, tracks and albums (non-drum & bass leaks from the catalogue crawler) from Fluncle's catalogue, and repair the artist identities the crawl breaks: one row holding two acts, duplicate rows for one act, a wrong MusicBrainz mbid, or tracks a purge should have kept. Use for catalogue hygiene, an artist or album page that should not exist, disabling an off-genre seed label, or the original-of-remix problem. Destructive on production: dry run first, with backups and rollbacks.
 ---
 
 # Fluncle catalogue off-genre pruning pass
@@ -145,9 +135,9 @@ Safe to re-run — once clean it finds nothing. `--apply` prints before/after co
 
 ### The ordered recipe
 
-**Order matters more here than anywhere else in this skill.** Repairing the frontier before the resolver fix is deployed just walks the impostor again on the next tick; purging the tracks before the frontier is repaired means the next tick re-writes them.
+**Order matters more here than anywhere else in this skill.** Repairing the frontier of a label the resolver cannot pin just walks the impostor again on the next tick; purging the tracks before the frontier is repaired means the next tick re-writes them.
 
-**0 — The code seal must be DEPLOYED first.** The resolver has to key on `labels.mb_label_id` rather than a top-scoring name match, so a re-armed seed resolves to the identity the operator's ruling refers to. Confirm the fix is live on prod before touching anything — `apps/web/src/lib/server/crawl.ts`, and `docs/catalogue-crawler.md` for the boundary gate it sits in. Everything below is a no-op-then-regression without it.
+**0 — Pin the label's identity.** The resolver keys on `labels.mb_label_id` rather than a top-scoring name match (`apps/web/src/lib/server/crawl.ts`; `docs/catalogue-crawler.md` for the boundary gate it sits in), so a re-armed seed resolves to the identity the operator's ruling refers to. A label with no `mb_label_id` still falls back to a name match: resolve its MusicBrainz identity before anything below, or every step is a no-op-then-regression.
 
 **1 — Repair the frontier.** One label at a time, dry-run first:
 
@@ -189,7 +179,7 @@ for s in <impostor-slug> <real-dnb-slug>; do
   printf '%s → ' "$s"; curl -s -o /dev/null -w '%{http_code}\n' -H 'Accept: text/html' "https://www.fluncle.com/artist/$s?cb=$RANDOM"; done
 ```
 
-Then watch the next crawl tick: the seed should resolve to `mb_label_id` and mint a MusicBrainz node whose `external_id` matches. If a namesake node goes `pending` again, the resolver fix is not actually live — stop and go back to step 0. Hub counts lag as after any purge; the nightly `reconcile_hub_counts` sweep heals them within a day.
+Then watch the next crawl tick: the seed should resolve to `mb_label_id` and mint a MusicBrainz node whose `external_id` matches. If a namesake node goes `pending` again, the label's identity is not pinned — stop and go back to step 0. Hub counts lag as after any purge; the nightly `reconcile_hub_counts` sweep heals them within a day.
 
 **When the fix is an UPSTREAM MusicBrainz split, bring the DnB half in by hand.** Splitting a conflated MusicBrainz label entity usually lands the drum & bass half on a NEW MBID — one no release in Fluncle's graph points at yet, so no walk may ever reach it. Do not wait for one: `fluncle admin labels mint <new-mbid> --seed-state enabled` puts the row in the table by its MusicBrainz identity and rules it in the same call, and the next crawl tick seeds from it with no name search at all (docs/label-entity.md § How a label gets a row). It is idempotent, so re-running it costs nothing.
 

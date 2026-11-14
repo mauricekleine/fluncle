@@ -1,7 +1,7 @@
 ---
 name: fluncle-box-restore
 description: >-
-  Rebuild or restore Fluncle's rave-02 agent box after it is lost, and prove ahead of time that it could be. USE THIS whenever the box is gone, dead, deleted, wiped, unreachable, or being replaced: "rave-02 is gone", "the box died", "rebuild the box", "restore the agent box", "the devbox is dead", "provision a replacement box", "restore the box-state backup", "the crons all stopped and the box is unreachable", "disaster recovery". USE IT EQUALLY for the preventive "could we actually restore the box if we had to?" / "drill the restore", which its read-only preflight answers in one safe command. It is the ordered runbook — create the guest → join the tailnet → bootstrap token → secret templates → host timers → image → restore box state → verify — plus the load-bearing ordering constraints. NOT for changing a live box (pins, secrets, crons): that is fluncle-hermes-operator.
+  Rebuild Fluncle's rave-02 agent box after it is lost, or drill that it could be rebuilt. Use when the box is dead, wiped, unreachable or being replaced, when restoring the box-state backup, or when asked whether a restore would work (its read-only preflight answers that). Holds the ordered runbook and its ordering constraints. Changing a live box (pins, secrets, crons) is fluncle-hermes-operator.
 ---
 
 # Fluncle box restore — putting rave-02 back
@@ -88,7 +88,7 @@ The nightly [`fluncle-backup`](../../../docs/agents/hermes/backup-timer/README.m
 - the `/status` prober's target env (the `HEALTHCHECK_*` values) — hand-placed, in no sync
 - the render box's SSH key — its only other copy is on the operator's Mac
 
-The durable fix for each is to fold it into the `op` sync as another template rather than to re-place it by hand next time; the labs doc tracks these as open operator items. Everything else the box accumulates — the cron markers, the render conductor's `box-id` and poison ledger, the prober's transition memory, the hand-placed env files — **is** in leg 2, provided the encryption key was provisioned. With no key, leg 2 skips silently and uploads nothing; `preflight.ts` fails loudly on exactly that.
+Everything else the box accumulates — the cron markers, the render conductor's `box-id` and poison ledger, the prober's transition memory, the hand-placed env files — **is** in leg 2, provided the encryption key was provisioned. With no key, leg 2 skips silently and uploads nothing; `preflight.ts` fails loudly on exactly that.
 
 The big git checkouts (audit and triage workspaces) are deliberately excluded — `git clone` restores them exactly, and including them would turn a few-MB nightly into a 5 GB one.
 

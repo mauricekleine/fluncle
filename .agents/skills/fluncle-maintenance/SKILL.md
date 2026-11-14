@@ -7,7 +7,7 @@ description: "Keep Fluncle's pinned/baked supply chain current: the version-drif
 
 Fluncle's runtime supply chain is **pinned and baked**: the rave-02 box runs a Docker image that pins an `oven/bun` base by digest plus a small toolchain (node, uv, the `fluncle` CLI, the Claude Code CLI, yt-dlp, gh, boat.dev), and CI runs GitHub Actions pinned by digest. Pins do not float — that is deliberate (a reproducible box, a layer-cache bust on every bump) — so they go stale silently. This skill is the **drift sweep** that keeps them current: read each pin, check latest, and either ship a clearly-safe bump **end-to-end** or report the drift and pull the brake. The galaxy should self-maintain — repo AND box.
 
-This file is the doctrine and the decision map. The drift surface (file:line + current pin + a "check latest" one-liner + how to bump) lives in [references/version-inventory.md](references/version-inventory.md); the merge procedure in [references/bump-procedure.md](references/bump-procedure.md); the Opus-as-gate rules in [references/safety-doctrine.md](references/safety-doctrine.md). The hands-off sweep runs hourly in `.github/workflows/hermes-pin-drift.yml`; The nightly `mk-dependency-upgrades` routine maintains GitHub Actions digests. [automation/](automation/) documents the current wiring.
+This file is the doctrine and the decision map. The drift surface (file:line + current pin + a "check latest" one-liner + how to bump) lives in [references/version-inventory.md](references/version-inventory.md); the merge procedure in [references/bump-procedure.md](references/bump-procedure.md); the judgment-gate rules in [references/safety-doctrine.md](references/safety-doctrine.md). The hands-off sweep runs hourly in `.github/workflows/hermes-pin-drift.yml`; The nightly `mk-dependency-upgrades` routine maintains GitHub Actions digests. [automation/](automation/) documents the current wiring.
 
 ## What this covers (and what it does not)
 
@@ -25,7 +25,7 @@ This file is the doctrine and the decision map. The drift surface (file:line + c
 - **The workspace dependency catalog freshness.** The repo's app/package deps live in `package.json` `workspaces.catalog` + each package's deps, governed by the `bunfig.toml` `minimumReleaseAge` (3-day) policy. Bumping those for freshness alone is a different, larger pass with its own gate — not this skill. This skill touches the **runtime pins** (the image + Actions) — and, as the one exception into the app dependency tree, **vulnerability-driven bumps** under the posture section below: when an advisory names a dependency, the triage and the fix ship through this skill's judgment, not the freshness pass.
 - **What the agent token may do, or how the box runs.** Those levers are the **`fluncle-hermes-operator`** skill (Worker role guards, secrets, host timers). This skill only keeps the _toolchain versions_ current. The `fluncle-hermes-operator` skill is the reference for the box's run/smoke mechanics that the on-box pin-watch encodes; the maintenance routine does not drive those mechanics.
 
-## The mental model: pins are deliberate, drift is silent, Opus is the gate
+## The mental model: pins are deliberate, drift is silent, your judgment is the gate
 
 Three facts shape every decision here:
 

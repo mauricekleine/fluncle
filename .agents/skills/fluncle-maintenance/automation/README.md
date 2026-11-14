@@ -22,7 +22,7 @@ That keeps the box token-free while the galaxy still self-maintains, **repo AND 
 
 ## What the deterministic sweep does NOT decide
 
-The workflow encodes only the _provably_ safe rule — a same-major bump of the `fluncle` CLI or bun, or any newer calendar-versioned yt-dlp. It deliberately does not read release notes or weigh nuance. Anything with real blast radius — a **major** (a bun major is a base-image change), an **auth-shape** change — is a **reported brake** the operator decides and ships via [references/bump-procedure.md](../references/bump-procedure.md). When a sweep genuinely needs judgment beyond semver, run the skill itself by hand: [maintenance.prompt.md](maintenance.prompt.md) is the full Opus-gated pass over the doctrine and the inventory, kept as the manual / deep path (it is not on a schedule).
+The workflow encodes only the _provably_ safe rule — a same-major bump of the `fluncle` CLI or bun, or any newer calendar-versioned yt-dlp. It deliberately does not read release notes or weigh nuance. Anything with real blast radius — a **major** (a bun major is a base-image change), an **auth-shape** change — is a **reported brake** the operator decides and ships via [references/bump-procedure.md](../references/bump-procedure.md). When a sweep genuinely needs judgment beyond semver, run the skill itself by hand: [maintenance.prompt.md](maintenance.prompt.md) is the full judgment pass over the doctrine and the inventory, kept as the manual / deep path (it is not on a schedule).
 
 ## Operating notes
 

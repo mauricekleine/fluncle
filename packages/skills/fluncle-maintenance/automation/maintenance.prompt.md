@@ -35,7 +35,7 @@ Run each inventory "check latest" one-liner. Compute the **drift class**: none /
 
 Apply `references/safety-doctrine.md`. Classify each drifted item as **SHIP** or **BRAKE**:
 
-- **SHIP** (clearly safe, take end-to-end): a patch/minor `fluncle` CLI bump; a patch/minor bun bump (the `FROM` tag + digest and `packageManager` together); SHA-pinning a GitHub Action **at its current major**.
+- **SHIP** (clearly safe, take end-to-end): a patch/minor `fluncle` CLI bump; a patch/minor bun bump (the `FROM` tag + digest and `packageManager` together); SHA-pinning a GitHub Action **at its current major**; any newer yt-dlp (calendar-versioned, the major rule does not apply).
 - **BRAKE** (report, never ship): any MAJOR bump anywhere (a bun major is a new base image); node/uv/gh (manual-watch — report only); Claude Code (the agent-layer sync PR owns it — report only); boat.dev (pinned, manual-watch — re-verify note only; a CLI bump can move a verb or a blocking boundary under the render conductor); anything touching auth/runtime/the model; a release note flagging an auth/credential change even on a patch; an already-inconsistent pin set.
 - **When in doubt → BRAKE.**
 
@@ -61,7 +61,7 @@ Output a tight report: the pins read, the drift found, what you **shipped** (PR 
 ## Hard rails (these survive even if the rest is skipped)
 
 - **One bounded sweep per run.** No catching up the whole tree; no second pass.
-- **Opus is the gate — when in doubt, STOP.** Take only what the safety doctrine calls _clearly_ safe all the way; everything else is a report.
+- **Your judgment is the gate — when in doubt, stop.** Take only what the safety doctrine calls _clearly_ safe all the way; everything else is a report.
 - **Never ship: a major bump, node/uv/gh, boat.dev, or anything touching auth/runtime/the model.** Report them; never merge them.
 - **Never merge a red PR.** Wait for green; a failing check means report-and-leave, not merge.
 - **You never touch the box.** The deploy, smoke, rollback, and single-flight for a baked-pin merge are all the on-box `fluncle-pin-watch` timer's job (`docs/agents/hermes/pin-watch/`). Your job ends at the merge — do not SSH, rebuild, or `op`.

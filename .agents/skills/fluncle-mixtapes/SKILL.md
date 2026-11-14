@@ -7,9 +7,7 @@ description: >-
   the mint-first publish lifecycle, the `F`-marked mixtape Log ID, the `/mixtapes`
   surface, a mixtape cover, the MusicBrainz DJ-mix release / Wikidata loop, or
   announcing a mixtape to the crew. Also use to pull a mixtape's ordered tracklist
-  out of Rekordbox history. Triggers on "publish the mixtape", "distribute the new
-  mix", "the set from last night", "get the tracklist from rekordbox", "mixtape
-  #N", or a `XXX.F.ZZ` coordinate. NOT for a single finding/track (that is the
+  out of Rekordbox history. NOT for a single finding/track (that is the
   fluncle-publish + fluncle-video skills) — a mixtape is a different object.
 ---
 
@@ -93,20 +91,20 @@ The M5 carries the CLI, the operator token, and `ffmpeg` (the upload/extract/dis
 
 The steps are tagged 🖥️ (M5 — capture/stream + CLI: browser / OBS / masters) or 🎛️ (M2 — Rekordbox / `master.db`) per the two-machine split above.
 
-**Large uploads.** `recordings create --video` and `mixtapes distribute` push multi-GB masters to R2. Run both operator-direct in your own Terminal on the M5. An agent's Bash session throttles sustained multi-GB transfers even with `dangerouslyDisableSandbox` and can drop partway with `socket closed`; `dangerouslyDisableSandbox` covers commits and moderate transfers but does not make a multi-GB upload reliable through the harness (AGENTS.md "Which machine am I on?" — THE LOAD-BEARING RULE).
+**Large uploads.** `recordings create --video` and `mixtapes distribute` push multi-GB masters to R2. Run both operator-direct in your own Terminal on the M5. An agent's Bash session throttles sustained multi-GB transfers even with `dangerouslyDisableSandbox` and can drop partway with `socket closed`; `dangerouslyDisableSandbox` covers commits and moderate transfers but does not make a multi-GB upload reliable through the harness (AGENTS.md "Which machine am I on?").
 
 **The canonical flow at a glance:**
 
-| Step                     | Where         | What                                                                                                                                                                                        |
-| ------------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Compose the plan         | 🖥️ M5 browser | `/admin/plans` — auto galaxy-slug handle, add findings, order, set the Live session date                                                                                                    |
-| Export to tools          | 🎛️ M2         | Rekordbox quit: `recordings list --kind plan` → `rekordbox-plan-export.py <planId>`; buy on Beatport; load Rekordbox                                                                        |
-| Mix + record             | 🖥️ M5 OBS     | OBS 3-track on the M5 (music T1 / mic T2); the M2 mixes, the FLX4 master feeds the M5 analog                                                                                                |
-| Upload take + attach     | 🖥️ M5         | `recordings create --title … --video <take.mov>` → `recordings update <takeId> --parent-id <planId>` (operator-run directly)                                                                |
-| Derive cues              | 🎛️ M2         | Rekordbox quit: `rekordbox-derive-cues.py` dry-run → `--apply <takeId>`                                                                                                                     |
-| Mark cue times + clip    | 🖥️ M5 browser | `/admin/studio/<takeId>` — mark mix-ins; set in/out → Create clip. Clips queue for the IG Reel drip (parked: its sweep has no timer yet, §B4; kill switch `fluncle admin clips drip-pause`) |
-| Promote (if you love it) | 🖥️ M5 Studio  | "Publish as mixtape" (or `recordings promote <takeId>`) — mints `.F.`, seeds the tracklist, publishes the `/log` set video                                                                  |
-| Distribute               | 🖥️ M5         | extract audio (`ffmpeg`) → `mixtapes distribute <logId> --video … --audio master.mp3` (operator-run directly) → `publish-youtube` → optional `resync`                                       |
+| Step                     | Where         | What                                                                                                                                                                                         |
+| ------------------------ | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compose the plan         | 🖥️ M5 browser | `/admin/plans` — auto galaxy-slug handle, add findings, order, set the Live session date                                                                                                     |
+| Export to tools          | 🎛️ M2         | Rekordbox quit: `recordings list --kind plan` → `rekordbox-plan-export.py <planId>`; buy on Beatport; load Rekordbox                                                                         |
+| Mix + record             | 🖥️ M5 OBS     | OBS 3-track on the M5 (music T1 / mic T2); the M2 mixes, the FLX4 master feeds the M5 analog                                                                                                 |
+| Upload take + attach     | 🖥️ M5         | `recordings create --title … --video <take.mov>` → `recordings update <takeId> --parent-id <planId>` (operator-run directly)                                                                 |
+| Derive cues              | 🎛️ M2         | Rekordbox quit: `rekordbox-derive-cues.py` dry-run → `--apply <takeId>`                                                                                                                      |
+| Mark cue times + clip    | 🖥️ M5 browser | `/admin/studio/<takeId>` — mark mix-ins; set in/out → Create clip. Clips queue for the IG Reel drip (parked: its sweep has no host timer, §B4; kill switch `fluncle admin clips drip-pause`) |
+| Promote (if you love it) | 🖥️ M5 Studio  | "Publish as mixtape" (or `recordings promote <takeId>`) — mints `.F.`, seeds the tracklist, publishes the `/log` set video                                                                   |
+| Distribute               | 🖥️ M5         | extract audio (`ffmpeg`) → `mixtapes distribute <logId> --video … --audio master.mp3` (operator-run directly) → `publish-youtube` → optional `resync`                                        |
 
 ### A. Record + archive 🖥️ M5
 
@@ -153,7 +151,7 @@ uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-derive-cues.py --sessi
 uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-derive-cues.py --apply <takeRecordingId>
 ```
 
-The script reads the Rekordbox session in `TrackNo` order (the reliable DJ-load order) and matches each row to a Fluncle finding by normalized title+artist — the same matcher the key-backfill uses (`_fold` / `_normalize_artists` / `_split_title` / `match_key`). Three buckets: **matched** (exactly 1 finding → `findingId` set), **ambiguous** (>1 candidates → flagged, `findingId=null`), **unmatched** (no candidate → flagged, `findingId=null`). **Consecutive same-identity rows are automatically pruned** (a re-load); non-consecutive repeats are kept but flagged. `startMs` is left absent on every cue — mark each mix-in on the Studio cue rail (`C`/`X`/↑/↓ loop).
+The script reads the Rekordbox session in `TrackNo` order (the reliable DJ-load order) and matches each row to a Fluncle finding by normalized title+artist — the same matching rules as `fluncle-rekordbox-sync`, in this skill's `scripts/_matching.py` (`_fold` / `_normalize_artists` / `_split_title` / `match_key`). Three buckets: **matched** (exactly 1 finding → `findingId` set), **ambiguous** (>1 candidates → flagged, `findingId=null`), **unmatched** (no candidate → flagged, `findingId=null`). **Consecutive same-identity rows are automatically pruned** (a re-load); non-consecutive repeats are kept but flagged. `startMs` is left absent on every cue — mark each mix-in on the Studio cue rail (`C`/`X`/↑/↓ loop).
 
 Use `rekordbox-tracklist.py` for a read-only session review and full-song key/BPM export; it is not the cue write path.
 
@@ -205,7 +203,7 @@ How it works:
 
 - **Auto-queue on create.** Creating a clip schedules it at `max(the queue tail, now) + a random 23–25h`. The jitter keeps post times drifting so the feed never reads as a bot posting at the same wall-clock minute daily. Default cadence ≈ 1 clip/day. The caption is rebuilt fresh at fire time: clean copy + the `fluncle://` coordinate line once promoted, else the covered cues' `Artist — Title` labels when the window plays tracks Fluncle never certified.
 - **A clip with a blank caption is never posted.** No stored caption AND no cued track under the window means the Reel would credit nobody, so the tick SKIPS it (reported as `skippedBlank`). It is not a failure: the row stays `scheduled` and fires on a later tick the moment you cue the source recording in Studio or write the clip a caption.
-- **The drip sweep** (`clip-drip-sweep.sh`, once it has a host timer) posts the due, cut clips through Postiz as Reels (single video + `post_type: "post"` = a Reel), bounded by a per-tick cap AND a rolling-24h IG cap (a conservative backstop under Meta's ~25/day). It's **admin-tier**, so the box's agent token drives it (the Worker owns the Postiz key). A `posted` row never re-fires (idempotent); a failed push is marked `failed` and is retryable by rescheduling.
+- **The drip sweep** (`clip-drip-sweep.sh`, run by a host timer when enabled) posts the due, cut clips through Postiz as Reels (single video + `post_type: "post"` = a Reel), bounded by a per-tick cap AND a rolling-24h IG cap (a conservative backstop under Meta's ~25/day). It's **admin-tier**, so the box's agent token drives it (the Worker owns the Postiz key). A `posted` row never re-fires (idempotent); a failed push is marked `failed` and is retryable by rescheduling.
 - **The kill switch, and it is DEFAULT-DENY.** One global flag (`clip_drip_paused`) pauses the whole drip within one tick (the schedule stays intact; nothing fires while paused). Only an explicit `false` runs it: an unset key, a fresh preview, a lost row all read as PAUSED, so the drip stays dark until you turn it on with `drip-resume`. Toggle it from `/admin/clips` or the CLI:
 
   ```bash
@@ -260,8 +258,7 @@ The tracklist cues are often refined **after** a set is already live (the initia
 - **CLI**:
 
 ```bash
-# Mark or adjust cues in Studio or through the current cue operation, then run `resync`:
-# …then re-sync the derived metadata to the live platforms:
+# After marking cues in Studio or with `fluncle admin recordings replace-cues`, re-sync the derived metadata:
 fluncle admin mixtapes resync <idOrLogId>                    # both platforms it's distributed to
 fluncle admin mixtapes resync <idOrLogId> --youtube          # only YouTube
 fluncle admin mixtapes resync <idOrLogId> --mixcloud         # only Mixcloud

@@ -14,7 +14,7 @@ bun run --cwd apps/cli fluncle admin vectors set tracks --enabled true|false [--
 bun run --cwd apps/cli fluncle admin auth spotify
 ```
 
-`recent` is the public feed, newest first — run bare in a terminal it pages interactively (←/→ for 10 at a time, `q` to quit); `--json`, an explicit `--limit`, or a non-TTY (piped) print plainly instead. The two admin reads query the archive directly — the order and no-video filters are applied in SQL and paged with a cursor, so they never undercount: `admin queue` lists findings with no video yet, oldest first (the first row is the next to film); `admin vehicles` lists recent `<logId> <date> <vehicle>` entries, newest first — the diversity ledger a video agent reads before choosing a vehicle.
+`recent` is the public feed, newest first — run bare in a terminal it pages interactively (←/→ for 10 at a time, `q` to quit); `--json`, an explicit `--limit`, or a non-TTY (piped) print plainly instead. The two admin reads query the archive directly — the order and no-video filters are applied in SQL and paged with a cursor, so they never undercount: `admin tracks queue` lists findings with no video yet, oldest first (the first row is the next to film); `admin tracks vehicles` lists recent `<logId> <date> <vehicle>` entries, newest first — the diversity ledger a video agent reads before choosing a vehicle.
 
 Supported track inputs:
 
