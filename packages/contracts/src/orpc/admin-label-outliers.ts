@@ -5,6 +5,8 @@ export const MAX_RECORDED_LABEL_OUTLIERS = 2000;
 
 export const MAX_LABEL_OUTLIER_DISMISSALS = 500;
 
+export const LABEL_OUTLIER_TIMESTAMP_MAX = 64;
+
 const LabelOutlierReferenceSchema = z.enum(["catalogue", "label"]);
 
 export const RecordedLabelOutlierSchema = z
@@ -62,7 +64,7 @@ export const recordLabelOutliers = oc
     z.object({
       labelsScored: z.number().int().min(0),
       outliers: z.array(RecordedLabelOutlierSchema).max(MAX_RECORDED_LABEL_OUTLIERS),
-      replicaSyncedAt: z.string().nullable(),
+      replicaSyncedAt: z.string().max(LABEL_OUTLIER_TIMESTAMP_MAX).nullable(),
       totalFlagged: z.number().int().min(0),
       tracksScored: z.number().int().min(0),
       unitsScored: z.number().int().min(0),

@@ -30,20 +30,26 @@ const CostUnitType = z.enum(["tokens", "characters", "seconds", "requests", "ema
 const CostBasis = z.enum(["cash", "subsidized"]);
 const CostSource = z.enum(["measured", "estimated"]);
 
+export const COST_EVENT_LOG_ID_MAX = 64;
+export const COST_EVENT_TRACK_ID_MAX = 256;
+export const COST_EVENT_MODEL_MAX = 256;
+export const COST_EVENT_TIMESTAMP_MAX = 64;
+export const COST_EVENT_ID_MAX = 1024;
+
 export const CostEventInputSchema = z
   .object({
     costBasis: CostBasis,
 
-    id: z.string().min(1),
-    logId: z.string().nullish(),
+    id: z.string().min(1).max(COST_EVENT_ID_MAX),
+    logId: z.string().max(COST_EVENT_LOG_ID_MAX).nullish(),
 
-    model: z.string().nullish(),
-    occurredAt: z.string().min(1),
+    model: z.string().max(COST_EVENT_MODEL_MAX).nullish(),
+    occurredAt: z.string().min(1).max(COST_EVENT_TIMESTAMP_MAX),
     quantity: z.number(),
 
     source: CostSource,
     step: CostStep,
-    trackId: z.string().nullish(),
+    trackId: z.string().max(COST_EVENT_TRACK_ID_MAX).nullish(),
     unitType: CostUnitType,
 
     usd: z.number().nullish(),
