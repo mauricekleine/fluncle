@@ -85,6 +85,10 @@ function fakeVirtualClock(startMs: number): string {
   const clock = join(directory, "virtual-clock");
   writeFileSync(clock, `${startMs}\n`);
   fakeExecutable(
+    "advance-virtual-clock",
+    `exec perl -MFcntl=:flock -e 'my ($file, $seconds) = @ARGV; open(my $lock, ">>", "$file.lock") or die; flock($lock, LOCK_EX) or die; open(my $in, "<", $file) or die; my $now = <$in>; close $in; chomp $now; my $next = $now + int($seconds * 1000 + 0.5); open(my $out, ">", "$file.$$") or die; print $out "$next\\n"; close $out; rename("$file.$$", $file) or die; print "$next\\n"' "$@"`,
+  );
+  fakeExecutable(
     "date",
     `case "$*" in
   "+%s%3N") printf '%s' "$(sed -n '1p' "${clock}")" ;;
@@ -101,10 +105,7 @@ function setVirtualClock(clock: string, atMs: number): string {
 }
 
 function advancingVirtualSleep(clock: string): void {
-  fakeExecutable(
-    "sleep",
-    `perl -e 'my ($file, $seconds) = @ARGV; open(my $in, "<", $file) or die; my $now = <$in>; close $in; chomp $now; open(my $out, ">", "$file.$$") or die; printf $out "%d\\n", $now + $seconds * 1000; close $out; rename("$file.$$", $file) or die' "${clock}" "$1"`,
-  );
+  fakeExecutable("sleep", `advance-virtual-clock "${clock}" "$1" > /dev/null`);
 }
 
 async function run(
@@ -395,9 +396,7 @@ function queuedAcquireOnVirtualClock(response: string, releases: ScheduledReleas
     `if [ ! -e "${acquiring}" ]; then
   exec "${REAL_SLEEP}" "$@"
 fi
-now="$(( $(sed -n '1p' "${clock}") + $(perl -e 'printf "%d", $ARGV[0] * 1000 + 0.5' "$1") ))"
-printf '%s\\n' "$now" > "${clock}.$$"
-mv -f "${clock}.$$" "${clock}"
+now="$(advance-virtual-clock "${clock}" "$1")"
 while read -r at lane content; do
   [ "$at" -le "$now" ] && [ ! -e "${schedule}.$at.$lane" ] || continue
   : > "${schedule}.$at.$lane"
@@ -1830,7 +1829,7 @@ describe("database admission stall behaviour", () => {
       fakeExecutable(
         "sleep",
         `printf '%s\\n' "$1" >> "${sleepLog}"
-perl -e 'my ($file, $seconds) = @ARGV; open(my $in, "<", $file) or die; my $now = <$in>; close $in; chomp $now; open(my $out, ">", "$file.$$") or die; printf $out "%d\\n", $now + $seconds * 1000; close $out; rename("$file.$$", $file) or die' "${clock}" "$1"`,
+advance-virtual-clock "${clock}" "$1" > /dev/null`,
       );
       fakeCurl("exit 28");
       const result = await run(["bash", "-c", "exit 0"], {
@@ -2205,25 +2204,30 @@ esac`);
     "rides out a five-minute coordinator stall without a retry storm, a killed payload, or a ghost lease",
     { timeout: 150_000 },
     async () => {
-      const scale = 20;
-      const epochMs = Date.now();
       const virtualStartMs = 1_000_000;
       const stallFromMs = virtualStartMs + 60_000;
       const stallUntilMs = virtualStartMs + 360_000;
+      const clock = fakeVirtualClock(virtualStartMs);
       const holder = join(directory, "lane-holder");
+      const arrivals = join(directory, "arrivals");
+      const newcomers = join(directory, "newcomers");
       writeFileSync(holder, "");
-      fakeExecutable(
-        "date",
-        `case "$*" in
-  "+%s%3N") perl -MTime::HiRes=time -e 'printf "%.0f", ${virtualStartMs} + (time() * 1000 - ${epochMs}) * ${scale}' ;;
-  "-u +%Y%m%dT%H%M%SZ") printf '20260908T000000Z' ;;
-  "+%s") printf '1' ;;
-  *) exit 1 ;;
-esac`,
+      writeFileSync(
+        arrivals,
+        [80_000, 140_000, 200_000, 260_000].map((at) => `${virtualStartMs + at}\n`).join(""),
       );
+      mkdirSync(newcomers);
       fakeExecutable(
         "sleep",
-        `perl -MTime::HiRes=sleep -e 'my $real = $ARGV[0] / ${scale}; sleep($real < 0.02 ? 0.02 : $real)' "$1"`,
+        `if [ "$1" = 0.1 ]; then exec "${REAL_SLEEP}" 0.02; fi
+now="$(advance-virtual-clock "${clock}" "$1")"
+[ -z "\${STALL_TEST_NEWCOMER:-}" ] || exit 0
+while read -r at; do
+  [ "$at" -le "$now" ] && mkdir "${newcomers}/$at" 2>/dev/null || continue
+  STALL_TEST_NEWCOMER=1 bash "${RUNNER}" fluncle-enrich -- bash -c 'exit 0' \\
+    > "${newcomers}/$at/stdout" 2> "${newcomers}/$at/stderr"
+  printf '%s' "$?" > "${newcomers}/$at/status"
+done < "${arrivals}"`,
       );
       fakeExecutable(
         "curl",
@@ -2240,7 +2244,7 @@ for argument in "$@"; do
 done
 printf '%s %s\\n' "$now" "$body" >> "${curlLog}"
 if [ "$now" -ge ${stallFromMs} ] && [ "$now" -lt ${stallUntilMs} ]; then
-  perl -MTime::HiRes=sleep -e 'sleep($ARGV[0] / ${scale})' "$request_timeout"
+  sleep "$request_timeout"
   exit 28
 fi
 run_id="$(printf '%s' "$body" | sed -n 's/.*"runId":"\\([^"]*\\)".*/\\1/p')"
@@ -2271,41 +2275,31 @@ esac`,
         failClosed: true,
         maxWaitSecs: 120,
       };
-      const atVirtual = (virtualMs: number) =>
-        new Promise((resolvePromise) =>
-          setTimeout(resolvePromise, Math.max(0, epochMs + virtualMs / scale - Date.now())),
-        );
       const holderMarker = join(directory, "holder-finished");
       const latecomerMarker = join(directory, "latecomer-finished");
 
-      const running = run(
-        ["bash", "-c", `sleep 400; printf done > "${holderMarker}"`],
+      const holderResult = await run(
+        [
+          "bash",
+          "-c",
+          `until [ "$(date +%s%3N)" -ge ${virtualStartMs + 400_000} ]; do "${REAL_SLEEP}" 0.02; done; printf done > "${holderMarker}"`,
+        ],
         stallOptions,
-        60_000,
+        120_000,
       );
-      const newcomers: ReturnType<typeof run>[] = [];
-      for (const arrival of [80_000, 140_000, 200_000, 260_000]) {
-        await atVirtual(arrival);
-        newcomers.push(run(["bash", "-c", "exit 0"], stallOptions, 60_000));
-      }
-      const holderResult = await running;
-      const newcomerResults = await Promise.all(newcomers);
-      await atVirtual(560_000);
-      const latecomer = await run(
-        ["bash", "-c", `printf done > "${latecomerMarker}"`],
-        stallOptions,
-        60_000,
-      );
-
       expect(holderResult.status, holderResult.stderr).toBe(0);
       expect(existsSync(holderMarker), holderResult.stderr).toBe(true);
       expect(holderResult.stderr).toContain('"outcome":"heartbeat-retry"');
       expect(holderResult.stderr).toContain('"outcome":"released"');
       expect(holderResult.stderr).not.toContain('"outcome":"fenced"');
+      expect(readFileSync(holder, "utf8"), "the holder left a ghost lease").toBe("");
 
-      for (const newcomer of newcomerResults) {
-        expect(newcomer.status).toBe(0);
-        expect(newcomer.stderr).toMatch(/"outcome":"breaker-open"/);
+      const newcomerRuns = readdirSync(newcomers).sort();
+      expect(newcomerRuns).toHaveLength(4);
+      for (const arrival of newcomerRuns) {
+        const stderr = readFileSync(join(newcomers, arrival, "stderr"), "utf8");
+        expect(readFileSync(join(newcomers, arrival, "status"), "utf8"), stderr).toBe("0");
+        expect(stderr).toMatch(/"outcome":"breaker-open"/);
       }
 
       const calls = readFileSync(curlLog, "utf8").trim().split("\n");
@@ -2314,6 +2308,14 @@ esac`,
         return at >= stallFromMs && at < stallUntilMs && call.includes('"action":"acquire"');
       });
       expect(stalledAcquires.length).toBeLessThanOrEqual(10);
+
+      const virtualAfterHolderMs = Number(readFileSync(clock, "utf8").trim());
+      writeFileSync(clock, `${Math.max(virtualAfterHolderMs, virtualStartMs + 560_000)}\n`);
+      const latecomer = await run(
+        ["bash", "-c", `printf done > "${latecomerMarker}"`],
+        { ...stallOptions, maxWaitSecs: 10 },
+        60_000,
+      );
 
       expect(latecomer.status, latecomer.stderr).toBe(0);
       expect(existsSync(latecomerMarker)).toBe(true);
