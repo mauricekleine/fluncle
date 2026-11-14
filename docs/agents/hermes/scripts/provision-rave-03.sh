@@ -55,7 +55,7 @@ if [ -n "\$want" ] && [ "\$want" != "\$(bun --version)" ]; then
   fi
 fi
 bun install --frozen-lockfile </dev/null >/dev/null
-bunx skills add ./packages/skills/fluncle-video -y -a claude-code </dev/null >/dev/null
+bunx skills@latest add ./packages/skills/fluncle-video -y -a claude-code </dev/null >/dev/null
 # Native, self-updating claude into ~/.local/bin (shadows the un-updatable global base
 # claude; render-detached.sh's PATH puts ~/.local/bin first). set -e aborts provisioning
 # on failure — a box without a current claude cannot render, so fail loud and reprovision.

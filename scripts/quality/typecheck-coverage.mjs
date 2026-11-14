@@ -10,10 +10,6 @@ const EXCLUSIONS = [
     reason: "Pinned upstream plugin source, maintained byte-for-byte with its vendor revision.",
   },
   {
-    prefix: ".agents/skills/remotion-best-practices/rules/assets/",
-    reason: "Vendored documentation examples, never built, imported, or executed by Fluncle.",
-  },
-  {
     path: ".deepsec/deepsec.config.ts",
     reason:
       "Scanner configuration for the standalone pnpm project; its dependencies stay outside the root install.",

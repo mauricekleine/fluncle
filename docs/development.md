@@ -78,4 +78,4 @@ cd packages/ui && bunx --bun shadcn@latest add dialog
 - Applies to skills created via `/skill-creator`, `Skill Creator`, or `$skill-creator`
 - MUST: Put new skills in `packages/skills`
 - MUST: Verify skills with `UV_CACHE_DIR=/tmp/uv-cache uv run --with pyyaml python "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py" packages/skills/<skill-path>`
-- MUST: After editing a local skill, re-add it with `npx skills add ./packages/skills/NAME --skill NAME --agent claude-code codex opencode --yes`, then commit the source, installed `.agents/skills/NAME` copy, `skills-lock.json`, and relative `.claude/skills/NAME` link. Project skill drift detection is managed centrally.
+- MUST: After editing a local skill, re-add it with `bunx skills@latest add ./packages/skills/NAME --skill NAME --agent claude-code codex opencode --yes`, then commit the source, installed `.agents/skills/NAME` copy, `skills-lock.json`, and relative `.claude/skills/NAME` link. Project skill drift detection is managed centrally.

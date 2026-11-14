@@ -348,7 +348,7 @@ RUN chmod -R a+rX /etc/claude-code
 # session/state files under the config dir at run — the non-root cron user must be able
 # to create them without owning /opt/claude; the skill files themselves stay root-owned
 # + read-only. COPY needs the repo root as the build context (see the header).
-# Refresh the committed snapshot with npx skills before rebuilding the image.
+# Refresh the committed snapshot with `bunx skills@latest` before rebuilding the image.
 ENV CLAUDE_CONFIG_DIR=/opt/claude
 COPY .agents/skills /opt/claude/skills
 RUN chmod -R a+rX /opt/claude/skills \

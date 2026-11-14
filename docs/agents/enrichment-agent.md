@@ -19,7 +19,7 @@ It does **not** need a checkout of this repo. The enrichment skill is self-conta
 **The full operating instructions are the `fluncle-track-enrichment` skill, not this doc.** Read it and follow it step by step:
 
 - `packages/skills/fluncle-track-enrichment/SKILL.md` — the get → analyze → archive → update loop, the rules (key honesty, never invent data), and its self-contained `scripts/analyze-track.ts`.
-- Install standalone (e.g. on the Hermes box): `npx skills add https://github.com/mauricekleine/fluncle/tree/main/packages/skills/fluncle-track-enrichment`. The analysis script has zero npm dependencies and no Fluncle imports, so it runs wherever the skill is installed.
+- Install standalone (e.g. on the Hermes box): `bunx skills@latest add https://github.com/mauricekleine/fluncle/tree/main/packages/skills/fluncle-track-enrichment`. The analysis script has zero npm dependencies and no Fluncle imports, so it runs wherever the skill is installed.
 - `docs/track-lifecycle.md` is the canonical architecture (sync add vs async enrich, the Worker/ffmpeg constraint, the feature vector, R2 ownership).
 
 ## Preview archive (private analysis only)
