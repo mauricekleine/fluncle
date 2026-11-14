@@ -97,13 +97,13 @@ esac`,
 }
 
 function setVirtualClock(clock: string, atMs: number): string {
-  return `printf '%s\\n' ${atMs} > "${clock}"`;
+  return `printf '%s\\n' ${atMs} > "${clock}.$$" && mv -f "${clock}.$$" "${clock}"`;
 }
 
 function advancingVirtualSleep(clock: string): void {
   fakeExecutable(
     "sleep",
-    `perl -e 'my ($file, $seconds) = @ARGV; open(my $in, "<", $file) or die; my $now = <$in>; close $in; chomp $now; open(my $out, ">", $file) or die; printf $out "%d\\n", $now + $seconds * 1000; close $out' "${clock}" "$1"`,
+    `perl -e 'my ($file, $seconds) = @ARGV; open(my $in, "<", $file) or die; my $now = <$in>; close $in; chomp $now; open(my $out, ">", "$file.$$") or die; printf $out "%d\\n", $now + $seconds * 1000; close $out; rename("$file.$$", $file) or die' "${clock}" "$1"`,
   );
 }
 
@@ -396,7 +396,8 @@ function queuedAcquireOnVirtualClock(response: string, releases: ScheduledReleas
   exec "${REAL_SLEEP}" "$@"
 fi
 now="$(( $(sed -n '1p' "${clock}") + $(perl -e 'printf "%d", $ARGV[0] * 1000 + 0.5' "$1") ))"
-printf '%s\\n' "$now" > "${clock}"
+printf '%s\\n' "$now" > "${clock}.$$"
+mv -f "${clock}.$$" "${clock}"
 while read -r at lane content; do
   [ "$at" -le "$now" ] && [ ! -e "${schedule}.$at.$lane" ] || continue
   : > "${schedule}.$at.$lane"
@@ -1829,7 +1830,7 @@ describe("database admission stall behaviour", () => {
       fakeExecutable(
         "sleep",
         `printf '%s\\n' "$1" >> "${sleepLog}"
-perl -e 'my ($file, $seconds) = @ARGV; open(my $in, "<", $file) or die; my $now = <$in>; close $in; chomp $now; open(my $out, ">", $file) or die; printf $out "%d\\n", $now + $seconds * 1000; close $out' "${clock}" "$1"`,
+perl -e 'my ($file, $seconds) = @ARGV; open(my $in, "<", $file) or die; my $now = <$in>; close $in; chomp $now; open(my $out, ">", "$file.$$") or die; printf $out "%d\\n", $now + $seconds * 1000; close $out; rename("$file.$$", $file) or die' "${clock}" "$1"`,
       );
       fakeCurl("exit 28");
       const result = await run(["bash", "-c", "exit 0"], {
