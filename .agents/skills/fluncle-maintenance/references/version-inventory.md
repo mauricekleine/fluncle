@@ -154,7 +154,7 @@ Every action stays pinned to an immutable commit. The nightly `mk-dependency-upg
 - **Current pin:** `grep -o 'cli/cli/releases/download/v[0-9.]*' docs/agents/hermes/Dockerfile`.
 - **Check latest:** `curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | jq -r .tag_name`.
 - **Action on a sweep:** report drift; bump by hand (the version appears several times in the block — move every occurrence). pin-watch's pre-smoke runs `gh --version` after any rebuild.
-- **Safety:** low-churn and backward-compatible, with the nightly Security audit as the staleness backstop; a major = **brake**.
+- **Safety:** low-churn and backward-compatible; a major = **brake**.
 
 ---
 

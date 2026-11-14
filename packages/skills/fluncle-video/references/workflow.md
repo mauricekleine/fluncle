@@ -94,7 +94,7 @@ Format with `bun run format <files>`.
 
 ## 7. Render
 
-`bun run social:preview <trackId> --composition <CompId>` and **wait for the encode to finish** — renders take minutes and the MP4 is invalid until the process exits. (`<CompId>` is your `workbench/<CompId>.tsx` filename; the source resolves from it.) The render writes `out/<trackId>.mp4` and `out/<trackId>.render.json`. Confirm with `ffprobe`: 1080×1920, h264, aac audio, 15–30s.
+`bun run social:preview <trackId> --composition <CompId>` and **wait for the encode to finish** — renders take minutes and the MP4 is invalid until the process exits. (`<CompId>` is your `workbench/<CompId>.tsx` filename; the source resolves from it.) The render writes `out/<trackId>.mp4` and `out/<trackId>.render.json`. Confirm with `ffprobe`: 1080×1920, h264, aac audio, 10–30s.
 
 **The metrics gate (MANDATORY — do not skip, do not ship past a fail).** Your eyes at step 5 are the first line, but three defects are temporal artifacts a scrub can miss — beat-pull, a photosensitivity-unsafe strobe, and a dead/frozen arc — so all three are gated objectively in ONE run:
 
@@ -141,7 +141,7 @@ Once the render passes its gates and the taste pass, package the bundle and link
    The track MUST have a Log ID (no Log ID → no ship; backfill the ISRC first). Requires an existing render (`out/<trackId>.mp4`) — run step 7 first. Ship refuses before it writes the bundle unless `out/<trackId>.metrics.json` measured that render and passed, and unless the poster it cuts clears the palette gate (`judge:palette`: distinct from the last three published posters; a first render passes). The refusal names the gate and the command to run.
 
 2. **Upload + link** — `fluncle admin tracks video <log-id> --dir packages/video/out/<log-id>` uploads the bundle to R2 under `<log-id>/` (served at `found.fluncle.com`) and sets the track's `video_url` to the review cut. The Worker owns R2; you never hold R2 credentials.
-3. **Post (manual)** — the publish step pushes `footage.social.mp4` (TikTok gets it silenced via an `audio=false` MT); the operator attaches the official sound in-app, pastes `note.txt`, and posts. See the `fluncle-publish` skill.
+3. **Post** — the `fluncle-publish` auto-advance (or an operator push) takes it from here: it pushes `footage.social.mp4` (TikTok gets it silenced via an `audio=false` MT); the operator attaches the official sound in-app, pastes `note.txt`, and posts. See the `fluncle-publish` skill.
 
 **Ship-time reliability.** The upload moves ~100 MB and drops the socket roughly a third of the time even with sandboxing off — retry the `fluncle admin tracks video` step 2–3× with ~45s cooldowns, and know the failure can be sticky within one agent session (a fresh session, or the operator's own terminal, clears it). When a complete `out/<log-id>/` bundle already exists, re-ship it as-is — never re-render just to retry an upload. On a re-render, mind the square-master cache: ship caches the square at `out/<trackId>.square.mp4` with a `.square.mp4.hash` fingerprint sidecar and re-renders it when the portrait's inputs shift, but a square WITHOUT a sidecar (a direct `social-preview --aspect square`, or one predating the cache) is trusted as-is — delete it before re-shipping a changed portrait, or the two masters ship diverged.
 
@@ -162,13 +162,13 @@ Output:
 - the still paths you reviewed;
 - if shipped: the `<log-id>/` bundle and the linked `video_url`.
 
-The operator reviews the MP4, runs the ship step, and posts; you never auto-publish to any platform.
+The operator reviews the MP4, and runs the ship step; posting belongs to the `fluncle-publish` auto-advance, never to this workflow.
 
 ## Safety rails (also in SKILL.md; they survive even if the rest is skipped)
 
-- One video per run. The render is local; the only thing that leaves the machine is the operator-run ship step (the bundle → R2 via the admin endpoint, linked as `video_url`). No auto-publish to TikTok or any social platform — that stays manual.
+- One video per run. The render is local; the only thing that leaves the machine is the operator-run ship step (the bundle → R2 via the admin endpoint, linked as `video_url`). Never post from here; posting belongs to the `fluncle-publish` auto-advance.
 - Preview audio comes only from the pipeline's resolver (Deezer/iTunes). Never source audio from YouTube or rip full tracks. Both shipped masters carry audio; TikTok's silent cut is derived on the fly by an `audio=false` Media Transformation, never a stored audio-less file.
 - The constants are not yours to restyle: if your concept fights the grammar, change the concept.
-- Never ship past a `judge:metrics` hard fail — beat-pull or flash-unsafe. The flash gate is a photosensitivity safety rail, not a style call; `--allow-flash` is never used on a ship candidate.
+- Never ship past a `judge:metrics` hard fail: beat-pull, flash-unsafe, or arc/deadness. The flash gate is a photosensitivity safety rail, not a style call; `--allow-flash` is never used on a ship candidate.
 - Every word on screen and in the caption passes VOICE.md; every fact on screen has a source; the track metadata needs none.
 - Do not commit, push, or delete anything; your artifacts are the MP4 bundle, the linked `video_url`, and your report.

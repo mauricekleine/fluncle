@@ -7,9 +7,7 @@ description: >-
   the mint-first publish lifecycle, the `F`-marked mixtape Log ID, the `/mixtapes`
   surface, a mixtape cover, the MusicBrainz DJ-mix release / Wikidata loop, or
   announcing a mixtape to the crew. Also use to pull a mixtape's ordered tracklist
-  out of Rekordbox history. Triggers on "publish the mixtape", "distribute the new
-  mix", "the set from last night", "get the tracklist from rekordbox", "mixtape
-  #N", or a `XXX.F.ZZ` coordinate. NOT for a single finding/track (that is the
+  out of Rekordbox history. NOT for a single finding/track (that is the
   fluncle-publish + fluncle-video skills) — a mixtape is a different object.
 ---
 
@@ -93,7 +91,7 @@ The M5 carries the CLI, the operator token, and `ffmpeg` (the upload/extract/dis
 
 The steps are tagged 🖥️ (M5 — capture/stream + CLI: browser / OBS / masters) or 🎛️ (M2 — Rekordbox / `master.db`) per the two-machine split above.
 
-**Large uploads.** `recordings create --video` and `mixtapes distribute` push multi-GB masters to R2. Run both operator-direct in your own Terminal on the M5. An agent's Bash session throttles sustained multi-GB transfers even with `dangerouslyDisableSandbox` and can drop partway with `socket closed`; `dangerouslyDisableSandbox` covers commits and moderate transfers but does not make a multi-GB upload reliable through the harness (AGENTS.md "Which machine am I on?" — THE LOAD-BEARING RULE).
+**Large uploads.** `recordings create --video` and `mixtapes distribute` push multi-GB masters to R2. Run both operator-direct in your own Terminal on the M5. An agent's Bash session throttles sustained multi-GB transfers even with `dangerouslyDisableSandbox` and can drop partway with `socket closed`; `dangerouslyDisableSandbox` covers commits and moderate transfers but does not make a multi-GB upload reliable through the harness (AGENTS.md "Which machine am I on?").
 
 **The canonical flow at a glance:**
 
@@ -153,7 +151,7 @@ uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-derive-cues.py --sessi
 uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-derive-cues.py --apply <takeRecordingId>
 ```
 
-The script reads the Rekordbox session in `TrackNo` order (the reliable DJ-load order) and matches each row to a Fluncle finding by normalized title+artist — the same matcher the key-backfill uses (`_fold` / `_normalize_artists` / `_split_title` / `match_key`). Three buckets: **matched** (exactly 1 finding → `findingId` set), **ambiguous** (>1 candidates → flagged, `findingId=null`), **unmatched** (no candidate → flagged, `findingId=null`). **Consecutive same-identity rows are automatically pruned** (a re-load); non-consecutive repeats are kept but flagged. `startMs` is left absent on every cue — mark each mix-in on the Studio cue rail (`C`/`X`/↑/↓ loop).
+The script reads the Rekordbox session in `TrackNo` order (the reliable DJ-load order) and matches each row to a Fluncle finding by normalized title+artist — the same matching rules as `fluncle-rekordbox-sync`, in this skill's `scripts/_matching.py` (`_fold` / `_normalize_artists` / `_split_title` / `match_key`). Three buckets: **matched** (exactly 1 finding → `findingId` set), **ambiguous** (>1 candidates → flagged, `findingId=null`), **unmatched** (no candidate → flagged, `findingId=null`). **Consecutive same-identity rows are automatically pruned** (a re-load); non-consecutive repeats are kept but flagged. `startMs` is left absent on every cue — mark each mix-in on the Studio cue rail (`C`/`X`/↑/↓ loop).
 
 Use `rekordbox-tracklist.py` for a read-only session review and full-song key/BPM export; it is not the cue write path.
 
@@ -260,8 +258,7 @@ The tracklist cues are often refined **after** a set is already live (the initia
 - **CLI**:
 
 ```bash
-# Mark or adjust cues in Studio or through the current cue operation, then run `resync`:
-# …then re-sync the derived metadata to the live platforms:
+# After marking cues in Studio or with `fluncle admin recordings replace-cues`, re-sync the derived metadata:
 fluncle admin mixtapes resync <idOrLogId>                    # both platforms it's distributed to
 fluncle admin mixtapes resync <idOrLogId> --youtube          # only YouTube
 fluncle admin mixtapes resync <idOrLogId> --mixcloud         # only Mixcloud

@@ -1,6 +1,6 @@
 ---
 name: fluncle-surfaces
-description: "Add, change, or audit a Fluncle SURFACE — any place Fluncle is reachable (a web route, subdomain, /api/v1 endpoint, feed, discovery/well-known map, the DNS zone, the SSH rave terminal, the MCP server, a fluncle CLI command, or an on-box Hermes cron). Use when wiring up a NEW surface: register it in @fluncle/registry plus everywhere it fans out (the /status probe, the homepage dev-row/nav, the SSH menu, llms.txt, the sitemap, the surfaces-doctrine doc, the naming-conventions registry); or when changing a surface's per-context display weight (web/ssh/cli/status), probeConfig, or exposedContent. Trigger on 'add a surface', 'register a new endpoint/route/feed/subdomain/CLI command/cron', the registry, @fluncle/registry, SURFACES, SurfaceWeight, the per-context weight matrix, surfacesForContext, the dev-row, or the surfaces doctrine. The agent how-to; docs/surfaces-doctrine.md is the human map. NOT for changing what a route DOES internally — this REGISTERS and ADVERTISES a surface so no consumer is forgotten."
+description: "Add, change, or audit a Fluncle SURFACE — any place Fluncle is reachable (a web route, subdomain, /api/v1 endpoint, feed, discovery/well-known map, the DNS zone, the SSH rave terminal, the MCP server, a fluncle CLI command, or an on-box Hermes cron). Use when wiring up a NEW surface: register it in @fluncle/registry plus everywhere it fans out (the /status probe, the homepage dev-row/nav, the SSH menu, llms.txt, the sitemap, the surfaces-doctrine doc, the naming-conventions registry); or when changing a surface's per-context display weight (web/ssh/cli/status), probeConfig, or exposedContent. The agent how-to; docs/surfaces-doctrine.md is the human map. NOT for changing what a route DOES internally — this REGISTERS and ADVERTISES a surface so no consumer is forgotten."
 ---
 
 # Fluncle surfaces — the add-a-surface runbook
@@ -56,7 +56,7 @@ Keep object keys **alphabetically sorted** (the `sort-keys` lint rule enforces i
 
 When you add or change a surface, these are everywhere it shows up. The selectors live in `packages/registry/src/index.ts`:
 
-- **`liveSurfaces()`** — the catalog minus `pending` (pre-staged, dark) surfaces. Every other selector reads through it, so a `pending` surface reaches no consumer (see step 4 of the runbook). A raw-catalog consumer should iterate this, not `SURFACES`.
+- **`liveSurfaces()`** — the catalog minus `pending` (pre-staged, dark) and `dormant` (parked) surfaces. Every other selector reads through it, so a `pending` surface reaches no consumer (see step 4 of the runbook). A raw-catalog consumer should iterate this, not `SURFACES`.
 - **`surfacesForContext(ctx)`** — surfaces displayed in `ctx`, sorted loudest-first. The per-context menu/nav builder.
 - **`surfacesByWeight(ctx, weight)`** — one tier within a context.
 - **`surfacesByKind(kind)`**, **`statusProbes()`** (probeConfig-bearing, type-narrowed), **`cronSurfaces()`**.

@@ -18,7 +18,7 @@ fluncle admin tracks video <log-id> --dir packages/video/out/<log-id>
 
 ## The one invariant that makes re-runs safe
 
-Claude Code delivery is **at-least-once** — this prompt may fire more than once for the same tick, or overlap a slow run. Do **not** add your own locks or state. Safety comes from the queue itself: `fluncle admin tracks queue` returns only findings whose `video_url` is unset, oldest first. The moment a finding is shipped, `fluncle admin tracks video` sets its `video_url`, so it **leaves the queue** and the next run cannot pick it again. So:
+A tick can re-run after a failure or a lost report, so this prompt may see a finding another run already shipped. Do **not** add your own locks or state. Safety comes from the queue itself: `fluncle admin tracks queue` returns only findings whose `video_url` is unset, oldest first. The moment a finding is shipped, `fluncle admin tracks video` sets its `video_url`, so it **leaves the queue** and the next run cannot pick it again. So:
 
 - Always resolve the finding at the START of the run — the conductor-assigned `FLUNCLE_RENDER_LOG_ID` when set (injected fresh for THIS run), else the live queue head. Never trust a finding id from a previous run, and always apply the videoUrl guard before filming.
 - A finding is "claimed" the instant its `video_url` is set (the ship step). Until then it is fair game; after then it is invisible to the queue. There is no intermediate lock — and you do not need one, because you film at most one per run and the queue gates it.
@@ -65,7 +65,7 @@ A finding with no `logId` cannot be shipped (ship requires a Log ID). If `tracks
 echo "grain=${FLUNCLE_VIDEO_GRAIN:-unset} register=${FLUNCLE_VIDEO_REGISTER:-unset} avoid=${FLUNCLE_VIDEO_PALETTE_AVOID:-unset}"
 ```
 
-- **When `FLUNCLE_VIDEO_GRAIN` / `FLUNCLE_VIDEO_REGISTER` are SET, they are ASSIGNED — not suggestions.** Do NOT re-choose the grain family or the register. Ship with exactly the assigned `--grain <FLUNCLE_VIDEO_GRAIN>` and `--register <FLUNCLE_VIDEO_REGISTER>`. Your whole creativity lives INSIDE that cell: the vehicle name, the shader concept, the medium/primitive, the motion, the composition, the subject are all still fully yours — pour the invention there. Map your vehicle to the assigned grain family (cookbook §grain families), and stage the assigned register (representational → a placed subject per §presence staging; framed → a portal/sleeve/plate; abstract → a field). The assigner always emits `representational` (the register is a prerequisite, not a rotation slot), so stage a placed subject every run.
+- **When `FLUNCLE_VIDEO_GRAIN` / `FLUNCLE_VIDEO_REGISTER` are SET, they are ASSIGNED — not suggestions.** Do NOT re-choose the grain family or the register. Ship with exactly the assigned `--grain <FLUNCLE_VIDEO_GRAIN>` and `--register <FLUNCLE_VIDEO_REGISTER>`. Your whole creativity lives INSIDE that cell: the vehicle name, the shader concept, the medium/primitive, the motion, the composition, the subject are all still fully yours — pour the invention there. Map your vehicle to the assigned grain family (cookbook §grain families), and stage a placed subject per §presence staging: the assigner always emits `representational` (the register is a prerequisite, not a rotation slot).
 - **When `FLUNCLE_VIDEO_PALETTE_AVOID` is SET, steer clear of that palette direction** — it names a worn hue/texture; pick a palette clearly away from it.
 - **When they are UNSET (a manual/local render), nothing changes** — the free vehicle/grain/register choice + the immediate-neighbour rule below stand exactly as written.
 
@@ -81,7 +81,7 @@ This returns `{ "ok": true, "vehicles": [ ... ] }`, recently-used findings newes
 
 ### 3. Render the video — via `@fluncle-video`, end to end
 
-Run the `@fluncle-video` skill against this finding's `trackId`. Follow its workflow exactly (it is the constitution): props → metadata → concept (vehicle first, honoring the diversity check above) → author the composition in `workbench/` → still-critique loop (minimum two rounds, VIEW the stills) → gates (`typecheck` + `oxlint` + `lint:composition` on the workbench file) → render and wait for the encode to finish → confirm with `ffprobe` (1080×1920, h264, aac, 15–30s).
+Run the `@fluncle-video` skill against this finding's `trackId`. Follow its workflow exactly (it is the constitution): props → metadata → concept (vehicle first, honoring the diversity check above) → author the composition in `workbench/` → still-critique loop (minimum two rounds, VIEW the stills) → gates (`typecheck` + `oxlint` + `lint:composition` on the workbench file) → render and wait for the encode to finish → confirm with `ffprobe` (1080×1920, h264, aac, 10–30s).
 
 Do **not** shortcut the skill. The hourly cadence does not justify skipping the critique loop or the gates — a bad video that ships is worse than a tick that produced nothing.
 
@@ -126,7 +126,7 @@ You have filmed exactly one finding. Output a tight report (finding `logId`/titl
 
 - **Exactly one finding per run.** Never film a second, even if the queue still has entries. The hourly tick is the throttle.
 - **Empty queue is a silent no-op.** No render, no post, no output beyond a one-line "queue empty".
-- **Never auto-publish to social.** Shipping uploads the R2 bundle and sets `video_url`; posting to TikTok/any platform stays a separate, manual, approval-gated step. Do not post.
+- **Never auto-publish to social.** Shipping uploads the R2 bundle and sets `video_url`; posting belongs to the `fluncle-publish` auto-advance. Do not post.
 - **Audio: the pipeline resolver only (Deezer/iTunes).** Never source from YouTube or rip full tracks. No legal audio → no video; stop and report.
 - **Never commit or push.** The composition lives in the gitignored `workbench/`; the durable artifact is the R2 bundle. Nothing enters git.
 - **Never install dependencies.** The conductor installs at wake, before you start, and the launcher refuses to hand you a workspace whose modules are missing. A `Cannot find module …` mid-render is a BOX fault, not something to repair from inside: a full-workspace install running beside a live render session is what kills the render's process group outright, and the run then ends with nothing shipped and nothing to read. Stop and report the missing module instead.

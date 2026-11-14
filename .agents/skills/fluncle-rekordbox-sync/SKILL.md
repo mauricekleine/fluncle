@@ -17,16 +17,11 @@ description: >-
 
 # Fluncle Rekordbox Sync
 
-The periodic reconciliation of the operator's DJ-graded key + BPM (Rekordbox, the
-ground truth) into Fluncle's findings archive. This weekly reconciliation syncs both
-key and BPM. Its matcher and `normalize_key` implementation live in this skill.
+The periodic reconciliation of the operator's DJ-graded key + BPM (Rekordbox, the ground truth) into Fluncle's findings archive. This weekly reconciliation syncs both key and BPM. Its matcher and `normalize_key` implementation live in this skill.
 
 ## Where this runs
 
-On the **M2 mixing Mac** — Rekordbox and its encrypted `master.db` live there, and the
-M2 is the LEADING library (a mirror lives on the M5). Like the two `fluncle-mixtapes`
-Rekordbox scripts, this reads `master.db` locally; unlike them it also WRITES to the
-production archive through the authenticated admin API (never the DB directly).
+On the **M2 mixing Mac** — Rekordbox and its encrypted `master.db` live there, and the M2 is the LEADING library (a mirror lives on the M5). Like the two `fluncle-mixtapes` Rekordbox scripts, this reads `master.db` locally; unlike them it also WRITES to the production archive through the authenticated admin API (never the DB directly).
 
 ## The ratified diff rules
 

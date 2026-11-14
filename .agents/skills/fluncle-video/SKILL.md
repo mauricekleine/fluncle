@@ -96,7 +96,7 @@ Use them two ways: (1) pick a vehicle and a look clearly DIFFERENT from what you
 Most renders are fired by the hourly render conductor, and `automation/render-queue.prompt.md` is the authoritative automated contract. When it runs, the diversity CELL is assigned UP FRONT by a deterministic assigner (`docs/agents/hermes/scripts/assign-video-axes.ts`) and injected as environment variables — check them at the top of the run:
 
 - `FLUNCLE_VIDEO_GRAIN` — the assigned grain family (cookbook §grain families).
-- `FLUNCLE_VIDEO_REGISTER` — the assigned register. The assigner emits `representational`; the environment variable retains all three values in its type.
+- `FLUNCLE_VIDEO_REGISTER` — the assigned register, always `representational`.
 - `FLUNCLE_VIDEO_PALETTE_AVOID` — a worn hue/texture to steer clear of.
 - `FLUNCLE_RENDER_LOG_ID` — names the assigned finding (resolve THIS one, never re-pick the queue head).
 

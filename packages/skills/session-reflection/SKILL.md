@@ -56,7 +56,7 @@ Then present ONE ranked table and stop for ratification:
 
 Below the table: the overflow line (what the cap cut), any proposed **deletions** listed separately, and any proposed **memory deletions** flagged for the operator (never auto-delete a memory).
 
-The operator replies with numbers to approve (e.g. "1, 3, 4"). Then implement exactly those: minimal edits, house verification for whatever you touch (local skills need a named `npx skills add` refresh; public copy needs the copy gates + `canon-reviewer`; code needs its tests and the deploy watched to green), one commit, and a one-line-per-change report. Auto-apply WITHOUT waiting is permitted only for the mechanically-safe class: typo fixes, dead paths, and factually-stale lines in non-canon files.
+The operator replies with numbers to approve (e.g. "1, 3, 4"). Then implement exactly those: minimal edits, house verification for whatever you touch (local skills need a named `npx skills add` refresh; public copy needs the copy gates + `canon-reviewer`; code needs its tests and the deploy watched to green), one commit delivered through the repo's worktree-and-PR path, and a one-line-per-change report. Auto-apply WITHOUT waiting is permitted only for the mechanically-safe class: typo fixes, dead paths, and factually-stale lines in non-canon files.
 
 ## Before you trust anything you added
 

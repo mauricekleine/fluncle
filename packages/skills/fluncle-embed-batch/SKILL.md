@@ -33,14 +33,14 @@ curl -sS "$FLUNCLE_API_BASE_URL/api/v1/admin/tracks/work?kind=embed&count=true&l
 
 ## The four env vars (secrets stay in `op`)
 
-Both targets need the same four. **The concrete `op://` item paths and the M5 muq-venv path are operator/topology detail — they live in the private companion runbook, NOT in this public repo.** Read them from `~/Projects/fluncle-labs/docs/ops-runbook.md` (the embed section). Placeholders here:
+Both targets need the same four. **The concrete `op://` item paths and the M5 muq-venv path are operator/topology detail — they live in the private companion runbook, NOT in this public repo.** Read them from the embed section of `docs/ops-runbook.md` in the private companion repo `fluncle-labs`. Placeholders here:
 
-| env var                                     | what it is                                                                   | source                                                                                                                                                                          |
-| ------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FLUNCLE_API_TOKEN`                         | writes the vectors back (agent-tier is enough; an operator token also works) | `op://<vault>/<token item>/credential` — on an operator machine the `~/l/.env.production` file already has one (see README); on an agent host, `FLUNCLE_API_TOKEN_REF` names it |
-| `R2_ACCOUNT_ID`                             | the source-audio R2 account                                                  | `op://<vault>/<source-audio R2 item>/account_id`                                                                                                                                |
-| `FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID`     | private-bucket read key                                                      | `op://<vault>/<source-audio R2 item>/access_key_id`                                                                                                                             |
-| `FLUNCLE_SOURCE_AUDIO_R2_SECRET_ACCESS_KEY` | private-bucket read secret                                                   | `op://<vault>/<source-audio R2 item>/secret_access_key`                                                                                                                         |
+| env var                                     | what it is                                                                   | source                                                                                                                                                                                        |
+| ------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FLUNCLE_API_TOKEN`                         | writes the vectors back (agent-tier is enough; an operator token also works) | `op://<vault>/<token item>/credential` — on an operator machine the `~/.config/fluncle/.env.production` file already has one (see README); on an agent host, `FLUNCLE_API_TOKEN_REF` names it |
+| `R2_ACCOUNT_ID`                             | the source-audio R2 account                                                  | `op://<vault>/<source-audio R2 item>/account_id`                                                                                                                                              |
+| `FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID`     | private-bucket read key                                                      | `op://<vault>/<source-audio R2 item>/access_key_id`                                                                                                                                           |
+| `FLUNCLE_SOURCE_AUDIO_R2_SECRET_ACCESS_KEY` | private-bucket read secret                                                   | `op://<vault>/<source-audio R2 item>/secret_access_key`                                                                                                                                       |
 
 Plus `PYTHON_BIN` → the muq venv's `python3` (its exact path is in the private runbook; on a RunPod pod the bootstrap script installs muq for you).
 
@@ -51,7 +51,7 @@ Use the source-audio R2 item's custom `account_id`, `access_key_id`, and `secret
 An agent can run the workflow end to end after the operator approves the first biometric prompt. `op` authenticates through the 1Password desktop-app integration, so an agent runs the real `op read '<ref>'` **directly** (with the sandbox OFF, so `op` reaches the app socket). Follow these two requirements:
 
 - **NEVER run `op signin` or `op whoami` first.** In a non-TTY agent shell they _always_ report "account is not signed in" — they do NOT reflect whether `op read` will work, and it will. Skip the check; run the real read.
-- **Source the token env file with `set -a`** (`set -a; source ~/l/.env.production; set +a`) — a plain `source` sets `FLUNCLE_API_TOKEN` as a shell var but does NOT export it, so the `bun` child process can't see it and the run aborts `missing_api_token`. (The R2 vars are `export`ed explicitly below, so they're fine either way.)
+- **Source the token env file with `set -a`** (`set -a; source ~/.config/fluncle/.env.production; set +a`) — a plain `source` sets `FLUNCLE_API_TOKEN` as a shell var but does NOT export it, so the `bun` child process can't see it and the run aborts `missing_api_token`. (The R2 vars are `export`ed explicitly below, so they're fine either way.)
 
 The one thing genuinely reserved for the operator is the single fingerprint approval on that first `op read`. Everything else — sizing, the reads, the dry-run gate, the launch, the verification, the re-rank — the agent does.
 
@@ -64,7 +64,7 @@ Free, unmetered, typically about 2.5/min; size the run from its current measured
 Run this directly (agent or operator, **sandbox OFF** so `op` reaches the app socket), from the repo root. The three `op read`s trigger one biometric prompt the operator approves:
 
 ```bash
-set -a; source ~/l/.env.production; set +a                    # EXPORTS FLUNCLE_API_TOKEN + FLUNCLE_API_BASE_URL
+set -a; source ~/.config/fluncle/.env.production; set +a                    # EXPORTS FLUNCLE_API_TOKEN + FLUNCLE_API_BASE_URL
 [ -n "${FLUNCLE_API_TOKEN_REF:-}" ] && export FLUNCLE_API_TOKEN="$(op read -n "op://${FLUNCLE_API_TOKEN_REF#op://}")"  # agent host: no env file
 export PYTHON_BIN=<muq venv python — see the private runbook>
 export R2_ACCOUNT_ID="$(op read 'op://<vault>/<source-audio R2 item>/account_id')"
@@ -202,4 +202,4 @@ An embedded-but-unranked track is in the archive but not yet placed in The Ear's
 
 - Architecture + the clock-bound design: [`docs/gpu-batch-embed.md`](../../../docs/gpu-batch-embed.md).
 - The scripts: `docs/agents/hermes/scripts/embed-batch.ts` (orchestrator), `embed-batch.sh` (pod bootstrap), `embed-track.py` (the one inference script, CPU + GPU).
-- **Secrets & topology** (exact `op://` paths, the M5 muq-venv path, the box secrets item): the embed section of `~/Projects/fluncle-labs/docs/ops-runbook.md` in the **private companion**. This skill stays at procedure + placeholders because this repo is world-readable.
+- **Secrets & topology** (exact `op://` paths, the M5 muq-venv path, the box secrets item): the embed section of `docs/ops-runbook.md` in the **private companion** repo `fluncle-labs`. This skill stays at procedure + placeholders because this repo is world-readable.

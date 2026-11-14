@@ -79,11 +79,11 @@ Stop and ask:
 Run:
 
 ```sh
-python packages/skills/fluncle-goal-writer/scripts/check_goal_prompt.py /tmp/goal.txt
+python3 packages/skills/fluncle-goal-writer/scripts/check_goal_prompt.py /tmp/goal.txt
 ```
 
 Or pipe:
 
 ```sh
-printf '%s' "$GOAL_PROMPT" | python packages/skills/fluncle-goal-writer/scripts/check_goal_prompt.py -
+printf '%s' "$GOAL_PROMPT" | python3 packages/skills/fluncle-goal-writer/scripts/check_goal_prompt.py -
 ```
