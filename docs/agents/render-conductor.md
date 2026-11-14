@@ -195,7 +195,7 @@ The Dockerfile and conductor scripts implement these boat.dev CLI contracts:
 - **`boat status` exits 0 even when unauthenticated**, so it cannot gate the login; the conductor always `boat login`s (idempotent).
 - **`boat ssh` propagates remote pass/fail (0 vs 1) but not the exact exit code** (it prints an error JSON on non-zero, flattening a remote `exit 42` to its own `1`). Load-bearing remote steps therefore assert on an explicit OUTPUT marker the remote command emits (the `~/conductor-run.done` poll and the "needs reprovision" grep are this pattern), not on the wrapper's exit code.
 - **`boat ssh 'bash -s' <<heredoc` feeds the script on stdin, and `skills add` reads that stdin**, eating the rest of the script. Every provision step gets `</dev/null` + a post-setup dir check, and its stderr reaches the conductor log so a failed step names itself.
-- **The box runs `bunx`, never `npx`, inside the checkout.** npm parses the root `package.json` and rejects Bun's nested `overrides` keys (`@cloudflare/config>zod`) with `Override without name`, so `npx skills add` fails before it starts.
+- **The box runs `bunx`, never `npx`, inside the checkout.** npm parses the root `package.json` and rejects Bun's nested `overrides` keys (`@cloudflare/config>zod`) with `Override without name`, so `npx skills add` fails before it starts. It runs `bunx skills@latest` so the CLI reads the version 2 `skills-lock.json`.
 
 ## Preflight (`--preflight`)
 

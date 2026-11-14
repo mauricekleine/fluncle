@@ -38,7 +38,7 @@ packages/contracts    oRPC contracts for the public + admin HTTP API (the contra
 packages/live         The live runtime: the glass (WebGL renderer) + the bridge (plan + fingerprint identity + supervisor + phone remote).
 packages/media        Remotion kit for static image assets (link-preview cards, covers).
 packages/registry     The typed catalog of every Fluncle surface (@fluncle/registry, the source of truth).
-packages/skills       Agent skills: operator runbooks + creative doctrine. Installed with `npx skills add`.
+packages/skills       Agent skills: operator runbooks + creative doctrine. Installed with `bunx skills@latest add`.
 packages/sprites      Fluncle's pixel-sprite family — the Galaxy game's sprites. Owns the PNGs; the web build mirrors them into public/.
 packages/test-support Shared test helpers — the no-network rail and the test preload.
 packages/tokens       Shared design tokens (colors, typography, radii, motion) from DESIGN.md.

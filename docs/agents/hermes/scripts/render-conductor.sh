@@ -469,7 +469,7 @@ if git diff --name-only "$have" HEAD -- bun.lock package.json '*/package.json' 2
   install_deps || exit 0
 fi
 [ "$(git rev-parse HEAD:packages/skills/fluncle-video 2>/dev/null)" != "$before_skill" ] \
-  && bunx skills add ./packages/skills/fluncle-video -y -a claude-code </dev/null >/dev/null 2>&1
+  && bunx skills@latest add ./packages/skills/fluncle-video -y -a claude-code </dev/null >/dev/null 2>&1
 echo "[freshen] updated ${have:0:7} -> $(git rev-parse --short HEAD)"
 FRESH
 	)" || rc=$?
