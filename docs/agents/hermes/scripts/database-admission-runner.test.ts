@@ -5,7 +5,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -373,27 +372,51 @@ function queuedWithPosition(
   return `echo '${JSON.stringify({ ...response, activeConflictCount, aheadCount, heavyRead, lane, retryAfterMs })}'`;
 }
 
-function timedQueuedAcquire(response: string): string {
+const REAL_SLEEP = spawnSync("sh", ["-c", "command -v sleep"], { encoding: "utf8" }).stdout.trim();
+const VIRTUAL_ACQUIRE_START_MS = 10_000;
+
+type ScheduledRelease = { atMs: number; content: string; lane: string };
+
+function queuedAcquireOnVirtualClock(response: string, releases: ScheduledRelease[] = []): string {
+  const clock = fakeVirtualClock(VIRTUAL_ACQUIRE_START_MS);
   const timeline = join(directory, "acquire-times");
+  const acquiring = join(directory, "acquiring");
+  const schedule = join(directory, "release-schedule");
+  const stateDirectory = join(directory, ".database-admission");
+  writeFileSync(acquiring, "");
+  writeFileSync(
+    schedule,
+    releases
+      .map(({ atMs, content, lane }) => `${VIRTUAL_ACQUIRE_START_MS + atMs} ${lane} ${content}\n`)
+      .join(""),
+  );
+  fakeExecutable(
+    "sleep",
+    `if [ ! -e "${acquiring}" ]; then
+  exec "${REAL_SLEEP}" "$@"
+fi
+now="$(( $(sed -n '1p' "${clock}") + $(perl -e 'printf "%d", $ARGV[0] * 1000 + 0.5' "$1") ))"
+printf '%s\\n' "$now" > "${clock}"
+while read -r at lane content; do
+  [ "$at" -le "$now" ] && [ ! -e "${schedule}.$at.$lane" ] || continue
+  : > "${schedule}.$at.$lane"
+  mkdir -p "${stateDirectory}"
+  printf '%s\\n' "$content" > "${stateDirectory}/test-release"
+  mv -f "${stateDirectory}/test-release" "${stateDirectory}/released-$lane"
+done < "${schedule}"`,
+  );
   fakeCurl(`
 if [[ "$*" == *'"action":"acquire"'* ]]; then
-  perl -MTime::HiRes=time -e 'printf "%.0f\\n", time() * 1000' >> "${timeline}"
+  sed -n '1p' "${clock}" >> "${timeline}"
   if [ "$(wc -l < "${timeline}")" -eq 1 ]; then
     ${response}
     exit 0
   fi
+  rm -f "${acquiring}"
 fi
 ${STALL_TOLERANT_GRANT(90_000, 30_000)}
 `);
   return timeline;
-}
-
-function publishBeacon(lane: string, content: string): void {
-  const stateDirectory = join(directory, ".database-admission");
-  mkdirSync(stateDirectory, { recursive: true });
-  const temporary = join(stateDirectory, "test-release");
-  writeFileSync(temporary, `${content}\n`);
-  renameSync(temporary, join(stateDirectory, `released-${lane}`));
 }
 
 function acquireDelay(timeline: string): number {
@@ -421,16 +444,20 @@ printf '\\n200'`);
 
 describe("database admission unit runner", () => {
   it(
-    "releases an immediately completed payload with less than 700 ms held",
+    "releases an immediately completed payload while the supervision tick never completes",
     PROCESS_TEST_OPTIONS,
     async () => {
       fakeCurl(STALL_TOLERANT_GRANT(90_000, 30_000));
+      fakeExecutable(
+        "sleep",
+        `if [ "$1" = 1 ]; then exec "${REAL_SLEEP}" 3600; fi
+exec "${REAL_SLEEP}" "$@"`,
+      );
       const result = await run(["true"]);
       expect(result.status).toBe(0);
       expect(readFileSync(curlLog, "utf8").match(/"action":"release"/g)).toHaveLength(1);
       const event = result.stderr.split("\n").find((line) => line.includes('"outcome":"released"'));
       expect(event).toBeDefined();
-      expect((JSON.parse(event ?? "{}") as { hold_ms: number }).hold_ms).toBeLessThan(700);
       expect(
         readFileSync(join(directory, ".database-admission", "released-write"), "utf8"),
       ).toMatch(/^\d+ \S+ \d+\n$/);
@@ -455,36 +482,30 @@ describe("database admission unit runner", () => {
     ["heavy-read", true, "heavy-read", "write"],
     ["write", true, "heavy-read", undefined],
   ])(
-    "wakes a %s heavyRead=%s waiter on its conflicting release",
+    "wakes a %s heavyRead=%s waiter on the poll tick of its conflicting release",
     async (lane, heavyRead, beacon, unrelated) => {
-      const timeline = timedQueuedAcquire(queuedWithPosition(0, 1, 2_000, lane, heavyRead));
-      const pending = run(["true"]);
-      await waitUntil(() => existsSync(timeline));
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
-      if (unrelated !== undefined) {
-        publishBeacon(unrelated, "unrelated");
-        await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
-      }
-      const beforeRelease = readFileSync(timeline, "utf8").trim().split("\n").length;
-      const releasedAt = Date.now();
-      publishBeacon(beacon, "holder-release");
-      const result = await pending;
-      expect(beforeRelease).toBe(1);
+      const timeline = queuedAcquireOnVirtualClock(
+        queuedWithPosition(0, 1, 2_000, lane, heavyRead),
+        [
+          ...(unrelated === undefined
+            ? []
+            : [{ atMs: 500, content: "unrelated", lane: unrelated }]),
+          { atMs: 1_000, content: "holder-release", lane: beacon },
+        ],
+      );
+      const result = await run(["true"]);
       expect(result.status).toBe(0);
-      expect(acquireDelay(timeline)).toBeLessThan(1_000);
-      expect(
-        Number(readFileSync(timeline, "utf8").trim().split("\n")[1]) - releasedAt,
-      ).toBeLessThan(700);
+      expect(acquireDelay(timeline)).toBe(1_000);
     },
     PROCESS_TEST_TIMEOUT_MS,
   );
 
   it("waits for the local jitter floor when no release arrives", PROCESS_TEST_OPTIONS, async () => {
-    const timeline = timedQueuedAcquire(queuedWithPosition(0, 1, 100));
+    const timeline = queuedAcquireOnVirtualClock(queuedWithPosition(0, 1, 100));
     const result = await run(["true"], { env: { DATABASE_ADMISSION_LOCAL_WAKE_MAX_SECS: "3" } });
     expect(result.status).toBe(0);
     expect(acquireDelay(timeline)).toBeGreaterThanOrEqual(1_500);
-    expect(acquireDelay(timeline)).toBeLessThan(3_700);
+    expect(acquireDelay(timeline)).toBeLessThanOrEqual(3_000);
   });
 
   it("caps a local beacon wait at the acquisition deadline", PROCESS_TEST_OPTIONS, async () => {
@@ -503,21 +524,17 @@ describe("database admission unit runner", () => {
   it.each([false, true])(
     "needs two distinct releases with a holder and predecessor, mixed=%s",
     async (mixed) => {
-      const timeline = timedQueuedAcquire(queuedWithPosition(1, 1, 2_000, "write", mixed));
-      const pending = run(["true"]);
-      await waitUntil(() => existsSync(timeline));
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
-      publishBeacon("write", "first-release");
-      if (mixed) {
-        publishBeacon("heavy-read", "first-release");
-      }
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 350));
-      const afterFirst = readFileSync(timeline, "utf8").trim().split("\n").length;
-      publishBeacon("write", "second-release");
-      const result = await pending;
-      expect(afterFirst).toBe(1);
+      const timeline = queuedAcquireOnVirtualClock(
+        queuedWithPosition(1, 1, 2_000, "write", mixed),
+        [
+          { atMs: 500, content: "first-release", lane: "write" },
+          ...(mixed ? [{ atMs: 500, content: "first-release", lane: "heavy-read" }] : []),
+          { atMs: 1_000, content: "second-release", lane: "write" },
+        ],
+      );
+      const result = await run(["true"]);
       expect(result.status).toBe(0);
-      expect(acquireDelay(timeline)).toBeLessThan(1_200);
+      expect(acquireDelay(timeline)).toBe(1_000);
     },
     PROCESS_TEST_TIMEOUT_MS,
   );
@@ -534,11 +551,11 @@ describe("database admission unit runner", () => {
   ])(
     "keeps server-hint polling with %s",
     async (_label, response, env) => {
-      const timeline = timedQueuedAcquire(response);
+      const timeline = queuedAcquireOnVirtualClock(response);
       const result = await run(["true"], { env });
       expect(result.status).toBe(0);
       expect(acquireDelay(timeline)).toBeGreaterThanOrEqual(100);
-      expect(acquireDelay(timeline)).toBeLessThan(700);
+      expect(acquireDelay(timeline)).toBeLessThanOrEqual(200);
     },
     PROCESS_TEST_TIMEOUT_MS,
   );
