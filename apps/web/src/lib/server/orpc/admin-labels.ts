@@ -252,10 +252,7 @@ export function adminLabelsHandlers(os: Implementer) {
 
         return { ...recorded, ok: true as const };
       } catch (error) {
-        if (error instanceof ORPCError) {
-          throw error;
-        }
-        throw apiFault(toFault(error));
+        throw toFault(error);
       }
     });
 
