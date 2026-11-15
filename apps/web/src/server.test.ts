@@ -185,7 +185,7 @@ describe("server.ts dispatch spine", () => {
 
   it("answers a crawler's /track/null and /log/null with 410 Gone without rendering", async () => {
     for (const path of ["/track/null", "/log/null", "/track/null/"]) {
-      const response = await dispatch(`https://status.fluncle.com${path}`, {
+      const response = await dispatch(`https://www.fluncle.com${path}`, {
         accept: "image/avif,image/webp,*/*;q=0.8",
       });
 
@@ -397,8 +397,8 @@ describe("server.ts shared-cache isolation", () => {
     const status = await dispatchAndSettle("https://status.fluncle.com/albums", {
       accept: "text/html",
     });
-    expect(await status.text()).toBe("surface document");
-    expect(status.headers.get("x-robots-tag")).toBe("noindex");
+    expect(status.status).toBe(308);
+    expect(status.headers.get("location")).toBe("https://www.fluncle.com/albums");
     expect(status.headers.get("x-edge-cache")).toBeNull();
     await dispatchAndSettle("https://status.fluncle.com/artists", { accept: "text/html" });
     for (const host of ["status", "radio", "galaxy"]) {

@@ -40,7 +40,7 @@ describe("subdomain root rewrite (input)", () => {
     }
   });
 
-  it("only rewrites the root, never a deeper path on the subdomain", () => {
+  it("leaves deeper paths to the server redirect", () => {
     expect(rewriteIn("https://status.fluncle.com/about")).toBe("/about");
   });
 });

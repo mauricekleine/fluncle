@@ -31,7 +31,7 @@ export function presenceRedirect(request: Request): Response | undefined {
     RUNTIME_PREFIXES.some((prefix) => url.pathname.startsWith(prefix)) ||
     RUNTIME_FILES.has(url.pathname) ||
     (surface === "/galaxy" && GALAXY_FILES.has(url.pathname));
-  const canonicalHost = (surface === "/radio" || surface === "/galaxy") && !runtime;
+  const canonicalHost = Boolean(surface) && !runtime;
   const trimSlash =
     url.pathname.length > 1 &&
     url.pathname.endsWith("/") &&
@@ -43,7 +43,12 @@ export function presenceRedirect(request: Request): Response | undefined {
   }
 
   const destination = canonicalHost ? new URL(siteUrl) : new URL(url);
-  destination.pathname = trimSlash ? url.pathname.replace(/\/+$/, "") || "/" : url.pathname;
+  destination.pathname =
+    surface === "/status" && canonicalHost
+      ? url.pathname
+      : trimSlash
+        ? url.pathname.replace(/\/+$/, "") || "/"
+        : url.pathname;
   destination.search = url.search;
 
   return Response.redirect(destination.href, 308);
