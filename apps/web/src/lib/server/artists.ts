@@ -2,7 +2,7 @@ import { parseArtistsJson } from "./artist-names";
 import { type Client, type InStatement, type ResultSet } from "@libsql/client";
 import { randomUUID } from "node:crypto";
 import { type ArtistListItem } from "@fluncle/contracts";
-import { publicTrackOk } from "../../db/public-track-visibility";
+import { publicTrackOk, publicTrackWhere } from "../../db/public-track-visibility";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
 import { SIMILAR_ARTISTS_LIMIT, listSimilarArtistNeighbours } from "./artist-dossier";
 import { validateSocialUrlForPlatform } from "./artist-resolution";
@@ -511,16 +511,21 @@ async function listArtistsByEntity(
   const db = await getDb();
   const result = await db.execute({
     args: [entityId],
-    sql: `select distinct a.name as name, a.slug as slug, a.image_url as image_url,
+    sql: `select a.name as name, a.slug as slug, a.image_url as image_url,
                  a.image_key as image_key, a.image_state as image_state,
                  a.image_updated_at as image_updated_at
-          from findings
-          cross join tracks on tracks.track_id = findings.track_id
+          from tracks
           cross join track_artists ta on ta.track_id = tracks.track_id
           cross join artists a on a.id = ta.artist_id
-          where ${column} = ? and findings.log_id is not null
+          left join findings on findings.track_id = tracks.track_id
+          where ${column} = ? and tracks.dismissed_at is null
+            and tracks.duplicate_of_track_id is null
+            and ${publicTrackWhere("tracks", "findings")}
             and ${listedArtistWhere("a")}
-          order by a.name collate nocase asc`,
+          group by a.id
+          order by max(case when findings.log_id is not null then 1 else 0 end) desc,
+                   count(distinct tracks.track_id) desc, a.name collate nocase asc, a.id asc
+          limit 100`,
   });
 
   return typedRows<{

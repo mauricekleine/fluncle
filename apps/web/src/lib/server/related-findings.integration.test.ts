@@ -326,10 +326,32 @@ describe("an entity page's findings and artist chips", () => {
     expect((await listArtistsByLabel("label-home")).map((chip) => chip.slug)).toStrictEqual([
       "artist-home",
       "artist-neighbour",
+      "artist-roamer",
     ]);
     expect((await listArtistsByAlbum("album-home")).map((chip) => chip.slug)).toStrictEqual([
       "artist-home",
+      "artist-roamer",
     ]);
+  });
+
+  it("lists visible catalogue credits and excludes hidden and dismissed tracks", async () => {
+    await catalogueTrack("visible", { albumId: "album-home", artistIds: ["artist-home"] });
+    await catalogueTrack("hidden", { albumId: "album-home", artistIds: ["artist-away"] });
+    await catalogueTrack("dismissed", { albumId: "album-home", artistIds: ["artist-roamer"] });
+    await db.execute("update tracks set duration_ms = 900000 where track_id = 'hidden'");
+    await db.execute("update tracks set dismissed_at = '2026-01-01' where track_id = 'dismissed'");
+    expect((await listArtistsByAlbum("album-home")).map((chip) => chip.slug)).toEqual([
+      "artist-home",
+    ]);
+  });
+
+  it("bounds artist chips on a large label", async () => {
+    for (let i = 0; i < 105; i++) {
+      const id = `cap-${i}`;
+      await seedArtist(db, { id, slug: id });
+      await catalogueTrack(id, { artistIds: [id], labelId: "label-home" });
+    }
+    expect(await listArtistsByLabel("label-home")).toHaveLength(100);
   });
 
   it("drives from the findings, never from a walk of every track on the label or album", async () => {
@@ -342,10 +364,8 @@ describe("an entity page's findings and artist chips", () => {
 
     await getFindingsByLabel("label-home", TODAY);
     await getFindingsByAlbum("album-home");
-    await listArtistsByLabel("label-home");
-    await listArtistsByAlbum("album-home");
 
-    expect(executed).toHaveLength(4);
+    expect(executed).toHaveLength(2);
     for (const statement of executed) {
       if (typeof statement === "string") {
         continue;
@@ -359,6 +379,37 @@ describe("an entity page's findings and artist chips", () => {
         .map((row) => (typeof row.detail === "string" ? row.detail : ""));
       expect(outer[0]).toMatch(/^SCAN findings\b/);
       expect(outer.filter((detail) => detail.startsWith("SCAN "))).toHaveLength(1);
+    }
+  });
+
+  it("seeks artist chips through the entity's track index, never a table scan", async () => {
+    const executed: InStatement[] = [];
+    const execute = db.execute.bind(db);
+    vi.spyOn(db, "execute").mockImplementation((statement: InStatement) => {
+      executed.push(statement);
+      return execute(statement);
+    });
+
+    await listArtistsByLabel("label-home");
+    await listArtistsByAlbum("album-home");
+
+    expect(executed).toHaveLength(2);
+    const plans: string[][] = [];
+    for (const statement of executed) {
+      if (typeof statement === "string") {
+        continue;
+      }
+      const plan = await execute({
+        args: statement.args,
+        sql: `explain query plan ${statement.sql}`,
+      });
+      plans.push(plan.rows.map((row) => (typeof row.detail === "string" ? row.detail : "")));
+    }
+    expect(plans).toHaveLength(2);
+    expect(plans[0]?.[0]).toMatch(/^SEARCH tracks USING (COVERING )?INDEX \S+ \(label_id=\?\)/);
+    expect(plans[1]?.[0]).toMatch(/^SEARCH tracks USING (COVERING )?INDEX \S+ \(album_id=\?\)/);
+    for (const plan of plans) {
+      expect(plan.filter((detail) => detail.startsWith("SCAN "))).toStrictEqual([]);
     }
   });
 });
