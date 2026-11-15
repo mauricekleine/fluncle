@@ -693,7 +693,7 @@ describe("the record and artist bands", () => {
     expect(tracks.map((track) => track.trackId)).toContain("mb_no-record");
   });
 
-  it("reads the artist band by an artist-id seek", async () => {
+  it("reads the artist band by an artist-id seek and a primary-key lookup per credit", async () => {
     const statement = catalogueTracksByArtistStatement("artist-ashen", {
       excludeAlbumId: "album-signal",
       limit: 48,
@@ -711,6 +711,10 @@ describe("the record and artist bands", () => {
     expect(details.some((detail) => /^SCAN (tracks|track_artists|albums)\b/.test(detail))).toBe(
       false,
     );
+    expect(details.filter((detail) => /^SEARCH tracks\b/.test(detail))).toStrictEqual([
+      "SEARCH tracks USING INDEX sqlite_autoindex_tracks_1 (track_id=?)",
+      "SEARCH tracks USING INDEX sqlite_autoindex_tracks_1 (track_id=?)",
+    ]);
   });
 });
 

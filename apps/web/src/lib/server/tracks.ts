@@ -991,7 +991,8 @@ export function catalogueTracksByArtistStatement(
     sql: `with winners as materialized (
             select tracks.track_id
             from track_artists
-            cross join tracks on tracks.track_id = track_artists.track_id
+            cross join tracks indexed by sqlite_autoindex_tracks_1
+              on tracks.track_id = track_artists.track_id
             where track_artists.artist_id = ? and tracks.is_catalogue = 1
                   ${options.excludeAlbumId ? "and tracks.album_id is not ?" : ""}
                   and ${catalogueTrackPublicWhere("tracks")}
