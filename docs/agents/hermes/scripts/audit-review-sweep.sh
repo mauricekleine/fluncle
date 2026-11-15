@@ -71,10 +71,17 @@ run_review() {
 	find .git -maxdepth 1 -name index.lock -mmin +30 -delete 2>/dev/null || true
 	git fetch --quiet origin main || true
 
-	local domain branch
+	local domain branch author
 	if [ -z "${PR_NUM}" ]; then
-		PR_NUM="$(gh pr list --repo "${repo}" --state open --json number,headRefName,createdAt \
-			--jq '[.[] | select(.headRefName | startswith("audit/"))] | sort_by(.createdAt) | reverse | .[0].number // empty' 2>/dev/null || true)"
+		author="$(gh api user --jq '.login' 2>/dev/null || true)"
+		case "${author}" in
+		"" | *[!A-Za-z0-9-]*)
+			echo "{\"ok\":false,\"stage\":\"author\",\"error\":\"could not resolve the audit PR author\",\"checked\":0,\"errors\":1,\"produced\":0}"
+			return 1
+			;;
+		esac
+		PR_NUM="$(gh pr list --repo "${repo}" --state open --limit 100 --json number,headRefName,createdAt,isCrossRepository,author \
+			--jq "[.[] | select((.isCrossRepository | not) and .author.login == \"${author}\" and (.headRefName | startswith(\"audit/\")))] | sort_by(.createdAt) | reverse | .[0].number // empty" 2>/dev/null || true)"
 	fi
 	if [ -z "${PR_NUM}" ]; then
 
@@ -89,7 +96,8 @@ run_review() {
 		echo "{\"ok\":false,\"stage\":\"checkout\",\"pr\":${PR_NUM},\"checked\":1,\"errors\":1,\"produced\":0}"
 		return 1
 	}
-	"${BUN_BIN}" install --silent || log "bun install nonzero (continuing)"
+	env -i PATH="${PATH}" HOME="${HOME:-/opt/data/home}" TMPDIR="${TMPDIR:-/tmp}" \
+		"${BUN_BIN}" install --silent --ignore-scripts || log "bun install nonzero (continuing)"
 
 	local runtime_note prompt
 	runtime_note="RUNTIME: you are on branch ${branch} (PR #${PR_NUM}, domain ${domain}), checked out from origin/main. The auditor's report is the PR body + .audit/report.md; filed findings are rows in docs/audit-backlog.md. Follow your review contract: fix small nits (commit + \`git push\`), then either \`gh pr merge ${PR_NUM} --squash --delete-branch\` (no high-impact problem + required checks green), or \`gh pr comment ${PR_NUM}\` with your findings and leave it open. Confirm checks with \`gh pr checks ${PR_NUM}\`."

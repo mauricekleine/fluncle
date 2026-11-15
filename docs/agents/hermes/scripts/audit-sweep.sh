@@ -114,7 +114,7 @@ run_audit() {
 	fi
 	if [ "${remote_branch_rc}" -eq 0 ]; then
 		local shipped_pr
-		shipped_pr="$(gh pr list --head "${branch}" --state all --json url --jq '.[0].url // empty' 2>/dev/null || true)"
+		shipped_pr="$(audit_branch_pr_url "${branch}" all)"
 		if [ -n "${shipped_pr}" ]; then
 			log "tonight's branch ${branch} already shipped as ${shipped_pr}; nothing to re-run"
 			echo "{\"ok\":true,\"domain\":\"${DOMAIN}\",\"action\":\"already-shipped\",\"pr\":\"${shipped_pr}\",\"checked\":1,\"errors\":0,\"produced\":0}"
@@ -253,7 +253,7 @@ $(cat "${prompt_file}")"
 		ship_error="push failed"
 	else
 
-		pr_url="$(gh pr list --head "${branch}" --json url --jq '.[0].url // empty' 2>/dev/null || true)"
+		pr_url="$(audit_branch_pr_url "${branch}" open)"
 		if [ -z "${pr_url}" ]; then
 			pr_url="$(gh pr create --base main --head "${branch}" --title "nightly audit — ${label}" \
 				--body-file .audit/report.md | tail -n 1)" || pr_url=""
@@ -268,6 +268,16 @@ $(cat "${prompt_file}")"
 	log "opened ${pr_url}"
 	echo "{\"ok\":${ok},\"domain\":\"${DOMAIN}\",\"action\":\"opened\",\"pr\":\"${pr_url}\",${facts},\"checked\":1,\"errors\":${run_errors},\"produced\":1}"
 	return 0
+}
+
+audit_branch_pr_url() {
+	local author
+	author="$(gh api user --jq '.login' 2>/dev/null || true)"
+	case "${author}" in
+	"" | *[!A-Za-z0-9-]*) return 0 ;;
+	esac
+	gh pr list --head "$1" --state "$2" --json url,isCrossRepository,author \
+		--jq "[.[] | select((.isCrossRepository | not) and .author.login == \"${author}\")] | .[0].url // empty" 2>/dev/null || true
 }
 
 audit_domain_label() {

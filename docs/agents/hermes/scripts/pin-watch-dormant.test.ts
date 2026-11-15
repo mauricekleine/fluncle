@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -53,6 +62,7 @@ function runPinWatch(options: {
   active: readonly string[];
   disableFails?: boolean;
   disableSticks?: boolean;
+  lockSource?: string;
   notInstalled?: boolean;
   probeError?: boolean;
   stopped?: readonly string[];
@@ -86,7 +96,12 @@ STOPPED_TIMERS=(${(options.stopped ?? []).map((timer) => `'${timer}'`).join(" ")
 log() { printf '[pin-watch] %s\\n' "$*" >&2; }
 die() { ERRORS=1; printf 'FATAL:%s\\n' "$*" >&2; exit 1; }
 run_event_now() { printf 'now\\n'; }
-docker() { return 0; }
+docker() { printf '%s' "${options.lockSource ?? ""}"; }
+setpriv() {
+  printf 'setpriv %s\\n' "$*" >>"${calls}"
+  while [ "\${1#--}" != "$1" ]; do shift; done
+  "$@"
+}
 release_order() { printf '%s\\n' "\${STOPPED_TIMERS[@]}"; }
 rearm_stalled_timer() { return 1; }
 systemctl() {
@@ -146,6 +161,52 @@ exit "$ERRORS"
     stopped,
   };
 }
+
+describe("pin-watch writes the rebake lock only as a fresh file", () => {
+  function lockDirectory(): string {
+    const directory = mkdtempSync(join(tmpdir(), "fluncle-pin-watch-lock-"));
+    roots.push(directory);
+    return directory;
+  }
+
+  test("a link left at the lock path is replaced, and its existing target is untouched", () => {
+    const data = lockDirectory();
+    const target = join(data, "victim");
+    writeFileSync(target, "original\n");
+    symlinkSync(target, join(data, "rebake.lock"));
+
+    const run = runPinWatch({
+      action: "quiesce",
+      active: ["fluncle-live.timer"],
+      lockSource: data,
+    });
+
+    expect(run.status).toBe(0);
+    expect(readFileSync(target, "utf8")).toBe("original\n");
+    expect(lstatSync(join(data, "rebake.lock")).isFile()).toBe(true);
+    expect(
+      run.calls.some((call) =>
+        call.startsWith("setpriv --reuid=10000 --regid=10000 --clear-groups "),
+      ),
+    ).toBe(true);
+  });
+
+  test("a dangling link left at the lock path never creates its target", () => {
+    const data = lockDirectory();
+    const target = join(data, "missing");
+    symlinkSync(target, join(data, "rebake.lock"));
+
+    const run = runPinWatch({
+      action: "quiesce",
+      active: ["fluncle-live.timer"],
+      lockSource: data,
+    });
+
+    expect(run.status).toBe(0);
+    expect(existsSync(target)).toBe(false);
+    expect(lstatSync(join(data, "rebake.lock")).isFile()).toBe(true);
+  });
+});
 
 describe("pin-watch keeps a dormant timer parked", () => {
   test("the quiesce disables a still-active dormant timer and never adds it to the restart set", () => {

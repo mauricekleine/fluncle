@@ -164,6 +164,7 @@ function fixture(): Fixture {
     join(bin, "bun"),
     `#!/usr/bin/env bash
 printf '%s\\n' "$*" >>"${join(root, "bun.log")}"
+[ "\${1:-}" != "install" ] || printf 'install env GH_TOKEN=%s FLUNCLE_AUDIT_GITHUB_PAT=%s SWEEP_EXTRA=%s FLUNCLE_API_TOKEN=%s\\n' "\${GH_TOKEN:-}" "\${FLUNCLE_AUDIT_GITHUB_PAT:-}" "\${SWEEP_EXTRA:-}" "\${FLUNCLE_API_TOKEN:-}" >>"${join(root, "bun.log")}"
 case "\${1:-}" in
   *rotation.ts) [ "\${2:-}" != "\${STUB_ROTATION_DAY:-}" ] || printf 'test' ;;
 esac
@@ -212,13 +213,30 @@ exit 0
     join(bin, "gh"),
     `#!/usr/bin/env bash
 printf '%s\\n' "$*" >>"${join(root, "gh.log")}"
+jq_filter() {
+  local previous=""
+  for argument in "$@"; do
+    [ "\${previous}" != "--jq" ] || { printf '%s' "\${argument}"; return; }
+    previous="\${argument}"
+  done
+}
+audit_prs() {
+  if [ -n "\${STUB_AUDIT_PRS:-}" ]; then
+    printf '%s' "\${STUB_AUDIT_PRS}"
+  elif [ -n "\${STUB_AUDIT_PR_URL:-}" ]; then
+    jq -cn --arg url "\${STUB_AUDIT_PR_URL}" '[{url: $url, isCrossRepository: false, author: {login: "fixture-bot"}}]'
+  else
+    printf '[]'
+  fi
+}
 case "$*" in
+  "api user"*) [ -z "\${STUB_GH_LOGIN-fixture-bot}" ] || printf '%s\\n' "\${STUB_GH_LOGIN-fixture-bot}" ;;
   *"pr create"*)
     [ "\${STUB_PR_CREATE_STATUS:-0}" = "0" ] || exit "\${STUB_PR_CREATE_STATUS}"
     printf 'https://example.invalid/pull/42\\n'
     ;;
-  *"pr list"*"--head"*) printf '%s\\n' "\${STUB_AUDIT_PR_URL:-}" ;;
-  *"pr list"*) printf '%s\\n' "\${STUB_REVIEW_PR_NUM:-}" ;;
+  *"pr list"*"--head"*) audit_prs | jq -r "$(jq_filter "$@")" ;;
+  *"pr list"*) printf '%s' "\${STUB_REVIEW_PRS:-[]}" | jq -r "$(jq_filter "$@")" ;;
   *"pr checkout"*) exit "\${STUB_CHECKOUT_STATUS:-0}" ;;
   *"pr view"*"--json headRefName"*) printf 'audit/20260101-test\\n' ;;
   *"pr view"*"--json state"*) printf '%s\\n' "\${STUB_REVIEW_STATE:-OPEN}" ;;
@@ -875,6 +893,121 @@ describe("fluncle-audit pins its reasoning effort", () => {
     const review = fixture();
     await run(review, "audit-review-sweep.sh", ["--pr", "7"], { AUDIT_REVIEW_CLAUDE_EFFORT: "" });
     expect(calls(review, "claude")).toContain("--effort high");
+  });
+});
+
+function reviewPr(
+  number: number,
+  createdAt: string,
+  overrides: { author?: string; headRefName?: string; isCrossRepository?: boolean } = {},
+): Record<string, unknown> {
+  return {
+    author: { login: overrides.author ?? "fixture-bot" },
+    createdAt,
+    headRefName: overrides.headRefName ?? `audit/2026010${number % 10}-test`,
+    isCrossRepository: overrides.isCrossRepository ?? false,
+    number,
+  };
+}
+
+describe("fluncle-audit-review selects only the auditor's own PRs", () => {
+  test("the newest same-repository audit PR by the token's account is reviewed", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-review-sweep.sh", [], {
+      STUB_REVIEW_PRS: JSON.stringify([
+        reviewPr(41, "2026-01-01T03:00:00Z"),
+        reviewPr(42, "2026-01-02T03:00:00Z", { isCrossRepository: true }),
+        reviewPr(43, "2026-01-03T03:00:00Z", { author: "someone-else" }),
+        reviewPr(44, "2026-01-04T03:00:00Z", { headRefName: "feature/audit" }),
+      ]),
+    });
+
+    expect(result.summary).toMatchObject({ action: "held", checked: 1, pr: 41 });
+    expect(calls(box, "gh")).toMatch(/^pr checkout 41 /m);
+    expect(calls(box, "gh")).not.toMatch(/^pr checkout 4[234] /m);
+  });
+
+  test("a queue holding only a cross-repository audit PR reviews nothing", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-review-sweep.sh", [], {
+      STUB_REVIEW_PRS: JSON.stringify([
+        reviewPr(42, "2026-01-02T03:00:00Z", { isCrossRepository: true }),
+      ]),
+    });
+
+    expect(result.summary).toMatchObject({ action: "none", checked: 0, ok: true });
+    expect(calls(box, "gh")).not.toContain("pr checkout");
+    expect(calls(box, "bun")).not.toMatch(/^install\b/m);
+  });
+
+  test("an unresolvable token account stops before any PR is listed or checked out", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-review-sweep.sh", [], {
+      STUB_GH_LOGIN: "",
+      STUB_REVIEW_PRS: JSON.stringify([reviewPr(41, "2026-01-01T03:00:00Z")]),
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.summary).toMatchObject({ errors: 1, ok: false, stage: "author" });
+    expect(calls(box, "gh")).not.toContain("pr list");
+    expect(calls(box, "gh")).not.toContain("pr checkout");
+  });
+
+  test("the PR's install runs no lifecycle scripts and sees no credentials", async () => {
+    const box = fixture();
+    const secrets = join(box.root, "secrets.env");
+    writeFileSync(secrets, "SWEEP_EXTRA=from-the-sweep-file\n", "utf8");
+    await run(box, "audit-review-sweep.sh", ["--pr", "7"], {
+      AUDIT_SECRETS_FILE: secrets,
+      FLUNCLE_API_TOKEN: "fixture-agent-token",
+    });
+
+    const bun = calls(box, "bun");
+    expect(bun).toMatch(/^install --silent --ignore-scripts$/m);
+    expect(bun).toMatch(
+      /^install env GH_TOKEN= FLUNCLE_AUDIT_GITHUB_PAT= SWEEP_EXTRA= FLUNCLE_API_TOKEN=$/m,
+    );
+  });
+});
+
+describe("fluncle-audit matches tonight's PR only among its own", () => {
+  test("a cross-repository PR on tonight's branch name is not taken as already shipped", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_AUDIT_PRS: JSON.stringify([
+        {
+          author: { login: "fixture-bot" },
+          isCrossRepository: true,
+          url: "https://example.invalid/pull/9",
+        },
+      ]),
+      STUB_REMOTE_BRANCH: "1",
+    });
+
+    expect(result.summary).toMatchObject({ action: "ship-failed", ok: false });
+    expect(result.summary).not.toMatchObject({ pr: "https://example.invalid/pull/9" });
+  });
+
+  test("another account's PR on tonight's branch name is not reused", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_AHEAD: "1",
+      STUB_AUDIT_PRS: JSON.stringify([
+        {
+          author: { login: "someone-else" },
+          isCrossRepository: false,
+          url: "https://example.invalid/pull/9",
+        },
+      ]),
+      STUB_REPORT: "1 fix, 0 filed",
+      STUB_VERIFY: CLEAN_VERIFY,
+    });
+
+    expect(result.summary).toMatchObject({
+      action: "opened",
+      pr: "https://example.invalid/pull/42",
+    });
+    expect(calls(box, "gh")).toContain("pr create");
   });
 });
 

@@ -152,6 +152,48 @@ describe("resolveLedgerBranch — one open ledger branch per night", () => {
       "gh pr list --state open failed",
     );
   });
+
+  test("only same-repository PRs by the sweep's own account count as triage PRs", () => {
+    const listed = [
+      {
+        ...triagePr("sentry-triage/20260822-ledger", 1),
+        author: { login: "fixture-bot" },
+        isCrossRepository: false,
+      },
+      {
+        ...triagePr("sentry-triage/20260822-ledger", 2),
+        author: { login: "fixture-bot" },
+        isCrossRepository: true,
+      },
+      {
+        ...triagePr("sentry-triage/20260822-F-1", 3),
+        author: { login: "someone-else" },
+        isCrossRepository: false,
+      },
+      {
+        ...triagePr("feature/sentry-triage", 4),
+        author: { login: "fixture-bot" },
+        isCrossRepository: false,
+      },
+    ];
+    const gh = (args: string[]) =>
+      args[0] === "api"
+        ? { ok: true, stdout: "fixture-bot\n" }
+        : { ok: true, stdout: JSON.stringify(listed) };
+
+    expect(listTriagePrsOrThrow("open", gh)).toEqual([
+      triagePr("sentry-triage/20260822-ledger", 1),
+    ]);
+  });
+
+  test("an unknown token account is an error, never an unfiltered PR list", () => {
+    const gh = (args: string[]) =>
+      args[0] === "api"
+        ? { ok: false, stdout: "" }
+        : { ok: true, stdout: JSON.stringify([triagePr("sentry-triage/20260822-ledger", 1)]) };
+
+    expect(() => listTriagePrsOrThrow("open", gh)).toThrow("gh pr list --state open failed");
+  });
 });
 
 describe("filterRecentlyMerged — reconcile only resolves fresh merges", () => {
