@@ -137,10 +137,10 @@ jobs:
           FLUNCLE_CLI_VERSION: ${{ steps.version.outputs.version }}
         run: |
           define="FLUNCLE_CLI_VERSION=\"${FLUNCLE_CLI_VERSION}\""
-          bun build ./apps/cli/src/cli.ts --compile --target=bun-darwin-arm64 --define "$define" --outfile ./apps/cli/dist/fluncle-darwin-arm64
-          bun build ./apps/cli/src/cli.ts --compile --target=bun-darwin-x64 --define "$define" --outfile ./apps/cli/dist/fluncle-darwin-x64
-          bun build ./apps/cli/src/cli.ts --compile --target=bun-linux-arm64 --define "$define" --outfile ./apps/cli/dist/fluncle-linux-arm64
-          bun build ./apps/cli/src/cli.ts --compile --target=bun-linux-x64 --define "$define" --outfile ./apps/cli/dist/fluncle-linux-x64
+          bun build ./apps/cli/src/cli.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target=bun-darwin-arm64 --define "$define" --outfile ./apps/cli/dist/fluncle-darwin-arm64
+          bun build ./apps/cli/src/cli.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target=bun-darwin-x64 --define "$define" --outfile ./apps/cli/dist/fluncle-darwin-x64
+          bun build ./apps/cli/src/cli.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target=bun-linux-arm64 --define "$define" --outfile ./apps/cli/dist/fluncle-linux-arm64
+          bun build ./apps/cli/src/cli.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target=bun-linux-x64 --define "$define" --outfile ./apps/cli/dist/fluncle-linux-x64
           test "$(find apps/cli/dist -maxdepth 1 -type f -name 'fluncle-*' | wc -l)" -eq 4
           file apps/cli/dist/fluncle-*
 

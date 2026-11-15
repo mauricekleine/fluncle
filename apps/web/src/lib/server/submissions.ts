@@ -542,12 +542,27 @@ function requireText(value: unknown, message: string): string {
   return value.trim().slice(0, 300);
 }
 
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    const whitespace = code === 0x09 || code === 0x0a || code === 0x0d;
+    if ((code < 0x20 && !whitespace) || (code >= 0x7f && code <= 0x9f)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function optionalText(value: unknown, maxLength: number): string | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
 
   if (typeof value !== "string") {
+    throw new ApiError("invalid_request", "Invalid text field", 400);
+  }
+
+  if (hasControlCharacter(value)) {
     throw new ApiError("invalid_request", "Invalid text field", 400);
   }
 

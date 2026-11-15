@@ -75,3 +75,17 @@ export function trackDetailLines(
 
   return lines;
 }
+
+function isTerminalControl(code: number): boolean {
+  return (code < 0x20 && code !== 0x09 && code !== 0x0a) || (code >= 0x7f && code <= 0x9f);
+}
+
+export function terminalSafe(value: string): string {
+  let safe = "";
+  for (const character of value) {
+    if (!isTerminalControl(character.codePointAt(0) ?? 0)) {
+      safe += character;
+    }
+  }
+  return safe;
+}

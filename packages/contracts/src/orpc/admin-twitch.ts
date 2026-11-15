@@ -2,6 +2,7 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 
 export const LIVE_STATE_TIMESTAMP_MAX = 64;
+export const LIVE_STATE_TITLE_MAX = 140;
 
 export const recordLiveState = oc
   .route({
@@ -16,7 +17,7 @@ export const recordLiveState = oc
       at: z.string().max(LIVE_STATE_TIMESTAMP_MAX).datetime({ offset: true }),
       live: z.boolean(),
       startedAt: z.string().max(LIVE_STATE_TIMESTAMP_MAX).nullable(),
-      title: z.string().nullable(),
+      title: z.string().max(LIVE_STATE_TITLE_MAX).nullable(),
     }),
   )
   .output(z.object({ ok: z.literal(true) }));

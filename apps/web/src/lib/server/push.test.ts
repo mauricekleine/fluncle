@@ -223,6 +223,67 @@ describe("notifyNewFinding — configured fan-out", () => {
     expect(deleteArgs).toContain("ExponentPushToken[dead]");
   });
 
+  it("a failed chunk never shifts another chunk's tickets onto live tokens", async () => {
+    const live = Array.from({ length: 100 }, (_, index) => `ExponentPushToken[live-${index}]`);
+    const dead = Array.from({ length: 5 }, (_, index) => `ExponentPushToken[dead-${index}]`);
+    readOptionalEnv.mockResolvedValue("expo_token");
+    execute.mockResolvedValue({
+      rows: [...live, ...dead].map((token) => ({ muted_json: null, token })),
+    });
+    FETCH.mockImplementation(async (_url: string, init: RequestInit) => {
+      const sent = JSON.parse(init.body as string) as { to: string }[];
+      if (sent.some(({ to }) => live.includes(to))) {
+        return { json: async () => ({}), ok: false };
+      }
+      return {
+        json: async () => ({
+          data: sent.map(() => ({ details: { error: "DeviceNotRegistered" }, status: "error" })),
+        }),
+        ok: true,
+      };
+    });
+
+    notifyNewFinding({ artists: ["X"], title: "Y" }, "2026.A.01");
+    await flush();
+    await waitUntil.mock.calls[0]?.[0];
+
+    const deleted = execute.mock.calls.flatMap(([arg]) =>
+      typeof arg === "object" && /delete from push_tokens/.test((arg as { sql: string }).sql)
+        ? ((arg as { args?: string[] }).args ?? [])
+        : [],
+    );
+    expect(deleted).toHaveLength(dead.length);
+    expect(deleted).toEqual(expect.arrayContaining(dead));
+  });
+
+  it("parks each receipt against the token its own chunk sent to", async () => {
+    const first = Array.from({ length: 100 }, (_, index) => `ExponentPushToken[first-${index}]`);
+    const second = ["ExponentPushToken[second-0]", "ExponentPushToken[second-1]"];
+    readOptionalEnv.mockResolvedValue("expo_token");
+    execute.mockResolvedValue({
+      rows: [...first, ...second].map((token) => ({ muted_json: null, token })),
+    });
+    FETCH.mockImplementation(async (_url: string, init: RequestInit) => {
+      const sent = JSON.parse(init.body as string) as { to: string }[];
+      if (sent.some(({ to }) => first.includes(to))) {
+        throw new Error("network down");
+      }
+      return {
+        json: async () => ({ data: sent.map(({ to }) => ({ id: `receipt-${to}`, status: "ok" })) }),
+        ok: true,
+      };
+    });
+
+    notifyNewFinding({ artists: ["X"], title: "Y" }, "2026.A.01");
+    await flush();
+    await waitUntil.mock.calls[0]?.[0];
+
+    const parked = batch.mock.calls.flatMap(([statements]) =>
+      (statements as { args: string[] }[]).map(({ args }) => [args[0], args[1]]),
+    );
+    expect(parked).toEqual(second.map((token) => [`receipt-${token}`, token]));
+  });
+
   it("never throws when the Expo send fails (a push can't sink a publish)", async () => {
     readOptionalEnv.mockResolvedValue("expo_token");
     execute.mockResolvedValue({ rows: [{ muted_json: null, token: "ExponentPushToken[a]" }] });

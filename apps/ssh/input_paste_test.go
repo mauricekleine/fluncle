@@ -1,7 +1,9 @@
 package main
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -57,5 +59,35 @@ func TestTypedRuneAppends(t *testing.T) {
 
 	if m.input != "a" {
 		t.Errorf("typed input got %q, want %q", m.input, "a")
+	}
+}
+
+// A paste far larger than any field stops at maxInputRunes, and typing past
+// the cap adds nothing.
+func TestInputStopsAtTheFieldCap(t *testing.T) {
+	m := model{screen: screenNoteInput}
+
+	updated, _ := m.handlePaste(strings.Repeat("é", 4<<20))
+	m = updated.(model)
+	if got := utf8.RuneCountInString(m.input); got != maxInputRunes {
+		t.Fatalf("paste kept %d runes, want %d", got, maxInputRunes)
+	}
+
+	updated, _ = m.handleInputKey(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	m = updated.(model)
+	updated, _ = m.handleInputKey(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	m = updated.(model)
+	if got := utf8.RuneCountInString(m.input); got != maxInputRunes {
+		t.Fatalf("typing past the cap grew the field to %d runes", got)
+	}
+}
+
+// A paste that fits is kept whole after earlier typing.
+func TestPasteBelowTheCapIsKept(t *testing.T) {
+	m := model{screen: screenSearchInput, input: "drum "}
+
+	updated, _ := m.handlePaste("and bass")
+	if got := updated.(model).input; got != "drum and bass" {
+		t.Fatalf("got %q", got)
 	}
 }

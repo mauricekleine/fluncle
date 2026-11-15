@@ -50,7 +50,7 @@ import {
 } from "./admin-telemetry";
 import { updateGalaxyMap } from "./admin-galaxies";
 import { presignClipUpload, presignSetVideoUpload, setClipSchedule } from "./admin-mixtapes";
-import { LIVE_STATE_TIMESTAMP_MAX, recordLiveState } from "./admin-twitch";
+import { LIVE_STATE_TIMESTAMP_MAX, LIVE_STATE_TITLE_MAX, recordLiveState } from "./admin-twitch";
 import { presignRecordingUpload } from "./admin-recordings";
 import {
   getOperationReceipt,
@@ -1011,6 +1011,16 @@ function accepts(op: unknown, input: unknown): boolean {
     accepts(recordLiveState, { ...live, startedAt: "x".repeat(LIVE_STATE_TIMESTAMP_MAX + 1) }),
     false,
     "a stream start one character past the length cap is rejected",
+  );
+  assert.equal(
+    accepts(recordLiveState, { ...live, title: "x".repeat(LIVE_STATE_TITLE_MAX) }),
+    true,
+    "a stream title AT Twitch's 140-character limit is accepted",
+  );
+  assert.equal(
+    accepts(recordLiveState, { ...live, title: "x".repeat(LIVE_STATE_TITLE_MAX + 1) }),
+    false,
+    "a stream title one character past the limit is rejected",
   );
 }
 

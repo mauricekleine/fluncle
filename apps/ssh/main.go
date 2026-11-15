@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -35,6 +36,14 @@ import (
 )
 
 const defaultAPIURL = "https://www.fluncle.com"
+
+// A session that sends and receives nothing for sessionIdleTimeout is closed, and
+// no session outlives sessionMaxTimeout. Both sit far above how long anyone browses
+// the terminal, so they only reclaim abandoned or stuck connections.
+const (
+	sessionIdleTimeout = 30 * time.Minute
+	sessionMaxTimeout  = 4 * time.Hour
+)
 
 // The Galaxy's link map (docs/socials/). URLs are verbatim; the handle is
 // lowercase fluncle everywhere (VOICE.md §6). Surfaced on the About screen.
@@ -95,6 +104,8 @@ func main() {
 	server, err := wish.NewServer(
 		wish.WithAddress(net.JoinHostPort(cfg.host, cfg.port)),
 		wish.WithHostKeyPath(hostKeyPath(cfg.dataDir)),
+		wish.WithIdleTimeout(sessionIdleTimeout),
+		wish.WithMaxTimeout(sessionMaxTimeout),
 		wish.WithMiddleware(
 			logging.Middleware(),
 			activeterm.Middleware(),
@@ -1087,11 +1098,11 @@ func (m model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.subscribe(value)
 		}
 	case "space":
-		m.input += " "
+		m.input = appendInput(m.input, " ")
 	default:
 		// A printable keypress carries its rune(s) in msg.Text; control keys
 		// (arrows, function keys) leave it empty and are dropped.
-		m.input += sanitizeInput(msg.Text)
+		m.input = appendInput(m.input, sanitizeInput(msg.Text))
 	}
 
 	return m, nil
@@ -1103,9 +1114,26 @@ func (m model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m model) handlePaste(content string) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenSearchInput, screenNoteInput, screenContactInput, screenSubscribe:
-		m.input += sanitizeInput(content)
+		m.input = appendInput(m.input, sanitizeInput(content))
 	}
 	return m, nil
+}
+
+// maxInputRunes bounds every input field. The longest field the API accepts is
+// a 500-character note, so a field never needs more; a larger paste is cut here
+// instead of growing the session's memory and render cost.
+const maxInputRunes = 512
+
+// appendInput adds text to an input field up to maxInputRunes.
+func appendInput(field, text string) string {
+	room := maxInputRunes - utf8.RuneCountInString(field)
+	if room <= 0 {
+		return field
+	}
+	if utf8.RuneCountInString(text) <= room {
+		return field + text
+	}
+	return field + string([]rune(text)[:room])
 }
 
 // sanitizeInput keeps the printable, single-line characters a typed or pasted
