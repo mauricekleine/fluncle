@@ -276,6 +276,7 @@ beforeEach(async () => {
   await seedGalaxyMembers("gal-retired", 8);
 
   await syncHubCounts(db);
+  await db.execute("update artists set renderable_track_count = 200");
 
   await db.execute({
     args: ["artist-adele", "Adele", "adele", "11111111-1111-4111-8111-111111111111"],
@@ -337,7 +338,7 @@ describe("the sitemap index reads aggregates that match the rows", () => {
 
     expect(stats.findings.count).toBe(4);
     expect(stats.findings.lastmod).toBe("2026-07-14T09:00:00.000Z");
-    expect(stats.artists.count).toBe(2);
+    expect(stats.artists.count).toBe(3);
     expect(stats.labels.count).toBe(1);
     expect(stats.albums.count).toBe(1);
     expect(stats.albums.lastmod).toBe("2026-06-10T14:57:38.786Z");
@@ -478,7 +479,34 @@ describe("observed page versions date the published sitemap set", () => {
     expect(older.labels[0]?.lastmod).toBe("2026-06-10T14:57:38.786Z");
   });
 
-  it("seeks the newest indexable observed version through the kind date index", async () => {
+  it("ignores newer observed versions outside track submission membership", async () => {
+    await db.execute(
+      "update artists set renderable_track_count = 199 where id = 'artist-stranger'",
+    );
+    await db.batch(
+      [
+        {
+          args: [],
+          sql: "insert into search_page_versions (kind, subject_id, fingerprint, changed_at) values ('track', 'track-3', 'included', '2026-09-01')",
+        },
+        {
+          args: [],
+          sql: "insert into search_page_versions (kind, subject_id, fingerprint, changed_at) values ('track', 'track-4', 'excluded', '2026-10-01')",
+        },
+      ],
+      "write",
+    );
+    const [stats, bag, pastEnd] = await Promise.all([
+      collectSitemapIndexStats(),
+      collectSitemapBag("tracks", 1, 1),
+      collectSitemapBag("tracks", 2, 1),
+    ]);
+    expect(bag.tracks.map((entry) => entry.trackId)).toEqual(["track-3"]);
+    expect(pastEnd.tracks).toEqual([]);
+    expect(stats.tracks).toEqual({ count: 1, lastmod: "2026-09-01" });
+  });
+
+  it("seeks the newest submitted observed version through the kind date index", async () => {
     const execute = vi.spyOn(db, "execute");
 
     await collectSitemapIndexStats();
@@ -594,6 +622,7 @@ describe("entity sitemap windows — lastmod and cover come from the findings si
       sql: `insert into findings (track_id, added_at) values (?, '2026-06-28T00:00:00.000Z')`,
     });
     await syncHubCounts(db);
+    await db.execute("update artists set renderable_track_count = 200");
 
     for (const [kind, read, floor] of readers) {
       const reference = await read(floor);
@@ -724,6 +753,11 @@ describe("a child sitemap fetches only its own bag", () => {
                 and release_date is not null
                 and album_image_url is not null
                 and (spotify_url is not null or apple_music_url is not null)
+                and exists (select 1 from track_artists ta join artists a on a.id = ta.artist_id
+                  where ta.track_id = tracks.track_id and a.renderable_track_count >= 200
+                    and a.slug not in (select a2.slug from artist_rules r
+                      join artists a2 on a2.mbid = r.artist_mbid
+                      where r.label_id is null and r.verdict = 'unlisted'))
               order by track_id`,
       })
     ).rows;

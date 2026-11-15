@@ -9,7 +9,7 @@ import { entityPurgeUrl } from "./edge-cache";
 import { buildIndexNowPayload } from "./indexnow";
 import { LABEL_INDEX_MIN_TRACKS } from "./labels";
 import { sitemapWindowStatement } from "./sitemap-data";
-import { TRACK_PAGE_INDEXABLE_WHERE } from "./track-page";
+import { TRACK_SITEMAP_WHERE } from "./track-sitemap-membership";
 
 export const INDEXNOW_WINDOW_SIZE = 1000;
 export const INDEXNOW_CLAIM_LIMIT = 2000;
@@ -40,7 +40,7 @@ const LIVE_WHERE = `(
   or (kind = 'artist' and exists (select 1 from artists where slug = subject_id and renderable_track_count >= ${ARTIST_INDEX_MIN_FINDINGS} and ${listedArtistWhere("artists")}))
   or (kind = 'label' and exists (select 1 from labels where slug = subject_id and renderable_track_count >= ${LABEL_INDEX_MIN_TRACKS}))
   or (kind = 'album' and exists (select 1 from albums where slug = subject_id and renderable_track_count >= ${ALBUM_INDEX_MIN_TRACKS}))
-  or (kind = 'track' and exists (select 1 from tracks where track_id = subject_id and ${TRACK_PAGE_INDEXABLE_WHERE}))
+  or (kind = 'track' and exists (select 1 from tracks where track_id = subject_id and ${TRACK_SITEMAP_WHERE}))
 )`;
 
 function materialFields(alias: string, fields: string[]): string {
@@ -331,7 +331,7 @@ function backfillStatement(
       args: [...args, limit],
       sql: `select ${columns} from ${due}
         cross join tracks indexed by sqlite_autoindex_tracks_1 on tracks.track_id = subject_id
-        where ${where} and ${TRACK_PAGE_INDEXABLE_WHERE}
+        where ${where} and ${TRACK_SITEMAP_WHERE}
         order by tracks.release_date desc nulls last, subject_id limit ?`,
     };
   }

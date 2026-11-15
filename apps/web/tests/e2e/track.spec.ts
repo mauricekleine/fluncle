@@ -150,7 +150,7 @@ test("a certified track's destination is its coordinate, permanently, and /log i
   expect(decoded(await log.text())).toContain(logId);
 });
 
-test("the evidence gate drives BOTH the page's directive and the sitemap, from one expression", async ({
+test("the evidence gate decides the page's directive, and the sitemap submits only tracks by an established artist", async ({
   page,
 }) => {
   const rich = decoded(await (await page.request.get(DESTINATION_PATH)).text());
@@ -183,14 +183,20 @@ test("the evidence gate drives BOTH the page's directive and the sitemap, from o
 
   const sitemap = await (await page.request.get("/sitemap/tracks-1.xml")).text();
 
-  expect(sitemap).toContain(`<loc>https://www.fluncle.com${DESTINATION_PATH}</loc>`);
+  expect(
+    sitemap,
+    "an indexable track whose artists are below the sitemap floor stays out of the sitemap",
+  ).not.toContain(`<loc>https://www.fluncle.com${DESTINATION_PATH}</loc>`);
   expect(sitemap).not.toContain(`<loc>https://www.fluncle.com${THIN_PATH}</loc>`);
 
   expect(sitemap).not.toContain("/track/e2e-track-1");
 
   const index = await (await page.request.get("/sitemap.xml")).text();
 
-  expect(index).toContain("<loc>https://www.fluncle.com/sitemap/tracks-1.xml</loc>");
+  expect(
+    index,
+    "with no seeded track above the artist floor, the index lists no tracks child",
+  ).not.toContain("<loc>https://www.fluncle.com/sitemap/tracks-1.xml</loc>");
 });
 
 test("the archive links INTO the destination rather than straight back out", async ({ page }) => {

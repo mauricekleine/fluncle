@@ -60,6 +60,14 @@ const EMBEDDED_EARLY = "bb-embedded-neighbour";
 const EMBEDDED_NEXT = "cc-embedded-neighbour";
 
 async function makeEvidenceRich(trackId: string): Promise<void> {
+  await db.execute(`insert or ignore into artists
+    (id, name, slug, renderable_track_count, created_at, updated_at)
+    values ('sitemap-artist', 'Ashen Relay', 'ashen-relay', 200, '2026-01-01', '2026-01-01')`);
+  await db.execute({
+    args: [trackId],
+    sql: `insert or ignore into track_artists (track_id, artist_id, position)
+          values (?, 'sitemap-artist', 0)`,
+  });
   await db.execute({
     args: [trackId],
     sql: `update tracks
@@ -226,12 +234,66 @@ describe("the evidence-rich uncertified track (shape 2)", () => {
     ]);
   });
 
-  it("is indexable, and the sitemap carries it — the same expression on both sides", async () => {
+  it("submits an indexable track credited to an established listed artist", async () => {
     const row = await readTrackDestination(RICH);
     const bag = await collectSitemapBag("tracks");
 
     expect(row.kind === "found" && row.track.indexable).toBe(true);
     expect(bag.tracks.map((entry) => entry.trackId)).toContain(RICH);
+  });
+
+  it("keeps below-floor pages indexable while sitemap membership follows durable artist depth", async () => {
+    for (const [depth, submitted] of [
+      [199, false],
+      [200, true],
+      [201, true],
+    ] as const) {
+      await db.execute({
+        args: [depth],
+        sql: "update artists set renderable_track_count = ? where id = 'sitemap-artist'",
+      });
+      const row = await readTrackDestination(RICH);
+      const [stats, bag] = await Promise.all([
+        collectSitemapIndexStats(),
+        collectSitemapBag("tracks"),
+      ]);
+      expect(row.kind === "found" && row.track.indexable).toBe(true);
+      expect(bag.tracks.some((entry) => entry.trackId === RICH)).toBe(submitted);
+      expect(stats.tracks.count).toBe(bag.tracks.length);
+    }
+  });
+
+  it("requires a listed established credit and counts multiple qualifying credits once", async () => {
+    await db.execute("delete from track_artists where track_id = 'mb_rich-uncertified-1'");
+    expect((await readTrackDestination(RICH)).kind).toBe("found");
+    expect((await collectSitemapBag("tracks")).tracks).toEqual([]);
+    await db.execute(`update artists set mbid = '11111111-1111-4111-8111-111111111111'
+      where id = 'sitemap-artist'`);
+    await db.execute(`insert into artist_rules
+      (id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+      values ('unlisted', '11111111-1111-4111-8111-111111111111', 'Ashen Relay', 'unlisted', 'operator', '2026-01-01', '2026-01-01')`);
+    await db.execute(`insert into track_artists (track_id, artist_id, position)
+      values ('mb_rich-uncertified-1', 'sitemap-artist', 0)`);
+    expect((await collectSitemapBag("tracks")).tracks).toEqual([]);
+    for (const id of ["listed-one", "listed-two"]) {
+      await db.execute({
+        args: [id, id],
+        sql: `insert into artists (id, name, slug, renderable_track_count, created_at, updated_at)
+          values (?, 'Listed', ?, 200, '2026-01-01', '2026-01-01')`,
+      });
+      await db.execute({
+        args: [RICH, id],
+        sql: "insert into track_artists (track_id, artist_id, position) values (?, ?, 1)",
+      });
+    }
+    await db.execute(`update tracks set bpm = null, key = null, isrc = null,
+      preview_url = null, analyzed_at = null where track_id = 'mb_rich-uncertified-1'`);
+    const [stats, bag] = await Promise.all([
+      collectSitemapIndexStats(),
+      collectSitemapBag("tracks"),
+    ]);
+    expect(bag.tracks.map((entry) => entry.trackId)).toEqual([RICH]);
+    expect(stats.tracks.count).toBe(1);
   });
 
   it("is counted by the sitemap INDEX exactly as often as the child lists it", async () => {
@@ -260,11 +322,15 @@ describe("the evidence-rich uncertified track (shape 2)", () => {
     const instructions = program.rows.map((row) => ({
       opcode: typeof row.opcode === "string" ? row.opcode : "",
       p1: typeof row.p1 === "number" ? row.p1 : -1,
+      p2: typeof row.p2 === "number" ? row.p2 : -1,
       p4: typeof row.p4 === "string" ? row.p4 : "",
     }));
 
+    const tracksRoot = (
+      await db.execute("select rootpage from sqlite_master where name = 'tracks'")
+    ).rows[0]?.rootpage;
     expect(
-      instructions.filter(({ opcode, p4 }) => opcode === "OpenRead" && !p4.startsWith("k(")),
+      instructions.filter(({ opcode, p2 }) => opcode === "OpenRead" && p2 === tracksRoot),
     ).toHaveLength(0);
   });
 

@@ -1429,6 +1429,13 @@
       "when": 1793946279318,
       "tag": "0203_curly_hardball",
       "breakpoints": true
+    },
+    {
+      "idx": 204,
+      "version": "6",
+      "when": 1794748498874,
+      "tag": "0204_fearless_nighthawk",
+      "breakpoints": true
     }
   ]
 }

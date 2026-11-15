@@ -471,7 +471,7 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   `create index if not exists perf_${TRACK_PAGE_INDEXABLE_LEGACY_COUNT_INDEX}
     on perf_tracks(id) where ${trackPageIndexableWhere()}`,
   `create index if not exists perf_${TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX}
-    on perf_tracks(duplicate_of_track_id, dismissed_at, spotify_url, apple_music_url, album_id, release_date, album_image_url, title, artists_json)
+    on perf_tracks(duplicate_of_track_id, dismissed_at, spotify_url, apple_music_url, album_id, release_date, album_image_url, title, artists_json, duration_ms, id)
     where ${trackPageIndexableCoverIndexWhere()}`,
   `create index if not exists perf_tracks_fresh_catalogue_idx
     on perf_tracks(is_catalogue, release_date, id)`,
@@ -585,10 +585,12 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   `create index if not exists perf_tracks_label_scope_id_idx
     on perf_tracks(label_scope, id)`,
   `create table if not exists perf_artist_rules (
+    label_id text,
     artist_mbid text not null,
     rearmed_at text,
     verdict text not null
   )`,
+  `create index if not exists perf_artist_rules_label_id_idx on perf_artist_rules(label_id)`,
   `create index if not exists perf_artist_rules_crawl_lookup_idx
     on perf_artist_rules(artist_mbid, verdict, rearmed_at)`,
   `create table if not exists perf_crawl_due_work (
@@ -1137,7 +1139,7 @@ export async function* generateFixture(
         `synthetic-artist-image-key-${padded(index)}`,
         "resolved",
         syntheticTimestamp(index),
-        4,
+        index % 4 === 0 ? 200 : 4,
         (index % 8) + 1,
       ],
       sql: `insert or ignore into perf_artists
