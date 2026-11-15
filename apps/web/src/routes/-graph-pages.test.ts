@@ -164,6 +164,21 @@ beforeEach(() => {
 });
 
 describe("the label page", () => {
+  it("reads related findings only for a label without its own findings", async () => {
+    listRelatedFindings.mockResolvedValue(findings(2));
+    expect(await resolveLabelPageData(LABEL.slug, "name", 1)).toMatchObject({
+      related: findings(2),
+      status: "found",
+    });
+    getFindingsByLabel.mockResolvedValue(findings(1));
+    listRelatedFindings.mockClear();
+    expect(await resolveLabelPageData(LABEL.slug, "name", 1)).toMatchObject({
+      related: [],
+      status: "found",
+    });
+    expect(listRelatedFindings).not.toHaveBeenCalled();
+  });
+
   it("passes upcoming rows into their own page block", async () => {
     listLabelUpcoming.mockResolvedValue({
       findingTotal: 0,
@@ -404,6 +419,7 @@ describe("the album page", () => {
     listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(1));
 
     expect(await resolveAlbumPageData("wormhole")).toEqual({ status: "missing" });
+    expect(listRelatedFindings).not.toHaveBeenCalled();
   });
 
   it("404s on a slug with no album entity", async () => {
@@ -441,10 +457,12 @@ describe("the album page", () => {
     ]);
 
     getFindingsByAlbum.mockResolvedValue(findings(1));
+    listRelatedFindings.mockClear();
 
     const lit = await resolveAlbumPageData("wormhole");
 
     expect(lit.status === "found" && lit.related).toEqual([]);
+    expect(listRelatedFindings).not.toHaveBeenCalled();
   });
 
   it("serves the page when the related findings read fails", async () => {

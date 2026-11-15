@@ -44,21 +44,25 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     return { status: "missing" };
   }
 
-  const [findings, catalogue, artists, label, related, albumCover] = await Promise.all([
+  const [findings, catalogue, artists, label, albumCover] = await Promise.all([
     getFindingsByAlbum(album.id),
     listCatalogueTracksByAlbum(album.id),
     listArtistsByAlbum(album.id),
     getLabelForAlbum(album.id),
-    listRelatedFindings(
-      { albumId: album.id, kind: "album" },
-      { today: releaseTodayUtc(new Date()) },
-    ).catch((): TrackListItem[] => []),
     albumCoverUrl(album.id).catch((): string | undefined => undefined),
   ]);
 
   if (album.renderableTrackCount === 0) {
     return { status: "missing" };
   }
+
+  const related =
+    findings.length > 0
+      ? []
+      : await listRelatedFindings(
+          { albumId: album.id, kind: "album" },
+          { today: releaseTodayUtc(new Date()) },
+        ).catch((): TrackListItem[] => []);
 
   return {
     artists,
@@ -73,7 +77,7 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     indexable: album.renderableTrackCount >= ALBUM_INDEX_MIN_TRACKS,
     label,
     name: album.name,
-    related: findings.length > 0 ? [] : related,
+    related,
 
     releaseDate: album.releaseDate,
     releaseGroupMbid: album.releaseGroupMbid,
