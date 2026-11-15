@@ -162,17 +162,25 @@ async function fanOut(notification: {
     to,
   }));
 
-  const settled = await Promise.allSettled(
-    chunkMessages(messages).map((chunk) => sendChunk(accessToken, chunk)),
-  );
+  const chunks = chunkMessages(messages);
+  const settled = await Promise.allSettled(chunks.map((chunk) => sendChunk(accessToken, chunk)));
 
-  const tickets = settled.flatMap((outcome) =>
-    outcome.status === "fulfilled" ? outcome.value : [],
-  );
+  const delivered = settled.flatMap((outcome, chunkIndex) => {
+    const chunk = chunks[chunkIndex];
+    if (outcome.status !== "fulfilled" || !chunk || outcome.value.length !== chunk.length) {
+      return [];
+    }
+    return outcome.value.flatMap((ticket, position) => {
+      const token = chunk[position]?.to;
+      return token ? [{ ticket, token }] : [];
+    });
+  });
 
-  await reapImmediateDeadTokens(db, messages, tickets);
-  await parkReceipts(db, messages, tickets);
+  await reapImmediateDeadTokens(db, delivered);
+  await parkReceipts(db, delivered);
 }
+
+type DeliveredTicket = { ticket: ExpoTicket; token: string };
 
 function expoRequest<T>(
   url: string,
@@ -216,40 +224,26 @@ async function sendChunk(accessToken: string, chunk: ExpoMessage[]): Promise<Exp
   );
 }
 
-function ticketToken(messages: ExpoMessage[], index: number): string | undefined {
-  return messages[index]?.to;
-}
-
 async function reapImmediateDeadTokens(
   db: Awaited<ReturnType<typeof getDb>>,
-  messages: ExpoMessage[],
-  tickets: ExpoTicket[],
+  delivered: DeliveredTicket[],
 ): Promise<void> {
-  const dead = tickets
-    .map((ticket, index) =>
-      ticket.status === "error" && ticket.details?.error === "DeviceNotRegistered"
-        ? ticketToken(messages, index)
-        : undefined,
+  const dead = delivered
+    .filter(
+      ({ ticket }) => ticket.status === "error" && ticket.details?.error === "DeviceNotRegistered",
     )
-    .filter((token): token is string => Boolean(token));
+    .map(({ token }) => token);
 
   await deleteTokens(db, dead);
 }
 
 async function parkReceipts(
   db: Awaited<ReturnType<typeof getDb>>,
-  messages: ExpoMessage[],
-  tickets: ExpoTicket[],
+  delivered: DeliveredTicket[],
 ): Promise<void> {
   const now = new Date().toISOString();
-  const statements = tickets.flatMap((ticket, index) => {
+  const statements = delivered.flatMap(({ ticket, token }) => {
     if (ticket.status !== "ok" || !ticket.id) {
-      return [];
-    }
-
-    const token = ticketToken(messages, index);
-
-    if (!token) {
       return [];
     }
 

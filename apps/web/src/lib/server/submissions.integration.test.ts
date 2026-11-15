@@ -67,6 +67,26 @@ describe("validateSubmissionInput (pure unit, no DB)", () => {
   });
 });
 
+describe("validateSubmissionInput text fields", () => {
+  it.each([
+    ["an escape sequence in the note", { note: "hi \u001b[2J there" }],
+    ["a bell in the contact", { contact: "me\u0007" }],
+    ["a C1 control in the note", { note: "hi \u009b31m" }],
+    ["a DEL in the album", { album: "Album\u007f" }],
+  ])("rejects %s", async (_label, overrides) => {
+    const { validateSubmissionInput } = await import("./submissions");
+
+    expect(() => validateSubmissionInput(baseInput(overrides))).toThrowError(/Invalid text field/);
+  });
+
+  it("keeps a multi-line note with tabs", async () => {
+    const { validateSubmissionInput } = await import("./submissions");
+
+    const result = validateSubmissionInput(baseInput({ note: "line one\r\n\tline two" }));
+    expect(result.note).toBe("line one\r\n\tline two");
+  });
+});
+
 describe("approveSubmission (real SQL status guard)", () => {
   beforeEach(async () => {
     db = await createIntegrationDb();

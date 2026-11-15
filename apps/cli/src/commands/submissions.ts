@@ -5,6 +5,7 @@ import {
 } from "@fluncle/contracts";
 import { createInterface } from "node:readline/promises";
 import { adminApiGet, adminApiPost } from "../api";
+import { terminalSafe } from "../format";
 import { CliError, printJson } from "../output";
 import { addCommand } from "./add";
 
@@ -118,7 +119,7 @@ export async function triageSubmissionCommand(
   }
 
   console.log(
-    `Triaged ${formatTrackLine(response.submission)}: ${response.submission.triageVerdict ?? ""}`,
+    `Triaged ${formatTrackLine(response.submission)}: ${terminalSafe(response.submission.triageVerdict ?? "")}`,
   );
 }
 
@@ -153,31 +154,35 @@ async function confirm(label: string): Promise<boolean> {
 }
 
 function formatSubmissionSummary(submission: Submission): string {
-  return [
-    `${submission.id}`,
-    `${formatTrackLine(submission)} (${submission.source})`,
-    submission.contact ? `Contact: ${submission.contact}` : undefined,
-    submission.note ? `Note: ${submission.note}` : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return terminalSafe(
+    [
+      `${submission.id}`,
+      `${formatTrackLine(submission)} (${submission.source})`,
+      submission.contact ? `Contact: ${submission.contact}` : undefined,
+      submission.note ? `Note: ${submission.note}` : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
 }
 
 function formatSubmissionDetail(submission: Submission): string {
-  return [
-    `${submission.id}`,
-    formatTrackLine(submission),
-    `Status: ${submission.status}`,
-    `Source: ${submission.source}`,
-    `Created: ${submission.createdAt}`,
-    submission.contact ? `Contact: ${submission.contact}` : undefined,
-    submission.note ? `Note: ${submission.note}` : undefined,
-    `Spotify: ${submission.spotifyUrl}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return terminalSafe(
+    [
+      `${submission.id}`,
+      formatTrackLine(submission),
+      `Status: ${submission.status}`,
+      `Source: ${submission.source}`,
+      `Created: ${submission.createdAt}`,
+      submission.contact ? `Contact: ${submission.contact}` : undefined,
+      submission.note ? `Note: ${submission.note}` : undefined,
+      `Spotify: ${submission.spotifyUrl}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
 }
 
 function formatTrackLine(submission: Submission): string {
-  return `${submission.artists.join(", ")} — ${submission.title}`;
+  return terminalSafe(`${submission.artists.join(", ")} — ${submission.title}`);
 }

@@ -2260,6 +2260,53 @@ describe("sweep commands surface partial failure", () => {
   });
 });
 
+function controlCharacterCodes(text: string): number[] {
+  const codes: number[] = [];
+  for (const character of text) {
+    const code = character.codePointAt(0) ?? 0;
+    if ((code < 0x20 && code !== 0x0a) || (code >= 0x7f && code <= 0x9f)) {
+      codes.push(code);
+    }
+  }
+  return codes;
+}
+
+describe("admin submissions output", () => {
+  testCli("listing and reviewing never print control characters from submission text", async () => {
+    const submission = {
+      artists: ["Artist\u001b[2J"],
+      contact: "contact\u001b]0;title\u0007",
+      createdAt: "2026-11-15T00:00:00.000Z",
+      id: "sub_1",
+      note: "first line\u009b31m\nsecond line",
+      source: "web",
+      spotifyTrackId: "track",
+      spotifyUrl: "https://open.spotify.com/track/track",
+      status: "pending",
+      title: "Title\r\u001b[1A",
+    };
+
+    await withStubApi(
+      (_req, url) =>
+        url.pathname === "/api/v1/admin/submissions"
+          ? Response.json({ submissions: [submission] })
+          : Response.json({ submission }),
+      async (baseUrl) => {
+        const env = { FLUNCLE_API_BASE_URL: baseUrl, FLUNCLE_API_TOKEN: "test-token" };
+        const list = await runCli(["admin", "submissions"], env);
+        const review = await runCli(["admin", "submissions", "review", "sub_1"], env);
+
+        for (const result of [list, review]) {
+          expect(result.exitCode).toBe(0);
+          expect(controlCharacterCodes(result.stdout)).toEqual([]);
+          expect(result.stdout).toContain("Artist[2J — Title[1A");
+          expect(result.stdout).toContain("Note: first line31m\nsecond line");
+        }
+      },
+    );
+  });
+});
+
 async function withStubApi(
   handler: (req: Request, url: URL) => Promise<Response> | Response,
   fn: (baseUrl: string) => Promise<void>,
