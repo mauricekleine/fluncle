@@ -5,7 +5,7 @@ describe("presence redirects", () => {
   it.each(["GET", "HEAD"])(
     "permanently trims trailing slashes for %s while preserving origin and search",
     (method) => {
-      for (const host of ["www.fluncle.com", "status.fluncle.com", "mirror.onion"]) {
+      for (const host of ["www.fluncle.com", "mirror.onion"]) {
         const response = presenceRedirect(
           new Request(`https://${host}/albums///?page=2&tag=a%2Fb`, { method }),
         );
@@ -45,6 +45,18 @@ describe("presence redirects", () => {
     ).toBe("https://status.fluncle.com/");
   });
 
+  it("redirects status page paths to www with their query intact", () => {
+    for (const method of ["GET", "HEAD"]) {
+      const response = presenceRedirect(
+        new Request("https://status.fluncle.com/album/example/?q=a%2Fb", { method }),
+      );
+      expect(response?.status).toBe(308);
+      expect(response?.headers.get("location")).toBe(
+        "https://www.fluncle.com/album/example?q=a%2Fb",
+      );
+    }
+  });
+
   it("preserves runtime requests and host roots", () => {
     const paths = [
       "/",
@@ -59,7 +71,7 @@ describe("presence redirects", () => {
       "/manifest.webmanifest",
       "/fluncle.png",
     ];
-    for (const host of ["radio", "galaxy"]) {
+    for (const host of ["status", "radio", "galaxy"]) {
       for (const path of paths) {
         for (const method of ["GET", "HEAD"]) {
           expect(
@@ -99,14 +111,13 @@ describe("presence redirects", () => {
     );
   });
 
-  it("preserves other methods, slashless status pages, and unrelated hosts", () => {
+  it("preserves other methods and unrelated hosts", () => {
     for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
       expect(
         presenceRedirect(new Request("https://radio.fluncle.com/albums/", { method })),
       ).toBeUndefined();
     }
     for (const host of [
-      "status.fluncle.com",
       "www.fluncle.com",
       "galaxy.example.com",
       "radio.fluncle.com.example.com",

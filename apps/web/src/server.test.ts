@@ -397,8 +397,8 @@ describe("server.ts shared-cache isolation", () => {
     const status = await dispatchAndSettle("https://status.fluncle.com/albums", {
       accept: "text/html",
     });
-    expect(await status.text()).toBe("surface document");
-    expect(status.headers.get("x-robots-tag")).toBe("noindex");
+    expect(status.status).toBe(308);
+    expect(status.headers.get("location")).toBe("https://www.fluncle.com/albums");
     expect(status.headers.get("x-edge-cache")).toBeNull();
     await dispatchAndSettle("https://status.fluncle.com/artists", { accept: "text/html" });
     for (const host of ["status", "radio", "galaxy"]) {
