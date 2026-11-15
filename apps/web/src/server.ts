@@ -1,3 +1,4 @@
+import { isMalformedEntityPagePath } from "./lib/entity-page-path";
 import * as Sentry from "@sentry/cloudflare";
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { waitUntil } from "cloudflare:workers";
@@ -37,6 +38,10 @@ const serverEntry = createServerEntry({
 const NULL_ID_PATH = /^\/(?:track|log)\/null\/?$/;
 
 async function dispatch(request: Request): Promise<Response> {
+  if (isMalformedEntityPagePath(new URL(request.url).pathname)) {
+    return new Response(null, { status: 404 });
+  }
+
   const orpc = await handleOrpc(request);
 
   if (orpc) {

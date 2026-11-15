@@ -13,6 +13,9 @@ const hoisted = vi.hoisted(() => {
     new Response("router-sentinel", { headers: { "content-type": "text/html" }, status: 200 });
 
   return {
+    getDb: vi.fn(() => {
+      throw new Error("Unexpected database access");
+    }),
     handleAgentDiscovery: vi.fn(
       async (_request: Request): Promise<Response | undefined> => undefined,
     ),
@@ -54,6 +57,11 @@ vi.mock("./lib/server/agent-discovery", async (importOriginal) => {
   };
 });
 
+vi.mock("./lib/server/db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./lib/server/db")>()),
+  getDb: hoisted.getDb,
+}));
+
 const worker = (await import("./server")).default as unknown as {
   fetch: (request: Request) => Promise<Response>;
 };
@@ -75,6 +83,7 @@ beforeEach(() => {
   hoisted.routerFetch.mockReset();
   hoisted.routerFetch.mockImplementation(async () => hoisted.makeRouterResponse());
   hoisted.sentryFetch.mockClear();
+  hoisted.getDb.mockClear();
 });
 
 describe("server.ts dispatch spine", () => {
@@ -770,4 +779,58 @@ describe("server.ts security headers", () => {
     expect(response.headers.get("reporting-endpoints")).toBeNull();
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
   });
+});
+
+describe("impossible entity paths", () => {
+  it.each(["album", "artist", "label", "track"])(
+    "rejects malformed %s paths before application dispatch",
+    async (kind) => {
+      for (const value of [
+        "format=auto/https:/found.fluncle.com/albums/x.jpg",
+        "bad%2Fslug",
+        "bad%2F",
+        "bad%3Aslug",
+        "bad%3Dslug",
+        "https",
+        "%ZZ",
+        "bad.slug",
+        "",
+      ]) {
+        const response = await dispatch(`https://www.fluncle.com/${kind}/${value}`);
+        expect(response.status).toBe(404);
+      }
+      expect(hoisted.getDb).not.toHaveBeenCalled();
+      expect(hoisted.routerFetch).not.toHaveBeenCalled();
+      expect(hoisted.handleMcp).not.toHaveBeenCalled();
+      expect(hoisted.handleAgentDiscovery).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("valid entity paths", () => {
+  it.each([
+    "/album/some-album",
+    "/artist/4am-kru",
+    "/label/1985",
+    "/artist/some-artist.fresh.xml",
+    "/label/some-label.fresh.xml",
+    "/track/mb_1234-abcd",
+    "/track/4uLU6hMCjMI75M1A2tKUQC",
+  ])("preserves router dispatch for %s", async (path) => {
+    await dispatch(`https://www.fluncle.com${path}`);
+    expect(hoisted.routerFetch).toHaveBeenCalledOnce();
+  });
+});
+
+describe("trailing-slash entity paths", () => {
+  it.each(["/album/some-album//", "/artist/4am-kru///"])(
+    "redirects %s to its canonical page",
+    async (path) => {
+      const response = await dispatch(`https://www.fluncle.com${path}`);
+      expect(response.status).toBe(308);
+      expect(response.headers.get("location")).toBe(
+        `https://www.fluncle.com${path.replace(/\/+$/, "")}`,
+      );
+    },
+  );
 });
