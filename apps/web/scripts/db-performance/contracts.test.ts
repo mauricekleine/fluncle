@@ -130,6 +130,9 @@ describe("database performance contracts", () => {
         .replaceAll("tracks.track_id", "perf_tracks.id")
         .replace(/\btracks\b/g, "perf_tracks")
         .replace(/\balbums\b/g, "perf_albums")
+        .replace(/\btrack_artists\b/g, "perf_track_artists")
+        .replace(/\bartist_rules\b/g, "perf_artist_rules")
+        .replace(/\bartists\b/g, "perf_artists")
         .replace(/\bsearch_page_versions\b/g, "perf_search_page_versions")
         .replace("select perf_tracks.id,", "select perf_tracks.id as track_id,"),
     );

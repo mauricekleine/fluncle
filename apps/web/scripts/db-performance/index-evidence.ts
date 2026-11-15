@@ -1711,8 +1711,12 @@ function productionLockSpec(reference: ProductionLockContract): ProductionLockCo
     const production = trackSitemapIndexCountStatement();
     const locked = statement(
       production.sql
+        .replaceAll("tracks.track_id", "perf_tracks.id")
         .replaceAll("tracks_sitemap_indexable_cover_idx", "perf_tracks_sitemap_indexable_cover_idx")
-        .replace(/\btracks\b/g, "perf_tracks"),
+        .replace(/\btracks\b/g, "perf_tracks")
+        .replace(/\btrack_artists\b/g, "perf_track_artists")
+        .replace(/\bartist_rules\b/g, "perf_artist_rules")
+        .replace(/\bartists\b/g, "perf_artists"),
       production.args,
     );
     const unforced = statement(

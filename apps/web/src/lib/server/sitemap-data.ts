@@ -53,12 +53,12 @@ import {
 } from "./labels";
 import { purgePathsNow, SITEMAP_CACHE_POLICY } from "./edge-cache";
 import {
-  countIndexableTrackPages,
+  countTrackSitemapPages,
   listTrackSitemapRows,
   maxTrackSitemapLastmod,
   trackSitemapWindowStatement,
-  TRACK_PAGE_INDEXABLE_WHERE,
 } from "./track-page";
+import { TRACK_SITEMAP_WHERE } from "./track-sitemap-membership";
 import { getMixChainDepth } from "./tracks";
 type SitemapWindow = { after?: string; limit: number };
 
@@ -116,7 +116,7 @@ export function sitemapBoundaryStatement(
         args: [start, limit],
         sql: `select max(track_id) as boundary, count(*) as n from (
                 select tracks.track_id from tracks
-                where tracks.track_id ${operator} ? and ${TRACK_PAGE_INDEXABLE_WHERE}
+                where tracks.track_id ${operator} ? and ${TRACK_SITEMAP_WHERE}
                 order by tracks.track_id asc limit ?
               )`,
       };
@@ -444,7 +444,7 @@ async function readSitemapAggregates(): Promise<SitemapAggregates> {
     countIndexableArtists(),
     countIndexableLabels(),
     countIndexableAlbums(),
-    countIndexableTrackPages(),
+    countTrackSitemapPages(),
     maxTrackSitemapLastmod(),
     maxGalaxySitemapLastmod(GALAXY_INDEX_MIN_FINDINGS),
   ]);
@@ -524,7 +524,7 @@ async function sitemapWindowCount(kind: SitemapSqlWindowedKind): Promise<number>
     case "logbook":
       return (await readLogbookKindStats()).count;
     case "tracks":
-      return countIndexableTrackPages();
+      return countTrackSitemapPages();
   }
 }
 

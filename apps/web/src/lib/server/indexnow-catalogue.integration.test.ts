@@ -26,7 +26,7 @@ async function seedCatalogue(count = 3): Promise<void> {
     [
       {
         args: [ORIGINAL, ORIGINAL],
-        sql: "insert into artists (id,name,slug,created_at,updated_at,renderable_track_count,certified_finding_count) values ('artist','Artist','artist',?,?,3,1)",
+        sql: "insert into artists (id,name,slug,created_at,updated_at,renderable_track_count,certified_finding_count) values ('artist','Artist','artist',?,?,200,1)",
       },
       {
         args: [ORIGINAL, ORIGINAL],
@@ -541,12 +541,26 @@ describe("catalogue claims and acknowledgements", () => {
     const before = await versions();
     const result = await claimIndexNowCatalogue();
     expect(result.due).toBe(8);
-    expect(result.items).toHaveLength(6);
-    expect(result.items.some((item) => item.kind === "artist" || item.subjectId === "000001")).toBe(
+    expect(result.items).toHaveLength(4);
+    expect(result.items.some((item) => item.kind === "artist" || item.kind === "track")).toBe(
       false,
     );
     expect(fetch).not.toHaveBeenCalled();
     expect(await versions()).toEqual(before);
+  });
+
+  it("excludes below-floor track versions from claims and prunes them while the artist stays submitted", async () => {
+    await seedCatalogue();
+    await walkAll();
+    await db.execute("update artists set renderable_track_count = 199");
+    const claim = await claimIndexNowCatalogue();
+    expect(claim.items.filter((item) => item.kind === "track")).toEqual([]);
+    expect(claim.items.some((item) => item.kind === "artist")).toBe(true);
+    expect(await walkIndexNowCatalogue({ kind: "track" })).toMatchObject({
+      checked: 0,
+      removed: 3,
+    });
+    expect((await versions()).some((row) => row.kind === "track")).toBe(false);
   });
 
   it("prunes departed subjects of every kind and counts due versions through the partial index", async () => {
@@ -561,7 +575,7 @@ describe("catalogue claims and acknowledgements", () => {
     const executed = vi.spyOn(db, "execute");
     const claim = await claimIndexNowCatalogue();
     expect(claim.due).toBe(8);
-    expect(claim.items).toHaveLength(2);
+    expect(claim.items).toHaveLength(0);
     const statement = executed.mock.calls.at(-1)?.[0] as InStatement;
     const query = typeof statement === "string" ? { sql: statement } : statement;
     const plan = await db.execute({ ...query, sql: `explain query plan ${query.sql}` });
@@ -574,6 +588,7 @@ describe("catalogue claims and acknowledgements", () => {
     for (const kind of ["artist", "label", "album"] as const) {
       expect(await walkIndexNowCatalogue({ kind })).toMatchObject({ checked: 0, removed: 1 });
     }
+    await db.execute("update artists set renderable_track_count = 200");
     expect(await walkIndexNowCatalogue({ kind: "track" })).toMatchObject({
       checked: 2,
       removed: 1,
@@ -666,9 +681,10 @@ describe("catalogue claims and acknowledgements", () => {
       "log:001.0.0B",
       "log:001.0.0A",
       ...["artist", "label", "album"].flatMap((kind) =>
-        ["most", "wide", "recent-a", "recent-b", kind, "undated", "empty"].map(
-          (id) => `${kind}:${id}`,
-        ),
+        (kind === "artist"
+          ? ["most", kind, "wide", "recent-a", "recent-b", "undated", "empty"]
+          : ["most", "wide", "recent-a", "recent-b", kind, "undated", "empty"]
+        ).map((id) => `${kind}:${id}`),
       ),
       "track:000005",
       "track:000002",
@@ -736,6 +752,9 @@ describe("catalogue claims and acknowledgements", () => {
     await db.execute("update tracks set title = 'Later change' where track_id = '000001'");
     await db.execute(
       "insert into tracks (track_id,title,artists_json,duration_ms,is_catalogue,album_id,release_date,album_image_url,spotify_url) values ('new','New','[\"Artist\"]',270000,1,'album','2026-07-01','https://example.com/cover.jpg','https://example.com/listen')",
+    );
+    await db.execute(
+      "insert into track_artists (track_id, artist_id, position) values ('new', 'artist', 0)",
     );
     await walkIndexNowCatalogue({ kind: "track" });
     const before = await versions();

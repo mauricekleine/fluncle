@@ -25,7 +25,7 @@ import { isPerformanceTimeoutError } from "./registry";
 export const MATERIALIZED_FIXTURE_DATABASE_FILE = "fixture.sqlite3";
 export const MATERIALIZED_FIXTURE_MANIFEST_FILE = "fixture-manifest.json";
 
-export const PERFORMANCE_FIXTURE_FORMAT_VERSION = 6;
+export const PERFORMANCE_FIXTURE_FORMAT_VERSION = 7;
 
 export type PerformanceFixtureIdentity = {
   canonicalCountsSha256: string;

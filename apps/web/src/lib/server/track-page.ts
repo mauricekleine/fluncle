@@ -12,10 +12,10 @@ import { listedArtistWhere } from "./artist-visibility";
 import {
   TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX,
   trackPageIdentityWhere,
-  trackPageIndexableCountQueryWhere,
   trackPageIndexableWhere,
 } from "../../db/track-page-indexability";
 import { publicTrackOk, publicTrackWhere } from "../../db/public-track-visibility";
+import { TRACK_SITEMAP_WHERE, trackSitemapWhere } from "./track-sitemap-membership";
 import { searchSonarPublicCatalogue } from "./sonar-public-catalogue";
 
 export const TRACK_PAGE_IDENTITY_WHERE = trackPageIdentityWhere("tracks");
@@ -510,7 +510,7 @@ export type TrackSitemapRow = {
   trackId: string;
 };
 
-export async function countIndexableTrackPages(): Promise<number> {
+export async function countTrackSitemapPages(): Promise<number> {
   const db = await getDb();
   const result = await db.execute(trackSitemapIndexCountStatement());
 
@@ -522,10 +522,10 @@ export function trackSitemapIndexCountStatement() {
     args: [],
     sql: `select coalesce(sum(total), 0) as total from (
         select count(*) as total from tracks indexed by ${TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX}
-        where ${trackPageIndexableCountQueryWhere("spotify", "tracks")}
+        where ${trackSitemapWhere("spotify")}
         union all
         select count(*) as total from tracks indexed by ${TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX}
-        where ${trackPageIndexableCountQueryWhere("appleOnly", "tracks")}
+        where ${trackSitemapWhere("appleOnly")}
       )`,
   };
 }
@@ -541,7 +541,7 @@ export function trackSitemapWindowStatement(limit: number, afterTrackId?: string
                  (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at
           from tracks
           left join search_page_versions version on version.kind = 'track' and version.subject_id = tracks.track_id
-          where ${seek} and ${TRACK_PAGE_INDEXABLE_WHERE}
+          where ${seek} and ${TRACK_SITEMAP_WHERE}
           order by tracks.track_id
           limit ?`,
   };
@@ -577,8 +577,8 @@ export async function maxTrackSitemapLastmod(): Promise<string | undefined> {
   const db = await getDb();
   const result = await db.execute({
     sql: `select version.changed_at as lastmod from search_page_versions version
-          cross join tracks on tracks.track_id = version.subject_id
-          where version.kind = 'track' and ${TRACK_PAGE_INDEXABLE_WHERE}
+          cross join tracks indexed by sqlite_autoindex_tracks_1 on tracks.track_id = version.subject_id
+          where version.kind = 'track' and ${TRACK_SITEMAP_WHERE}
           order by version.changed_at desc limit 1`,
   });
 

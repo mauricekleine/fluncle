@@ -29,9 +29,9 @@ The `get_track` identity projection resolves track IDs, Log IDs, ISRCs, and Musi
 
 Apple Music links from MusicKit appear on Fluncle's own pages, but machine-served identity answers report that platform as unsupported under the Apple Developer Program License Agreement's MusicKit redistribution limits. Spotify follow links use `/out/spotify/<trackId>` to resolve Fluncle’s archive track ID, never a caller-supplied Spotify ID. Unknown rows and rows without a stored Spotify destination return 404; successful redirects stay privately and briefly cached so each hop remains countable. This protects the metered mapping for crawler-born rows, while publish-born finding IDs can coincide with Spotify IDs; JSON-LD `sameAs` retains the raw identity URL. Identity lookup limits count keys, including every ISRC in a batch, against both a burst and a daily allowance. The limiter uses the edge-provided client IP or signed-in user ID, and its abuse alerts identify a hashed bucket rather than storing the IP address.
 
-## The two predicates
+## Page eligibility and sitemap submission
 
-They live together in [`apps/web/src/lib/server/track-page.ts`](../apps/web/src/lib/server/track-page.ts) and answer different questions. Collapsing them would be a defect.
+The identity and indexability predicates answer whether a page exists and whether it allows indexing. Sitemap membership answers which indexable pages Fluncle actively submits. These are separate decisions.
 
 **Sufficient identity** (`TRACK_PAGE_IDENTITY_WHERE`) decides whether the page **exists**: the archive can name the recording (a title and at least one artist credit) and no operator stamp has retired it (`dismissed_at`). Below it the route 404s. It is deliberately the lowest honest bar — a page for a row with no name is a page about nothing, and everything richer is evidence.
 
@@ -50,19 +50,23 @@ Its client-side twin, `hasTrackPageIdentity`, is what a rendered LIST row calls 
 
 plus `is_catalogue = 1` (a certified row's destination is `/log`, and a 301 must never be submitted for indexing) and `duplicate_of_track_id is null` (so is a stamped twin's).
 
-The indexability predicate also applies the shared public catalogue rule. The track sitemap count reads duration and title from its covering index, while the child window uses the same runtime predicate as the page. The count index includes duration because a hosted cold read with duration as a base-table residual took 19.7 seconds on 67,369 indexable tracks. Title was already one of its keys, so the spoken-word half stays index-only: a read-only hosted run on 2026-09-27 counted 68,002 entries in 205–250 ms with the qualifier terms against 223–369 ms without them.
+The indexability predicate also applies the shared public catalogue rule. Tempo, key, ISRC, label, preview availability and sonic neighbours enrich the page without gating its robots directive. A sweep backlog does not revoke an otherwise indexable page.
 
-Tempo, key, ISRC, label, the preview and the neighbours are **not** gates. They are enrichment, and gating on them would make indexability oscillate with a sweep's backlog.
+A page that clears identity but not evidence serves **200**, carries every link, and remains crawlable and citable. It renders `noindex, follow` and stays out of the sitemap, as `/identity/<key>` and a below-floor `/album/<slug>` do.
 
-A page that clears identity but not evidence still serves **200**, still carries every link, and is still crawlable and citable. It renders `noindex, follow` and stays out of the sitemap — the same posture `/identity/<key>` and a below-floor `/album/<slug>` already take.
+### The submission tier
 
-### One definition, two consumers
+**Sitemap membership** (`TRACK_SITEMAP_WHERE`) requires the full indexability predicate plus at least one credit to a listed artist with **200 or more renderable tracks**. The artist qualifies through the same stored depth count the artist hub uses, and the shared artist visibility rule excludes unlisted acts. An artist's catalogue depth is a durable graph fact: ordinary crawling increases it, and analysis retries, capture queues and embedding work do not reset it. Deletions, dismissals and operator corrections can legitimately reduce it. Multiple qualifying credits still submit the track once.
 
-The page's robots directive and the sitemap's membership **cannot drift**, because they are not two rules. [`src/db/track-page-indexability.ts`](../apps/web/src/db/track-page-indexability.ts) is the schema, runtime, and fixture source for the predicate; the page asks the database to evaluate its `tracks`-qualified `TRACK_PAGE_INDEXABLE_WHERE` form as a **column of the same select that loads the row**, and the sitemap membership read puts that identical string in its `where`. One expression, one source.
+This tier concentrates finite crawl demand around established artist catalogues. It favors catalogue depth rather than claiming musical quality; emerging artists and smaller catalogues can have indexable pages outside the submitted set. A page that passes indexability but falls below this submission tier still serves **200**, permits indexing and keeps its internal links. Sitemap exclusion changes neither page robots nor the destination's response.
 
-### Why it is a conjunction of simple terms
+### Shared definitions, separate decisions
 
-It could have been a weighted score, and a score would have been prettier and unusable. This predicate runs over the whole `tracks` table for the sitemap — a table the crawler grows without bound — so it has to stay a shape the planner can drive off an index. The sitemap count drives its two Spotify-or-Apple branches from the existing catalogue covering index and reads the track row for the duration residual, so their sum remains exact without rebuilding that index. The child keyset window remains on `tracks_catalogue_active_track_id_idx`. The shared predicate keeps identity and evidence terms in one source; its index form omits only the duration condition, which the runtime adds when deciding page and sitemap membership.
+[`src/db/track-page-indexability.ts`](../apps/web/src/db/track-page-indexability.ts) owns the schema, runtime and fixture forms of page indexability. The page evaluates its `tracks`-qualified form as a column of the row-loading select. [`src/lib/server/track-sitemap-membership.ts`](../apps/web/src/lib/server/track-sitemap-membership.ts) composes that predicate with the artist-depth rule once; sitemap counts, boundaries, child windows, per-kind lastmod and IndexNow's walk and live claim filters all use that membership definition. Sitemap membership implies indexability; indexability alone does not imply sitemap membership.
+
+### Index-driven reads
+
+The sitemap count splits Spotify and Apple-only destinations into disjoint branches over `tracks_sitemap_indexable_cover_idx`. Its keys carry the identity, evidence, public-track fields and track ID, so the count reads track facts from the index and checks credits through the track-artist primary key and each artist's primary key. The child and boundary windows seek `track_id` through `tracks_catalogue_active_track_id_idx`, apply the same membership predicate in SQL, and cap the result before hydration. Neither path loads the catalogue into application memory or uses offsets.
 
 `is_catalogue` is internal bookkeeping, used to **select** and never to **render**.
 
@@ -122,7 +126,7 @@ Sonar is the complete-corpus serving path, behind its own dark flag (`sonar_trac
 
 **The window is in SQL.** Archive tracks, artists, labels, albums, and logbook entries derive the requested child's boundary through capped keyset seeks, then read exactly one SQL window; the builder does not slice those bags a second time. Tracks seek `track_id` without an offset — a primary key order that remains stable while the crawl grows underneath a crawler walking the children one at a time. Findings and galaxies remain in memory because their established concatenated or derived order is not served by an existing index; changing either would require a separate schema decision.
 
-**A track entry carries the observed content-change date.** The daily IndexNow walk fingerprints the fields its public page displays and records the first observation of each material version in `search_page_versions`. Track windows join that ledger by its primary key, and the sitemap index seeks the newest still-indexable version through the kind/date index. An unobserved track remains undated until the first walk; release dates and processing attempts do not stand in for page changes. Editing a track's title moves its own observed date. Related artist, album and label dates move when their own displayed facts or maintained counts and release summary change.
+**A track entry carries the observed content-change date.** The daily IndexNow walk fingerprints the fields its public page displays and records the first observation of each material version in `search_page_versions`. Track windows join that ledger by its primary key, and the sitemap index seeks the newest still-submitted version through the kind/date index. An unobserved track remains undated until the first walk; release dates and processing attempts do not stand in for page changes. Editing a track's title moves its own observed date. Related artist, album and label dates move when their own displayed facts or maintained counts and release summary change.
 
 The static `pages` child reads only the timestamps and launch gates its fixed URLs need. It does not count track destinations or entity pages; those four cardinality queries belong to the sitemap index alone. `sitemap-data.integration.test.ts` verifies the query boundary and parity of the index and child timestamps against the actual rows.
 

@@ -258,6 +258,7 @@ export const tracks = sqliteTable(
         table.title,
         table.artistsJson,
         table.durationMs,
+        table.trackId,
       )
       .where(sql.raw(trackPageIndexableCoverIndexWhere())),
 
