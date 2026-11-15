@@ -81,13 +81,12 @@ Use the globally installed `mk-agent-orchestration` skill for provider, model, e
 - MUST: Start long local gates once in the harness background, wait on their job handle or completion event, then read the receipt; use that result for unchanged source instead of supervising logs or processes.
 - Edit hooks format the touched file. Quality Checks owns the full matrix; `deploy:gate` checks what the Worker build deploys. For docs-only changes, verify formatting, links, and readability.
 - Read [docs/development.md#quality-checks](./docs/development.md#quality-checks) for package-specific commands; read [docs/quality-system.md](./docs/quality-system.md) before changing CI, the classifier, or deploy verification.
-- Use guards, early returns, `??`, or `?.` instead of TypeScript non-null assertions, enforced by lint.
 - Formatting uses the pinned Bun release's `bun fmt`, with `flavor = "oxfmt"` in `bunfig.toml` and exclusions in `.oxfmtrc.json`. Lint still trials Bun canary through `scripts/bun-canary.ts` and `.oxlintrc.json`; CI, `deploy:gate` and the audit box install it from npm when absent.
 - For browser inspection use the global `agent-browser` skill; use Chrome DevTools MCP for performance traces.
 
 ## Library and API Docs
 
-- MUST: When current library, framework, SDK, API, CLI, or cloud-service docs would help, fetch them through Context7 if it is connected: `resolve-library-id` (skip it when given an exact `/org/project` ID), then `query-docs` with the full question. When Context7 is unavailable or cannot resolve the source, use the vendor's official docs.
+- Use the vendor's official docs for current library, framework, SDK, API, CLI and cloud-service behavior.
 
 ## Docs
 
