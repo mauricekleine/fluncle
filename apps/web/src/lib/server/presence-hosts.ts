@@ -27,7 +27,7 @@ export function presenceRedirect(request: Request): Response | undefined {
   const url = new URL(request.url);
   const surface = subdomainSurfaceRoute(url.hostname);
   const runtime =
-    url.pathname === "/" ||
+    /^\/+$/.test(url.pathname) ||
     RUNTIME_PREFIXES.some((prefix) => url.pathname.startsWith(prefix)) ||
     RUNTIME_FILES.has(url.pathname) ||
     (surface === "/galaxy" && GALAXY_FILES.has(url.pathname));

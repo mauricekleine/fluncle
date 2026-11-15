@@ -42,7 +42,7 @@ describe("presence redirects", () => {
     }
     expect(
       presenceRedirect(new Request("https://status.fluncle.com///"))?.headers.get("location"),
-    ).toBe("https://www.fluncle.com/");
+    ).toBe("https://status.fluncle.com/");
   });
 
   it("redirects status page paths to www with their query intact", () => {
