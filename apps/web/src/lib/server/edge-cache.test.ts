@@ -26,6 +26,7 @@ import {
   SWR_SECONDS,
   withEdgeCache,
 } from "./edge-cache";
+import { markRenderDegraded, runWithDatabaseRequestScope } from "./database-request-scope";
 
 const assets = vi.hoisted(
   () =>
@@ -862,6 +863,39 @@ describe("withEdgeCache", () => {
       }
     },
   );
+
+  it("neither stores a render that omitted optional data nor evicts the good entry it refreshes", async () => {
+    const fake = installFakeCache();
+    const request = new Request("https://www.fluncle.com/track/mb_degraded", {
+      headers: { "sec-fetch-mode": "navigate" },
+    });
+    const degraded = async () => {
+      markRenderDegraded();
+      return html("page without bands");
+    };
+    try {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-20T12:00:00.000Z"));
+      const miss = await runWithDatabaseRequestScope(() => withEdgeCache(request, degraded));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(miss.headers.get("cache-control")).toBe("no-store");
+      expect(fake.entries.has(request.url)).toBe(false);
+
+      await withEdgeCache(request, async () => html("full page"));
+      await vi.advanceTimersByTimeAsync(0);
+      const stored = fake.entries.get(request.url);
+      expect(stored).toBeDefined();
+      vi.advanceTimersByTime(PAGE_CACHE_POLICY.freshSeconds * 1_000);
+
+      const stale = await runWithDatabaseRequestScope(() => withEdgeCache(request, degraded));
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all(takeWaitUntilPromises());
+      expect(await stale.text()).toBe("full page");
+      expect(fake.entries.get(request.url)).toBe(stored);
+    } finally {
+      fake.restore();
+    }
+  });
 
   it.each(["private", 'private="Set-Cookie"', "public, no-store", "NO-STORE, max-age=0"])(
     "never stores or overrides a render carrying %s",

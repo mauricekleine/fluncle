@@ -217,7 +217,7 @@ it.each([
     void pending.then(() => {
       settled = true;
     });
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(1_050);
     expect(settled).toBe(true);
     const data = await pending;
     expect(data.status).toBe("found");
@@ -253,7 +253,7 @@ it("returns the finding identity when log-page decoration stays pending", async 
   void pending.then(() => {
     settled = true;
   });
-  await vi.advanceTimersByTimeAsync(250);
+  await vi.advanceTimersByTimeAsync(1_050);
   expect(settled).toBe(true);
   expect(await pending).toMatchObject({
     artistSlugs: {},

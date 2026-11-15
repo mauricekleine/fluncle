@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { Data, Duration, Effect } from "effect";
 import { clientAssets } from "./client-assets";
+import { renderDegraded } from "./database-request-scope";
 import { runServerEffect } from "./effect/runtime";
 import { keepAlive } from "./effect/wait-until";
 
@@ -414,7 +415,7 @@ async function refresh(
 
   if (isStorable(response, cachePolicy)) {
     await cache.put(cacheKey, await toStoredResponse(response, cachePolicy, cacheKey));
-  } else if (response.status < 500) {
+  } else if (response.status < 500 && !renderDegraded()) {
     await cache.delete(cacheKey);
   }
 }
@@ -422,6 +423,7 @@ async function refresh(
 function isStorable(response: Response, cachePolicy: EdgeCachePolicy): boolean {
   return (
     response.status === 200 &&
+    !renderDegraded() &&
     !/(?:^|,)\s*(?:private|no-store)\s*(?:=|,|$)/i.test(
       response.headers.get("cache-control") ?? "",
     ) &&
@@ -485,6 +487,8 @@ function tagResponse(response: Response, status: string, cachePolicy: EdgeCacheP
 
   if (isStorable(response, cachePolicy)) {
     out.headers.set("Cache-Control", cachePolicy.cacheControl);
+  } else if (renderDegraded()) {
+    out.headers.set("Cache-Control", "no-store");
   }
 
   out.headers.set("x-edge-cache", status);

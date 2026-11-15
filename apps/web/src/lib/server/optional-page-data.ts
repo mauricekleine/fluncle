@@ -4,9 +4,9 @@ import {
   workerDatabaseConcurrencyGate,
 } from "../database-concurrency";
 import { logEvent } from "./log";
-import { runWithOptionalDatabaseSignal } from "./database-request-scope";
+import { markRenderDegraded, runWithOptionalDatabaseSignal } from "./database-request-scope";
 
-export const OPTIONAL_PAGE_DATA_BUDGET_MS = 200;
+export const OPTIONAL_PAGE_DATA_BUDGET_MS = 1_000;
 
 export function optionalPageDataBudget() {
   const deadline = Date.now() + OPTIONAL_PAGE_DATA_BUDGET_MS;
@@ -22,12 +22,14 @@ export async function optionalPageData<Value>(
 ): Promise<Value> {
   const remainingMs = Math.min(OPTIONAL_PAGE_DATA_BUDGET_MS, deadlineMs - Date.now());
   if (remainingMs <= 0) {
+    markRenderDegraded();
     logEvent("warn", "page.optional-omitted", { operationId, reason: "deadline" });
     return fallback;
   }
   if (
     workerDatabaseConcurrencyGate.snapshot().aggregateInFlight >= WORKER_DB_AGGREGATE_CONCURRENCY
   ) {
+    markRenderDegraded();
     logEvent("warn", "page.optional-omitted", { operationId, reason: "database_busy" });
     return fallback;
   }
@@ -50,6 +52,7 @@ export async function optionalPageData<Value>(
           logEvent("warn", "page.optional-settlement-untracked", { operationId });
         }
       }
+      markRenderDegraded();
       logEvent("warn", "page.optional-omitted", { operationId, reason: "deadline" });
       resolve(fallback);
     }, remainingMs);
@@ -60,6 +63,7 @@ export async function optionalPageData<Value>(
     return await Promise.race([work, deadline]);
   } catch {
     if (!controller.signal.aborted) {
+      markRenderDegraded();
       logEvent("warn", "page.optional-omitted", { operationId, reason: "error" });
     }
     return fallback;

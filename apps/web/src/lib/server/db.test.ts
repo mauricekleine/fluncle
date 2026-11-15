@@ -212,7 +212,7 @@ describe("optional page database work", () => {
         undefined,
       );
       try {
-        await vi.advanceTimersByTimeAsync(250);
+        await vi.advanceTimersByTimeAsync(1_050);
         expect(await pending).toBeUndefined();
         for (const lease of held) {
           lease.release();
@@ -246,7 +246,7 @@ describe("optional page database work", () => {
       },
       undefined,
     );
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(1_050);
     expect(await pending).toBeUndefined();
     expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(1);
     const background = takeWaitUntilPromises();
