@@ -2,7 +2,7 @@ import { type Client, createClient } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { LOCAL_DB_CONCURRENCY } from "../lib/database-concurrency";
-import { ensureSearchIndexSchema, reconcileSearchIndex } from "./search-index";
+import { ensureSearchIndex, ensureSearchIndexSchema, reconcileSearchIndex } from "./search-index";
 
 let client: Client;
 
@@ -37,6 +37,13 @@ describe("search index maintenance", () => {
     await expect(ensureSearchIndexSchema(client)).resolves.toEqual({ rebuilt: true });
     expect(await indexedCount()).toBe(2);
     await expect(ensureSearchIndexSchema(client)).resolves.toEqual({ rebuilt: false });
+  });
+
+  it("reports an empty-index rebuild from the combined step", async () => {
+    await insertTrack("a1", "First");
+
+    await expect(ensureSearchIndex(client)).resolves.toEqual({ indexed: 1, rebuilt: true });
+    await expect(ensureSearchIndex(client)).resolves.toEqual({ indexed: 1, rebuilt: false });
   });
 
   it("leaves partial drift to the reconcile step", async () => {

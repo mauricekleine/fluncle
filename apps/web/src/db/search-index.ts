@@ -99,6 +99,8 @@ export async function reconcileSearchIndex(
 }
 
 export async function ensureSearchIndex(client: Client): Promise<SearchIndexResult> {
-  await ensureSearchIndexSchema(client);
-  return reconcileSearchIndex(client);
+  const schema = await ensureSearchIndexSchema(client);
+  const reconciled = await reconcileSearchIndex(client);
+
+  return { indexed: reconciled.indexed, rebuilt: schema.rebuilt || reconciled.rebuilt };
 }
