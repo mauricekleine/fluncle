@@ -5,6 +5,7 @@ import { collectSitemapBag, collectSitemapIndexStats } from "./sitemap-data";
 import {
   createIntegrationDb,
   seedAlbum,
+  seedArtist,
   seedCatalogueTrack,
   seedEmbedding,
   seedTrack,
@@ -17,8 +18,14 @@ import {
   sonicNeighbourScanStatement,
   trackSitemapIndexCountStatement,
 } from "./track-page";
+import { catalogueTracksByArtistStatement } from "./tracks";
 import { sameAsUrls } from "../track-page";
-import { optionalSonicNeighbours, resolveTrackPageData } from "../../routes/-track-page-data";
+import {
+  optionalSonicNeighbours,
+  resolveTrackPageData,
+  TRACK_SIBLING_LIMIT,
+  trackSiblingBands,
+} from "../../routes/-track-page-data";
 import { bestAlbumCoverUrl } from "../media";
 import { LONG_FORM_MS } from "../catalogue-eligibility";
 
@@ -449,6 +456,176 @@ describe("the operator stamps", () => {
 
   it("404s an unknown id", async () => {
     expect(await resolveTrackPageData("no-such-track")).toStrictEqual({ status: "missing" });
+  });
+});
+
+async function credit(trackId: string, artistId: string, position = 0): Promise<void> {
+  await db.execute({
+    args: [trackId, artistId, position],
+    sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, ?)`,
+  });
+}
+
+async function placeTrack(
+  trackId: string,
+  fields: { albumId?: string; releaseDate?: string },
+): Promise<void> {
+  await db.execute({
+    args: [fields.albumId ?? null, fields.releaseDate ?? null, trackId],
+    sql: `update tracks set album_id = ?, release_date = ? where track_id = ?`,
+  });
+}
+
+describe("the record and artist bands", () => {
+  beforeEach(async () => {
+    await seedArtist(db, { id: "artist-ashen", name: "Ashen Relay", slug: "ashen-relay" });
+    await seedAlbum(db, { id: "album-other", name: "Low Orbit", slug: "low-orbit" });
+    await credit(RICH, "artist-ashen");
+    await credit(CERTIFIED, "artist-ashen");
+
+    await seedCatalogueTrack(db, {
+      artists: ["Ashen Relay"],
+      title: "Salt Choir",
+      trackId: "mb_record-sibling",
+    });
+    await placeTrack("mb_record-sibling", { albumId: "album-signal", releaseDate: "2026-04-02" });
+    await credit("mb_record-sibling", "artist-ashen");
+
+    await seedCatalogueTrack(db, {
+      artists: ["Ashen Relay"],
+      title: "Glass Tide",
+      trackId: "mb_artist-other",
+    });
+    await placeTrack("mb_artist-other", { albumId: "album-other", releaseDate: "2025-01-10" });
+    await credit("mb_artist-other", "artist-ashen");
+
+    await seedCatalogueTrack(db, {
+      artists: ["Ashen Relay"],
+      title: "Undertow Ledger",
+      trackId: "mb_unstamped-twin",
+    });
+    await placeTrack("mb_unstamped-twin", { albumId: "album-other", releaseDate: "2024-06-01" });
+    await credit("mb_unstamped-twin", "artist-ashen");
+
+    await seedCatalogueTrack(db, {
+      artists: ["Ashen Relay"],
+      title: "Next Year",
+      trackId: "mb_unreleased",
+    });
+    await placeTrack("mb_unreleased", { albumId: "album-other", releaseDate: "2099-01-01" });
+    await credit("mb_unreleased", "artist-ashen");
+  });
+
+  it("lists the other tracks on the record and by the artist, never the page's own recording", async () => {
+    const data = await resolveTrackPageData(RICH);
+
+    expect(data.status).toBe("found");
+
+    if (data.status !== "found") {
+      return;
+    }
+
+    expect(data.recordTracks?.name).toBe("Signal Bloom");
+    expect(data.recordTracks?.tracks.map((track) => track.trackId)).toStrictEqual([
+      "mb_record-sibling",
+    ]);
+    expect(data.artistTracks?.name).toBe("Ashen Relay");
+    expect(data.artistTracks?.tracks.map((track) => track.trackId)).toStrictEqual([
+      "mb_artist-other",
+    ]);
+  });
+
+  it("leaves a finding on the same record to the related findings band", async () => {
+    const data = await resolveTrackPageData(RICH);
+
+    expect(data.status === "found" && data.related.map((finding) => finding.trackId)).toContain(
+      CERTIFIED,
+    );
+    expect(
+      data.status === "found" && data.recordTracks?.tracks.map((track) => track.trackId),
+    ).not.toContain(CERTIFIED);
+  });
+
+  it("drops a sibling the operator dismissed", async () => {
+    await db.execute({
+      args: ["mb_artist-other"],
+      sql: `update tracks set dismissed_at = '2026-05-01T00:00:00.000Z' where track_id = ?`,
+    });
+
+    const data = await resolveTrackPageData(RICH);
+
+    expect(data.status === "found" && data.artistTracks).toBeUndefined();
+  });
+
+  it("renders neither band for a track with no record and no credited artist", async () => {
+    const data = await resolveTrackPageData(THIN);
+
+    expect(data.status === "found" && [data.recordTracks, data.artistTracks]).toStrictEqual([
+      undefined,
+      undefined,
+    ]);
+  });
+
+  it("shows each recording once across close in sound and both bands, up to the band limit", () => {
+    const row = (trackId: string, title: string) => ({
+      artists: ["Ashen Relay"],
+      previewable: false,
+      spotifyUrl: undefined,
+      title,
+      trackId,
+    });
+    const many = Array.from({ length: TRACK_SIBLING_LIMIT + 3 }, (_, index) =>
+      row(`mb_many-${index}`, `Tune ${index}`),
+    );
+
+    const bands = trackSiblingBands({
+      artist: {
+        name: "Ashen Relay",
+        tracks: [
+          row("mb_on-record", "Salt Choir"),
+          row("mb_twin-elsewhere", "Glass Tide"),
+          ...many,
+        ],
+      },
+      neighbours: [{ trackId: "mb_neighbour" }],
+      record: {
+        name: "Signal Bloom",
+        tracks: [
+          row("mb_neighbour", "Close One"),
+          row("mb_on-record", "Salt Choir"),
+          row("mb_glass", "Glass Tide"),
+        ],
+      },
+      track: { artists: [{ name: "Ashen Relay" }], title: "Undertow Ledger", trackId: RICH },
+    });
+
+    expect(bands.recordTracks?.tracks.map((track) => track.trackId)).toStrictEqual([
+      "mb_on-record",
+      "mb_glass",
+    ]);
+    expect(bands.artistTracks?.tracks.map((track) => track.trackId)).toStrictEqual(
+      many.slice(0, TRACK_SIBLING_LIMIT).map((track) => track.trackId),
+    );
+  });
+
+  it("reads the artist band by an artist-id seek", async () => {
+    const statement = catalogueTracksByArtistStatement("artist-ashen", {
+      excludeAlbumId: "album-signal",
+      limit: 48,
+      today: "2026-11-15",
+    });
+    const plan = await db.execute({
+      args: statement.args,
+      sql: `explain query plan ${statement.sql}`,
+    });
+    const details = plan.rows.map((row) => (typeof row.detail === "string" ? row.detail : ""));
+
+    expect(details).toContain(
+      "SEARCH track_artists USING INDEX track_artists_artist_id_idx (artist_id=?)",
+    );
+    expect(details.some((detail) => /^SCAN (tracks|track_artists|albums)\b/.test(detail))).toBe(
+      false,
+    );
   });
 });
 

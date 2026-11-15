@@ -1,7 +1,7 @@
 import { Link, createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { FrontDoorSection } from "@/components/front-door/section";
-import { FindingsGrid } from "@/components/graph-sections";
+import { FindingsGrid, UnlitTracks } from "@/components/graph-sections";
 import { TrackNotFoundState } from "@/components/stories/stories-states";
 import { TrackArtwork } from "@/components/track-artwork";
 import {
@@ -17,7 +17,7 @@ import { albumCoverAtSize } from "@/lib/media";
 import { siteUrl } from "@/lib/fluncle-links";
 import { trackMetaDescription, trackPageTitle } from "@/lib/page-meta";
 import { sameAsUrls, trackPageUrl } from "@/lib/track-page";
-import { type TrackPageData } from "./-track-page-data";
+import { type TrackPageData, type TrackSiblingBand } from "./-track-page-data";
 
 const fetchTrack = createServerFn({ method: "GET" })
   .validator((data: { trackId: string }) => data)
@@ -152,7 +152,7 @@ function TrackPage() {
     return null;
   }
 
-  const { neighbours, related, track } = data;
+  const { artistTracks, neighbours, recordTracks, related, track } = data;
 
   return (
     <main className="log-plate-stage">
@@ -180,6 +180,22 @@ function TrackPage() {
           </FrontDoorSection>
         ) : undefined}
 
+        {recordTracks ? (
+          <SiblingTracks
+            id="track-record"
+            title={`More tracks on ${recordTracks.name}`}
+            tracks={recordTracks.tracks}
+          />
+        ) : undefined}
+
+        {artistTracks ? (
+          <SiblingTracks
+            id="track-artist"
+            title={`More tracks by ${artistTracks.name}`}
+            tracks={artistTracks.tracks}
+          />
+        ) : undefined}
+
         <FindingsGrid findings={related} priority={false} />
 
         <footer className="log-plate-footer">
@@ -188,5 +204,25 @@ function TrackPage() {
         </footer>
       </article>
     </main>
+  );
+}
+
+function SiblingTracks({
+  id,
+  title,
+  tracks,
+}: {
+  id: string;
+  title: string;
+  tracks: TrackSiblingBand["tracks"];
+}) {
+  if (tracks.length === 0) {
+    return undefined;
+  }
+
+  return (
+    <FrontDoorSection id={id} quietTitle title={title}>
+      <UnlitTracks label={title} tracks={tracks} />
+    </FrontDoorSection>
   );
 }
