@@ -1,3 +1,4 @@
+import { optionalPageDataBudget } from "@/lib/server/optional-page-data";
 import {
   type CatalogueArtistGroup,
   CataloguePageOutOfRangeError,
@@ -75,6 +76,7 @@ export async function resolveLabelPageData(
     return { status: "missing" };
   }
 
+  const optional = optionalPageDataBudget();
   const cataloguePromise = listLabelCatalogue(label.id, sort, page, today).catch(
     (error: unknown): CatalogueGroupPage<CatalogueArtistGroup> | null => {
       if (error instanceof CataloguePageOutOfRangeError) {
@@ -88,8 +90,8 @@ export async function resolveLabelPageData(
   const [catalogue, findings, artists, alternateNames, upcoming] = await Promise.all([
     cataloguePromise,
     getFindingsByLabel(label.id, today),
-    listArtistsByLabel(label.id),
-    getConfirmedAliasNames(label.id),
+    optional("label.artists", () => listArtistsByLabel(label.id), []),
+    optional("label.aliases", () => getConfirmedAliasNames(label.id), []),
     listLabelUpcoming(label.id, today, upcomingPage).catch(
       (error: unknown): UpcomingTrackPage | null => {
         if (error instanceof CataloguePageOutOfRangeError) {
@@ -111,8 +113,10 @@ export async function resolveLabelPageData(
   const related =
     findings.length > 0
       ? []
-      : await listRelatedFindings({ kind: "label", labelId: label.id }, { today }).catch(
-          (): TrackListItem[] => [],
+      : await optional(
+          "label.related",
+          () => listRelatedFindings({ kind: "label", labelId: label.id }, { today }),
+          [],
         );
 
   return {

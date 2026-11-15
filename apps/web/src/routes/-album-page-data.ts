@@ -1,3 +1,4 @@
+import { optionalPageDataBudget } from "@/lib/server/optional-page-data";
 import { ALBUM_INDEX_MIN_TRACKS, albumCoverUrl, getAlbumBySlug } from "@/lib/server/albums";
 import { type ArtistChip, listArtistsByAlbum } from "@/lib/server/artists";
 import { getLabelForAlbum, type LabelRecord } from "@/lib/server/labels";
@@ -44,12 +45,13 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     return { status: "missing" };
   }
 
+  const optional = optionalPageDataBudget();
   const [findings, catalogue, artists, label, albumCover] = await Promise.all([
     getFindingsByAlbum(album.id),
     listCatalogueTracksByAlbum(album.id),
-    listArtistsByAlbum(album.id),
-    getLabelForAlbum(album.id),
-    albumCoverUrl(album.id).catch((): string | undefined => undefined),
+    optional("album.artists", () => listArtistsByAlbum(album.id), []),
+    optional("album.label", () => getLabelForAlbum(album.id), undefined),
+    optional("album.cover", () => albumCoverUrl(album.id), undefined),
   ]);
 
   if (album.renderableTrackCount === 0) {
@@ -59,10 +61,15 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
   const related =
     findings.length > 0
       ? []
-      : await listRelatedFindings(
-          { albumId: album.id, kind: "album" },
-          { today: releaseTodayUtc(new Date()) },
-        ).catch((): TrackListItem[] => []);
+      : await optional(
+          "album.related",
+          () =>
+            listRelatedFindings(
+              { albumId: album.id, kind: "album" },
+              { today: releaseTodayUtc(new Date()) },
+            ),
+          [],
+        );
 
   return {
     artists,

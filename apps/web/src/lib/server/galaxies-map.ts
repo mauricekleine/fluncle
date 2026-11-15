@@ -151,6 +151,12 @@ export async function getNamedGalaxyBySlug(
   };
 }
 
+let lastKnownGalaxyMapAvailability: boolean | undefined;
+
+export function galaxyMapAvailabilitySnapshot(): boolean {
+  return lastKnownGalaxyMapAvailability ?? true;
+}
+
 export async function isGalaxyMapFullyNamed(): Promise<boolean> {
   const db = await getDb();
   const result = await db.execute(
@@ -162,13 +168,15 @@ export async function isGalaxyMapFullyNamed(): Promise<boolean> {
   const row = typedRow<{ total: number; unnamed: number | null }>(result.rows);
 
   if (!row) {
+    lastKnownGalaxyMapAvailability = false;
     return false;
   }
 
   const total = Number(row.total);
   const unnamed = Number(row.unnamed ?? 0);
 
-  return total > 0 && unnamed === 0;
+  lastKnownGalaxyMapAvailability = total > 0 && unnamed === 0;
+  return lastKnownGalaxyMapAvailability;
 }
 
 export async function listPublicGalaxies(): Promise<GalaxyListItem[]> {

@@ -32,7 +32,31 @@ type RequestTransactionAdmission = {
 };
 
 const databaseRequestScope = new AsyncLocalStorage<DatabaseRequestScope>();
+const optionalDatabaseScope = new AsyncLocalStorage<AbortSignal>();
 const SETTINGS_MEMO_KEY = Symbol("fluncle.settings-memo");
+const DEGRADED_RENDER_KEY = Symbol("fluncle.degraded-render");
+
+export function markRenderDegraded(): void {
+  const render = getRequestScopedValue(DEGRADED_RENDER_KEY, () => ({ degraded: false }));
+  if (render) {
+    render.degraded = true;
+  }
+}
+
+export function renderDegraded(): boolean {
+  return getRequestScopedValue(DEGRADED_RENDER_KEY, () => ({ degraded: false }))?.degraded ?? false;
+}
+
+export function optionalDatabaseSignal(): AbortSignal | undefined {
+  return optionalDatabaseScope.getStore();
+}
+
+export function runWithOptionalDatabaseSignal<Result>(
+  signal: AbortSignal,
+  run: () => Result,
+): Result {
+  return optionalDatabaseScope.run(signal, run);
+}
 
 export function getRequestScopedSettingsMemo():
   | Map<string, Promise<string | undefined>>

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { optionalPageData } from "./optional-page-data";
+import { takeWaitUntilPromises } from "../../test/cloudflare-workers-stub";
 
 import {
   WORKER_DB_ADMISSION_POLL_MAX_MS,
@@ -167,6 +169,116 @@ describe("database admission timeout instrumentation", () => {
       expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
     },
   );
+});
+
+describe("optional page database work", () => {
+  beforeEach(() => {
+    void takeWaitUntilPromises();
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it.each(["execute", "batch", "transaction"] as const)(
+    "abandons a queued optional %s without starting it after capacity returns",
+    async (operation) => {
+      const held: Awaited<ReturnType<typeof workerDatabaseConcurrencyGate.acquire>>[] = [];
+      const pending = optionalPageData(
+        "test.optional",
+        async () => {
+          held.push(
+            ...(await Promise.all(
+              Array.from({ length: WORKER_DB_AGGREGATE_CONCURRENCY }, () =>
+                workerDatabaseConcurrencyGate.acquire("read"),
+              ),
+            )),
+          );
+          const db = await getDb();
+          return operation === "execute"
+            ? db.execute(
+                databaseOperationStatement("select 1", {
+                  admissionSignal: new AbortController().signal,
+                  operationId: "test.optional",
+                }),
+              )
+            : operation === "batch"
+              ? db.batch(["select 1"], "read")
+              : db.transaction("read");
+        },
+        undefined,
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(1_050);
+        expect(await pending).toBeUndefined();
+        for (const lease of held) {
+          lease.release();
+        }
+        await vi.advanceTimersByTimeAsync(100);
+        expect(execute).not.toHaveBeenCalled();
+        expect(batch).not.toHaveBeenCalled();
+        expect(transaction).not.toHaveBeenCalled();
+      } finally {
+        for (const lease of held) {
+          lease.release();
+        }
+      }
+      expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
+    },
+  );
+
+  it("keeps accepted SQL charged until settlement and prevents its next statement after the page deadline", async () => {
+    let finish: ((result: { rows: never[] }) => void) | undefined;
+    const remote = new Promise<{ rows: never[] }>((resolve) => {
+      finish = resolve;
+    });
+    execute.mockReturnValueOnce(remote).mockResolvedValue({ rows: [] });
+    const db = await getDb();
+    let work: Promise<unknown> | undefined;
+    const pending = optionalPageData(
+      "test.optional",
+      () => {
+        work = db.execute("select 1").then(() => db.execute("select 2"));
+        return work;
+      },
+      undefined,
+    );
+    await vi.advanceTimersByTimeAsync(1_050);
+    expect(await pending).toBeUndefined();
+    expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(1);
+    const background = takeWaitUntilPromises();
+    expect(background).toHaveLength(1);
+    await db.execute("select 3");
+    expect(execute).toHaveBeenCalledTimes(2);
+    finish?.({ rows: [] });
+    await expect(work).rejects.toMatchObject({ name: "AbortError" });
+    await Promise.all(background);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
+  });
+
+  it("omits optional work immediately when the database is already full", async () => {
+    const held = await Promise.all(
+      Array.from({ length: WORKER_DB_AGGREGATE_CONCURRENCY }, () =>
+        workerDatabaseConcurrencyGate.acquire("read"),
+      ),
+    );
+    try {
+      const db = await getDb();
+      expect(
+        await optionalPageData("test.optional", () => db.execute("select 1"), undefined),
+      ).toBeUndefined();
+      expect(execute).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      for (const lease of held) {
+        lease.release();
+      }
+    }
+  });
 });
 
 describe("request transaction admission", () => {

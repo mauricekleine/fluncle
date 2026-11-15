@@ -1,3 +1,4 @@
+import { optionalPageDataBudget } from "@/lib/server/optional-page-data";
 import {
   type ArtistNeighbour,
   type ArtistSignature,
@@ -71,6 +72,7 @@ export async function resolveArtistPageData(
     return { status: "missing" };
   }
 
+  const optional = optionalPageDataBudget();
   const cataloguePromise = listArtistCatalogue(artist.id, sort, page, today).catch(
     (error: unknown): CatalogueGroupPage<CatalogueRecord> | null => {
       if (error instanceof CataloguePageOutOfRangeError) {
@@ -84,10 +86,10 @@ export async function resolveArtistPageData(
   const [catalogue, findings, socials, neighbours, alternateNames, upcoming] = await Promise.all([
     cataloguePromise,
     getFindingsByArtist(artist.id, artist.name, today),
-    getPublicArtistSocials(artist.id),
-    getArtistNeighbours(artist.id),
+    optional("artist.socials", () => getPublicArtistSocials(artist.id), []),
+    optional("artist.neighbours", () => getArtistNeighbours(artist.id), []),
 
-    getPublicArtistAliasNames(artist.id),
+    optional("artist.aliases", () => getPublicArtistAliasNames(artist.id), []),
     listArtistUpcoming(artist.id, today, upcomingPage).catch(
       (error: unknown): UpcomingTrackPage | null => {
         if (error instanceof CataloguePageOutOfRangeError) {
@@ -110,8 +112,10 @@ export async function resolveArtistPageData(
   const related =
     gridFindings.length > 0
       ? []
-      : await listRelatedFindings({ artistId: artist.id, kind: "artist" }, { today }).catch(
-          (): TrackListItem[] => [],
+      : await optional(
+          "artist.related",
+          () => listRelatedFindings({ artistId: artist.id, kind: "artist" }, { today }),
+          [],
         );
   const signature = summarizeArtistSignature(
     gridFindings.map((finding) => ({ addedAt: finding.addedAt })),

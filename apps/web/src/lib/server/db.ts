@@ -35,6 +35,7 @@ import {
   getRequestScopedDatabaseClient,
   getRequestScopedTransactionLease,
   getRequestScopedValue,
+  optionalDatabaseSignal,
   type DatabaseRequestOperationLease,
   type DatabaseRequestTransactionLease,
 } from "./database-request-scope";
@@ -157,15 +158,16 @@ async function acquireDatabaseLease(
   startedAt: number,
   admissionSignal?: AbortSignal,
 ): Promise<WorkerDatabaseConcurrencyLease> {
+  const optionalSignal = optionalDatabaseSignal();
+  const signal =
+    admissionSignal && optionalSignal
+      ? AbortSignal.any([admissionSignal, optionalSignal])
+      : (admissionSignal ?? optionalSignal);
   try {
-    admissionSignal?.throwIfAborted();
+    signal?.throwIfAborted();
     const lease =
       getRequestScopedTransactionLease(gate) ??
-      (await gate.acquire(
-        accessClass,
-        () => getRequestScopedTransactionLease(gate),
-        admissionSignal,
-      ));
+      (await gate.acquire(accessClass, () => getRequestScopedTransactionLease(gate), signal));
     recordAdmission(span, lease);
     return lease;
   } catch (error) {
@@ -402,6 +404,7 @@ function instrumentTransaction(
         const statementStartedAt = Date.now();
         let outcome: DatabaseOutcome = "success";
         try {
+          optionalDatabaseSignal()?.throwIfAborted();
           return await invalidateSettingsOnWrite(invalidates, run);
         } catch (error) {
           outcome = "failure";
@@ -531,6 +534,7 @@ function instrument(
               const requestOperation = enterDatabaseRequestOperation();
               const run = () => {
                 metadata?.admissionSignal?.throwIfAborted();
+                optionalDatabaseSignal()?.throwIfAborted();
                 return args !== undefined && typeof statement === "string"
                   ? target.execute(statement, args)
                   : target.execute(statement);
@@ -599,7 +603,10 @@ function instrument(
               const lease = await acquireDatabaseLease(gate, accessClass, span, startedAt);
               const requestOperation = enterDatabaseRequestOperation();
 
-              const run = () => target.batch(stmts, mode);
+              const run = () => {
+                optionalDatabaseSignal()?.throwIfAborted();
+                return target.batch(stmts, mode);
+              };
 
               try {
                 const result = await invalidateSettingsOnWrite(
@@ -654,6 +661,7 @@ function instrument(
             lease = await acquireDatabaseLease(gate, accessClass, span, startedAt);
             requestOperation = enterDatabaseRequestOperation();
             transactionLease = enterDatabaseRequestTransaction(gate, lease);
+            optionalDatabaseSignal()?.throwIfAborted();
             const transaction =
               mode === undefined ? await target.transaction() : await target.transaction(mode);
             return instrumentTransaction(
