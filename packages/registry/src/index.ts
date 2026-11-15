@@ -241,7 +241,7 @@ export const SURFACES: readonly Surface[] = [
   {
     discoveryUrl: `${SITE}/llms.txt`,
     exposedContent: [
-      "/artists — one A–Z index of every drum & bass artist Fluncle holds",
+      "/artists — one index of every drum & bass artist Fluncle holds, most tracks first by default (A–Z and latest-release orders too)",
       "/artist/:slug — one artist's page: its findings, its identity links, and the rest of its catalogue",
     ],
     kind: "web_route",
@@ -255,13 +255,13 @@ export const SURFACES: readonly Surface[] = [
   {
     discoveryUrl: `${SITE}/llms.txt`,
     exposedContent: [
-      "/labels — one A–Z index of every drum & bass record label Fluncle holds",
+      "/labels — one index of every drum & bass record label Fluncle holds, most tracks first by default (A–Z and latest-release orders too)",
       "/label/:slug — one label: its findings, the artists on it, and the rest of its catalogue",
     ],
     kind: "web_route",
     name: "web.labels",
     operatorNotes:
-      "The label half of the graph (log ↔ artist ↔ label ↔ album). The INDEX is probeable (always 200); the slug page is not, so the probe targets /labels. /labels is ONE unified A–Z index of every label Fluncle holds (certified lit, catalogue unlit), paged behind ?page=N. A label below the renderable-track floor renders noindex + stays out of the sitemap (the ARTIST_INDEX_MIN_FINDINGS precedent). The page is BLIND to the label's crawl seed_state — that is crawl scope, never storage (docs/label-entity.md); the operator's ruling station is /admin/labels.",
+      "The label half of the graph (log ↔ artist ↔ label ↔ album). The INDEX is probeable (always 200); the slug page is not, so the probe targets /labels. /labels is ONE unified index of every label Fluncle holds (certified lit, catalogue unlit), paged behind ?page=N. A label below the renderable-track floor renders noindex + stays out of the sitemap (the ARTIST_INDEX_MIN_FINDINGS precedent). The page is BLIND to the label's crawl seed_state — that is crawl scope, never storage (docs/label-entity.md); the operator's ruling station is /admin/labels.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/labels",
     url: `${SITE}/labels`,
@@ -270,7 +270,7 @@ export const SURFACES: readonly Surface[] = [
   {
     discoveryUrl: `${SITE}/llms.txt`,
     exposedContent: [
-      "/albums — one alphabetical index of every drum & bass album Fluncle holds",
+      "/albums — one index of every drum & bass album Fluncle holds, most tracks first by default (A–Z and latest-release orders too)",
       "/album/:slug — one record: its findings, its artists, its label, and the rest of its tracklist",
     ],
     kind: "web_route",
