@@ -846,19 +846,26 @@ export async function listRelatedFindings(
   const db = await getDb();
   const result = await db.execute({
     args: [
+      ...tiers.flatMap((tier) => tier.args),
       ...(options.today === undefined ? [] : [options.today]),
       ...exclude,
-      ...tiers.flatMap((tier) => tier.args),
       limit,
     ],
-    sql: `select ${RELATED_FINDING_SELECT}
-          from findings cross join tracks on tracks.track_id = findings.track_id
-          where findings.log_id is not null
-            and tracks.dismissed_at is null and tracks.duplicate_of_track_id is null
-            ${options.today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
-            ${exclude.length === 0 ? "" : `and tracks.track_id not in (${exclude.map(() => "?").join(", ")})`}
-          order by ${affinity} desc, findings.added_at desc, tracks.track_id desc
-          limit ?`,
+    sql: `with winners as materialized (
+            select tracks.track_id, findings.added_at, ${affinity} as affinity
+            from findings cross join tracks on tracks.track_id = findings.track_id
+            where findings.log_id is not null
+              and tracks.dismissed_at is null and tracks.duplicate_of_track_id is null
+              ${options.today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
+              ${exclude.length === 0 ? "" : `and tracks.track_id not in (${exclude.map(() => "?").join(", ")})`}
+            order by affinity desc, findings.added_at desc, tracks.track_id desc
+            limit ?
+          )
+          select ${RELATED_FINDING_SELECT}
+          from winners
+          cross join tracks on tracks.track_id = winners.track_id
+          cross join findings on findings.track_id = winners.track_id
+          order by winners.affinity desc, winners.added_at desc, winners.track_id desc`,
   });
 
   return typedRows<RelatedFindingRow>(result.rows).map(toRelatedFindingItem);

@@ -15,6 +15,7 @@ const getPublicArtistSocials = vi.hoisted(() => vi.fn());
 const getPublicArtistAliasNames = vi.hoisted(() => vi.fn());
 const countArtistFindings = vi.hoisted(() => vi.fn());
 const getFindingsByArtist = vi.hoisted(() => vi.fn());
+const listRelatedFindings = vi.hoisted(() => vi.fn(async () => []));
 const getArtistNeighbours = vi.hoisted(() => vi.fn());
 const listArtistCatalogue = vi.hoisted(() => vi.fn());
 const listArtistUpcoming = vi.hoisted(() => vi.fn());
@@ -30,6 +31,7 @@ vi.mock("@/lib/server/artists", async (importOriginal) => ({
 vi.mock("@/lib/server/tracks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/tracks")>()),
   getFindingsByArtist,
+  listRelatedFindings,
 }));
 
 vi.mock("@/lib/server/catalogue-groups", async (importOriginal) => ({
@@ -146,6 +148,18 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     });
     getPublicArtistBySlug.mockResolvedValue(ARTIST);
   });
+
+  it.each([true, false])(
+    "skips the related read only when the artist has a grid finding (%s)",
+    async (hasLog) => {
+      getFindingsByArtist.mockResolvedValue([
+        { ...finding("001.1.0A"), logId: hasLog ? "001.1.0A" : undefined },
+      ]);
+      const data = await resolveArtistPageData("drift", "name", 1);
+      expect(data).toMatchObject({ related: [], status: "found" });
+      expect(listRelatedFindings).toHaveBeenCalledTimes(hasLog ? 0 : 1);
+    },
+  );
 
   it("passes upcoming rows into their own page block", async () => {
     getFindingsByArtist.mockResolvedValue([]);

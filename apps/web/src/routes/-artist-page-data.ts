@@ -81,26 +81,22 @@ export async function resolveArtistPageData(
     },
   );
 
-  const [catalogue, findings, socials, neighbours, alternateNames, upcoming, related] =
-    await Promise.all([
-      cataloguePromise,
-      getFindingsByArtist(artist.id, artist.name, today),
-      getPublicArtistSocials(artist.id),
-      getArtistNeighbours(artist.id),
+  const [catalogue, findings, socials, neighbours, alternateNames, upcoming] = await Promise.all([
+    cataloguePromise,
+    getFindingsByArtist(artist.id, artist.name, today),
+    getPublicArtistSocials(artist.id),
+    getArtistNeighbours(artist.id),
 
-      getPublicArtistAliasNames(artist.id),
-      listArtistUpcoming(artist.id, today, upcomingPage).catch(
-        (error: unknown): UpcomingTrackPage | null => {
-          if (error instanceof CataloguePageOutOfRangeError) {
-            return null;
-          }
-          throw error;
-        },
-      ),
-      listRelatedFindings({ artistId: artist.id, kind: "artist" }, { today }).catch(
-        (): TrackListItem[] => [],
-      ),
-    ]);
+    getPublicArtistAliasNames(artist.id),
+    listArtistUpcoming(artist.id, today, upcomingPage).catch(
+      (error: unknown): UpcomingTrackPage | null => {
+        if (error instanceof CataloguePageOutOfRangeError) {
+          return null;
+        }
+        throw error;
+      },
+    ),
+  ]);
 
   if (catalogue === null || upcoming === null) {
     return { status: "missing" };
@@ -111,6 +107,12 @@ export async function resolveArtistPageData(
   }
 
   const gridFindings = findings.filter((finding) => finding.logId);
+  const related =
+    gridFindings.length > 0
+      ? []
+      : await listRelatedFindings({ artistId: artist.id, kind: "artist" }, { today }).catch(
+          (): TrackListItem[] => [],
+        );
   const signature = summarizeArtistSignature(
     gridFindings.map((finding) => ({ addedAt: finding.addedAt })),
   );
@@ -129,7 +131,7 @@ export async function resolveArtistPageData(
     lastfmUrl: artist.lastfmUrl,
     mbid: artist.mbid,
     name: artist.name,
-    related: gridFindings.length > 0 ? [] : related,
+    related,
     slug: artist.slug,
     socials,
     sort,

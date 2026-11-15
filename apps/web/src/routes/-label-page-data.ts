@@ -85,7 +85,7 @@ export async function resolveLabelPageData(
     },
   );
 
-  const [catalogue, findings, artists, alternateNames, upcoming, related] = await Promise.all([
+  const [catalogue, findings, artists, alternateNames, upcoming] = await Promise.all([
     cataloguePromise,
     getFindingsByLabel(label.id, today),
     listArtistsByLabel(label.id),
@@ -98,9 +98,6 @@ export async function resolveLabelPageData(
         throw error;
       },
     ),
-    listRelatedFindings({ kind: "label", labelId: label.id }, { today }).catch(
-      (): TrackListItem[] => [],
-    ),
   ]);
 
   if (catalogue === null || upcoming === null) {
@@ -110,6 +107,13 @@ export async function resolveLabelPageData(
   if (label.renderableTrackCount === 0) {
     return { status: "missing" };
   }
+
+  const related =
+    findings.length > 0
+      ? []
+      : await listRelatedFindings({ kind: "label", labelId: label.id }, { today }).catch(
+          (): TrackListItem[] => [],
+        );
 
   return {
     alternateNames,
@@ -127,7 +131,7 @@ export async function resolveLabelPageData(
     mbLabelId: label.mbLabelId,
     name: label.name,
     parentLabel: label.parentLabel,
-    related: findings.length > 0 ? [] : related,
+    related,
     slug: label.slug,
     sort,
     status: "found",

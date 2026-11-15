@@ -902,6 +902,53 @@ describe("close in sound", () => {
   });
 });
 
+describe("the track page's related findings budget", () => {
+  it.each([0, 4, 8])("hydrates four cards after excluding %i sonic neighbours", async (overlap) => {
+    const ranked = Array.from(
+      { length: 13 },
+      (_, index) => `related-${String(13 - index).padStart(2, "0")}`,
+    );
+    for (const [index, trackId] of ranked.entries()) {
+      await seedTrack(db, {
+        addedAt: "2026-10-01T00:00:00.000Z",
+        logId: `702.1.${index}A`,
+        trackId,
+      });
+    }
+    await seedEmbedding(db, RICH, axisVector(0));
+    for (const trackId of ranked.slice(0, overlap)) {
+      await seedEmbedding(db, trackId, axisVector(1));
+    }
+    isSonarTrackEnabled.mockResolvedValue(true);
+    searchSonar.mockResolvedValue(ranked.slice(0, overlap).map((id) => ({ id, score: 0.9 })));
+    const hydrated: string[][] = [];
+    const execute = db.execute.bind(db);
+    vi.spyOn(db, "execute").mockImplementation(async (statement) => {
+      const result = await execute(statement);
+      if (result.columns.includes("sonic_seed") && result.columns.includes("log_id")) {
+        hydrated.push(
+          result.rows.map((row) => (typeof row.track_id === "string" ? row.track_id : "")),
+        );
+      }
+      return result;
+    });
+
+    const data = await resolveTrackPageData(RICH);
+    expect(data.status).toBe("found");
+    if (data.status !== "found") {
+      return;
+    }
+    const shown = new Set(data.neighbours.map((row) => row.trackId));
+    const expected = [CERTIFIED, ...ranked]
+      .slice(0, 12)
+      .filter((id) => !shown.has(id))
+      .slice(0, 4);
+    expect(data.neighbours).toHaveLength(overlap);
+    expect(data.related.map((row) => row.trackId)).toStrictEqual(expected);
+    expect(hydrated).toStrictEqual([expected]);
+  });
+});
+
 describe("the sentinels that are values, not nulls", () => {
   it("keeps the resolved page when its optional neighbour read fails", async () => {
     await expect(
