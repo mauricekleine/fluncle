@@ -232,7 +232,7 @@ export function coverSrcSet(url: string | undefined): string | undefined {
   }
 
   return coverLadder(url)
-    ?.map(([size, width]) => `${albumCoverAtSize(url, size)} ${width}w`)
+    ?.map(([size, width]) => `${albumCoverAtSize(url, size)?.replaceAll(",", "%2C")} ${width}w`)
     .join(", ");
 }
 
@@ -272,8 +272,8 @@ export function hubCoverSrcSet(url: string | undefined): string | undefined {
     return undefined;
   }
 
-  const small = albumCoverAtSize(url, "hub");
-  const large = albumCoverAtSize(url, "tile");
+  const small = albumCoverAtSize(url, "hub")?.replaceAll(",", "%2C");
+  const large = albumCoverAtSize(url, "tile")?.replaceAll(",", "%2C");
 
   if (!small || !large) {
     return undefined;
@@ -288,13 +288,13 @@ export function hubCoverSrcSet(url: string | undefined): string | undefined {
   }
 
   if (SPOTIFY_ALBUM_IMAGE_RE.test(url)) {
-    const thumbnail = albumCoverAtSize(url, "small");
+    const thumbnail = albumCoverAtSize(url, "small")?.replaceAll(",", "%2C");
 
     return thumbnail ? `${thumbnail} 64w, ${large} 300w` : undefined;
   }
 
   if (COVER_ART_ARCHIVE_FRONT_RE.test(url)) {
-    const medium = albumCoverAtSize(url, "medium");
+    const medium = albumCoverAtSize(url, "medium")?.replaceAll(",", "%2C");
 
     return medium && medium !== small ? `${small} 250w, ${medium} 500w` : undefined;
   }
@@ -310,12 +310,12 @@ export function freshStandoutSrcSet(url: string | undefined): string | undefined
   }
 
   if (COVER_ART_ARCHIVE_FRONT_RE.test(url)) {
-    const xl = albumCoverAtSize(url, "xl");
+    const xl = albumCoverAtSize(url, "xl")?.replaceAll(",", "%2C");
 
     return xl ? `${hub}, ${xl} 1200w` : hub;
   }
 
-  const large = albumCoverAtSize(url, "large");
+  const large = albumCoverAtSize(url, "large")?.replaceAll(",", "%2C");
 
   return large ? `${hub}, ${large} 640w` : hub;
 }

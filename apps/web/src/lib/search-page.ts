@@ -1,3 +1,4 @@
+import { TRACK_ID_PATTERN } from "./track-id-pattern";
 import { MAX_QUERY_LENGTH } from "./search-results";
 import { fluncleCoverImageMeta, fluncleCoverUrl } from "./cover-meta";
 import { fluncleWebsiteId, siteUrl } from "./fluncle-links";
@@ -5,8 +6,6 @@ import { jsonLdScript } from "./json-ld";
 import { textParam } from "./search-params";
 
 export type SearchPageSearch = { like?: string; q?: string };
-
-const TRACK_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
 export function parseSearchPageSearch(search: Record<string, unknown>): SearchPageSearch {
   const q = textParam(search["q"]);

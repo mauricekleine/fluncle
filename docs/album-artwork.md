@@ -40,6 +40,8 @@ Owned masters are served through **Cloudflare Images URL transforms** (`/cdn-cgi
 https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/<slug>.jpg?v=<image_updated_at>
 ```
 
+- **Srcset URLs percent-encode commas as `%2C`.** Only candidate separators contain literal commas; decoding a candidate preserves its Cloudflare options and source URL. Fixed `src` URLs retain the same transform options.
+- **Impossible entity paths stop before application dispatch.** Album, artist and label segments must match the canonical slug generator; track segments use the shared track-ID pattern. Encoded path separators and image-option fragments return an empty HTTP 404 without invoking a router loader or database admission.
 - **Slot-sized covers use width-descriptor srcsets and the rendered CSS width in `sizes`.** `coverSrcSet` offers 64 / 128 / 300 / 640px for owned masters, 64 / 300 / 640px for Spotify albums, 160 / 320 / 640px for Spotify artists, and 250 / 500px for Cover Art Archive release-front thumbnails. Unknown sources have no srcset. The fixed `src` remains the fallback; 1200px is reserved for larger artwork surfaces.
 - **Spotify and Cover Art Archive use their own source ladders.** Cloudflare Images accepts only owned sources on this zone; remote Spotify and CAA transforms return 403. Spotify's 160px artist image and CAA's 250px front thumbnail are their smallest available rungs.
 - **A failed cover falls back to the eclipse artwork.** `TrackArtwork` checks the image element on mount because an image can fail before React hydrates. A failed selected `currentSrc` candidate replaces the whole image with the eclipse fallback; changing the requested source retries the image.

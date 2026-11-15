@@ -76,7 +76,7 @@ describe("coverSrcSet", () => {
     const transform = `${FOUND_BASE}/cdn-cgi/image/width=`;
 
     expect(coverSrcSet(`${transform}640,format=auto/${source}`)).toBe(
-      `${transform}64,format=auto/${source} 64w, ${transform}128,format=auto/${source} 128w, ${transform}300,format=auto/${source} 300w, ${transform}640,format=auto/${source} 640w`,
+      `${transform}64%2Cformat=auto/${source} 64w, ${transform}128%2Cformat=auto/${source} 128w, ${transform}300%2Cformat=auto/${source} 300w, ${transform}640%2Cformat=auto/${source} 640w`,
     );
   });
 
@@ -688,7 +688,7 @@ describe("hubCoverSrcSet", () => {
 
     expect(albumCoverAtSize(large, "hub")).toContain("width=128,");
     expect(hubCoverSrcSet(large)).toBe(
-      `${albumCoverAtSize(large, "hub")} 128w, ${albumCoverAtSize(large, "tile")} 300w`,
+      `${albumCoverAtSize(large, "hub")?.replaceAll(",", "%2C")} 128w, ${albumCoverAtSize(large, "tile")?.replaceAll(",", "%2C")} 300w`,
     );
   });
 
@@ -720,7 +720,7 @@ describe("freshStandoutSrcSet", () => {
     const image = ownedCoverUrl(KEY, "2026-07-13T00:00:00.000Z", "large");
 
     expect(freshStandoutSrcSet(image)).toBe(
-      `${hubCoverSrcSet(image)}, ${albumCoverAtSize(image, "large")} 640w`,
+      `${hubCoverSrcSet(image)}, ${albumCoverAtSize(image, "large")?.replaceAll(",", "%2C")} 640w`,
     );
   });
 
@@ -798,4 +798,20 @@ describe("bestArtistAvatarUrl — owned master preferred, raw avatar floor", () 
 
     expect(url).toBe("https://i.scdn.co/image/ab6761610000e5ebcafe");
   });
+});
+
+describe("srcset candidate separation", () => {
+  it.each([coverSrcSet, hubCoverSrcSet, freshStandoutSrcSet])(
+    "keeps every comma-delimited candidate absolute and width-qualified",
+    (build) => {
+      const source = ownedCoverUrl("albums/cover,one.jpg", undefined);
+      const candidates = (build(source) ?? "").split(",").map((value) => value.trim());
+      expect(candidates.length).toBeGreaterThan(1);
+      for (const candidate of candidates) {
+        expect(candidate).toMatch(/^https:\/\/\S+ \d+w$/);
+        const url = candidate.split(" ")[0] ?? "";
+        expect(decodeURIComponent(url)).toContain("format=auto/");
+      }
+    },
+  );
 });
