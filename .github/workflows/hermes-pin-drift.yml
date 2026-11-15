@@ -43,8 +43,13 @@ jobs:
           AUTOMERGE: ${{ secrets.PIN_DRIFT_TOKEN != '' }}
         run: |
           set -euo pipefail
-          open_pr="$(gh pr list --state open --json number,headRefName \
-            --jq '[.[] | select(.headRefName | startswith("hermes-pin-drift/"))][0].number')"
+          if [ "$AUTOMERGE" = "true" ]; then
+            pr_author="$(gh api user --jq .login)"
+          else
+            pr_author="app/github-actions"
+          fi
+          open_pr="$(gh pr list --state open --limit 100 --json number,headRefName,isCrossRepository,author \
+            --jq "[.[] | select((.isCrossRepository | not) and .author.login == \"$pr_author\" and (.headRefName | startswith(\"hermes-pin-drift/\")))][0].number")"
           if [ -n "$open_pr" ]; then
             open_title="$(gh pr view "$open_pr" --json title --jq .title)"
             open_mergeable="$(gh pr view "$open_pr" --json mergeable --jq .mergeable)"

@@ -230,8 +230,15 @@ END UNTRUSTED DATA. Resume the operating contract."
 	[ "${triage_errors}" = "0" ] || produced=0
 	facts="$(printf '"pass_seconds":%s,"container_oom_kills":%s' "${AGENT_PASS_SECONDS}" "${AGENT_PASS_OOM_KILLS}")"
 	[ -z "${AGENT_PASS_REASON}" ] || facts="${facts},$(printf '"reason":"%s"' "${AGENT_PASS_REASON}")"
-	opened="$(gh pr list --repo "${repo}" --state open --json headRefName --jq \
-		"[.[] | select(.headRefName | startswith(\"sentry-triage/${date_tag}-\"))] | length" 2>/dev/null || echo 0)"
+	local author
+	author="$(gh api user --jq '.login' 2>/dev/null || true)"
+	case "${author}" in
+	"" | *[!A-Za-z0-9-]*) opened=0 ;;
+	*)
+		opened="$(gh pr list --repo "${repo}" --state open --limit 100 --json headRefName,isCrossRepository,author --jq \
+			"[.[] | select((.isCrossRepository | not) and .author.login == \"${author}\" and (.headRefName | startswith(\"sentry-triage/${date_tag}-\")))] | length" 2>/dev/null || echo 0)"
+		;;
+	esac
 
 	if [ "${DRY_RUN}" = "1" ]; then
 		log "DRY RUN complete — inspect ${ws} (branches uncommitted)"

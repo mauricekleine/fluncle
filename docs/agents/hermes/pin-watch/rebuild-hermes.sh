@@ -574,7 +574,8 @@ quiesce_sweeps() {
 	lock_src="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/opt/data"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
 	if [ -n "$lock_src" ] && [ -d "$lock_src" ]; then
 		REBAKE_LOCK="${lock_src}/rebake.lock"
-		date -u +%FT%TZ >"$REBAKE_LOCK" 2>/dev/null || REBAKE_LOCK=""
+		setpriv --reuid=10000 --regid=10000 --clear-groups \
+			bash -c 'rm -f -- "$1" && set -C && date -u +%FT%TZ >"$1"' rebake-lock "$REBAKE_LOCK" 2>/dev/null || REBAKE_LOCK=""
 		[ -n "$REBAKE_LOCK" ] && log "rebake lock held: $REBAKE_LOCK"
 	fi
 

@@ -289,10 +289,18 @@ const defaultGh: GhRunner = (args) => {
   return { ok: p.exitCode === 0, stdout: p.stdout.toString() };
 };
 
+type ListedPr = TriagePr & { author?: { login?: string }; isCrossRepository?: boolean };
+
 function readTriagePrs(
   state: "open" | "merged",
   gh: GhRunner = defaultGh,
 ): { ok: boolean; rows: TriagePr[] } {
+  const viewer = gh(["api", "user", "--jq", ".login"]);
+  const author = viewer.stdout.trim();
+  if (!viewer.ok || !author) {
+    log("gh api user failed; cannot tell the sweep's own PRs apart");
+    return { ok: false, rows: [] };
+  }
   const r = gh([
     "pr",
     "list",
@@ -303,20 +311,36 @@ function readTriagePrs(
     "--limit",
     "100",
     "--json",
-    "number,headRefName,body,url,mergedAt",
+    "number,headRefName,body,url,mergedAt,isCrossRepository,author",
   ]);
   if (!r.ok) {
     log(`gh pr list --state ${state} failed`);
     return { ok: false, rows: [] };
   }
-  let rows: TriagePr[] = [];
+  let rows: ListedPr[] = [];
   try {
-    rows = JSON.parse(r.stdout || "[]") as TriagePr[];
+    rows = JSON.parse(r.stdout || "[]") as ListedPr[];
   } catch {
     log(`gh pr list --state ${state} returned invalid JSON`);
     return { ok: false, rows: [] };
   }
-  return { ok: true, rows: rows.filter((p) => (p.headRefName ?? "").startsWith(BRANCH_PREFIX)) };
+  return {
+    ok: true,
+    rows: rows
+      .filter(
+        (p) =>
+          p.isCrossRepository === false &&
+          p.author?.login === author &&
+          (p.headRefName ?? "").startsWith(BRANCH_PREFIX),
+      )
+      .map(({ body, headRefName, mergedAt, number, url }) => ({
+        body,
+        headRefName,
+        mergedAt,
+        number,
+        url,
+      })),
+  };
 }
 
 export function listTriagePrs(state: "open" | "merged", gh: GhRunner = defaultGh): TriagePr[] {
