@@ -58,13 +58,21 @@ afterEach(async () => {
 });
 
 async function seedTrackSource(ids: string[]): Promise<void> {
-  for (const [index, trackId] of ids.entries()) {
-    await seedTrack(db, { logId: `${index}.A.AA`, trackId });
-    await seedEmbedding(
-      db,
-      trackId,
-      Array.from({ length: 1024 }, () => index / 16),
-    );
+  const transaction = await db.transaction("write");
+
+  try {
+    for (const [index, trackId] of ids.entries()) {
+      await seedTrack(transaction, { logId: `${index}.A.AA`, trackId });
+      await seedEmbedding(
+        transaction,
+        trackId,
+        Array.from({ length: 1024 }, () => index / 16),
+      );
+    }
+
+    await transaction.commit();
+  } finally {
+    transaction.close();
   }
 }
 
