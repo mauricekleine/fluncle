@@ -14,7 +14,7 @@ import { NotFoundBlackHole } from "@/components/not-found-black-hole";
 import { RootErrorState } from "@/components/root-error-state";
 import { DiscoveryListener } from "@/components/discovery-listener";
 import { PublicChrome } from "@/components/nav/public-chrome";
-import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
+import { galaxyMapAvailabilitySnapshot } from "@/lib/server/galaxies-map";
 import { isStaleBuildError, recoverFromStaleBuild } from "@/lib/stale-build-recovery";
 import { siteUrl } from "../lib/fluncle-links";
 import { fluncleMetaDescription, fluncleSiteTitle } from "../lib/identity";
@@ -27,7 +27,9 @@ const title = fluncleSiteTitle;
 const description = fluncleMetaDescription;
 const coverUrl = `${siteUrl}/fluncle-cover.png`;
 
-const fetchGalaxiesLive = createServerFn({ method: "GET" }).handler(() => isGalaxyMapFullyNamed());
+const fetchGalaxiesLive = createServerFn({ method: "GET" }).handler(() =>
+  galaxyMapAvailabilitySnapshot(),
+);
 
 // oxlint-disable-next-line sort-keys
 export const Route = createRootRoute({

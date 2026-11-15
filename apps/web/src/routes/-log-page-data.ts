@@ -1,3 +1,4 @@
+import { optionalPageData } from "@/lib/server/optional-page-data";
 import { type MixtapeDTO } from "@/lib/mixtapes";
 import { getArtistSlugMap } from "@/lib/server/artists";
 import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
@@ -51,10 +52,10 @@ export async function resolveLogPageData(logId: string): Promise<LogPageData> {
   }
 
   const [neighbors, similar, artistSlugs, galaxyReady] = await Promise.all([
-    getTrackNeighbors(track),
-    getSimilarFindings(track.logId).catch(() => []),
-    getArtistSlugMap(track.trackId),
-    isGalaxyMapFullyNamed(),
+    optionalPageData("log.neighbours", () => getTrackNeighbors(track), {}),
+    optionalPageData("log.similar", () => getSimilarFindings(logId), []),
+    optionalPageData("log.artists", () => getArtistSlugMap(track.trackId), {}),
+    optionalPageData("log.galaxy", () => isGalaxyMapFullyNamed(), false),
   ]);
 
   return {

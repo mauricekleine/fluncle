@@ -1,3 +1,4 @@
+import { optionalPageData, optionalPageDataBudget } from "@/lib/server/optional-page-data";
 import { releaseTodayUtc } from "@/lib/server/release-day";
 import {
   listSonicNeighbours,
@@ -51,27 +52,35 @@ export async function resolveTrackPageData(trackId: string): Promise<TrackPageDa
   const { primaryArtist } = row.graph;
   const albumId = row.track.album ? row.graph.albumId : undefined;
   const today = releaseTodayUtc(new Date());
+  const optional = optionalPageDataBudget();
   const neighboursPromise = optionalSonicNeighbours(row.track.trackId);
   const [neighbours, related, record, byArtist] = await Promise.all([
     neighboursPromise,
-    neighboursPromise.then((neighbours) =>
-      optionalRelatedFindings(
-        row.track.trackId,
-        neighbours.map((neighbour) => neighbour.trackId),
-      ),
+    optional(
+      "track.related",
+      async () => {
+        const neighbours = await neighboursPromise;
+        return optionalRelatedFindings(
+          row.track.trackId,
+          neighbours.map((neighbour) => neighbour.trackId),
+        );
+      },
+      [],
     ),
     albumId
-      ? listCatalogueTracksByAlbum(albumId).then(
-          (slice) => slice.tracks,
-          (): CatalogueTrackItem[] => [],
-        )
+      ? optional("track.record", async () => (await listCatalogueTracksByAlbum(albumId)).tracks, [])
       : [],
     primaryArtist
-      ? listCatalogueTracksByArtist(primaryArtist.id, {
-          excludeAlbumId: albumId,
-          limit: ARTIST_SIBLING_SCAN,
-          today,
-        }).catch((): CatalogueTrackItem[] => [])
+      ? optional(
+          "track.artist",
+          () =>
+            listCatalogueTracksByArtist(primaryArtist.id, {
+              excludeAlbumId: albumId,
+              limit: ARTIST_SIBLING_SCAN,
+              today,
+            }),
+          [],
+        )
       : [],
   ]);
   const siblings = trackSiblingBands({
@@ -143,23 +152,15 @@ export async function optionalSonicNeighbours(
   trackId: string,
   load: (id: string) => Promise<SonicNeighbour[]> = listSonicNeighbours,
 ): Promise<SonicNeighbour[]> {
-  try {
-    return await load(trackId);
-  } catch {
-    return [];
-  }
+  return optionalPageData("track.neighbours", () => load(trackId), []);
 }
 
 async function optionalRelatedFindings(
   trackId: string,
   excludeTrackIds: string[],
 ): Promise<GraphFindingItem[]> {
-  try {
-    return await listRelatedFindings(
-      { kind: "track", trackId },
-      { excludeTrackIds, limit: RELATED_FINDINGS_LIMIT, today: releaseTodayUtc(new Date()) },
-    );
-  } catch {
-    return [];
-  }
+  return listRelatedFindings(
+    { kind: "track", trackId },
+    { excludeTrackIds, limit: RELATED_FINDINGS_LIMIT, today: releaseTodayUtc(new Date()) },
+  );
 }
