@@ -185,7 +185,7 @@ describe("server.ts dispatch spine", () => {
 
   it("answers a crawler's /track/null and /log/null with 410 Gone without rendering", async () => {
     for (const path of ["/track/null", "/log/null", "/track/null/"]) {
-      const response = await dispatch(`https://www.fluncle.com${path}`, {
+      const response = await dispatch(`https://status.fluncle.com${path}`, {
         accept: "image/avif,image/webp,*/*;q=0.8",
       });
 

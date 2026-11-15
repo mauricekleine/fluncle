@@ -42,17 +42,17 @@ describe("presence redirects", () => {
     }
     expect(
       presenceRedirect(new Request("https://status.fluncle.com///"))?.headers.get("location"),
-    ).toBe("https://www.fluncle.com///");
+    ).toBe("https://www.fluncle.com/");
   });
 
-  it("redirects status page paths with their path and query intact", () => {
+  it("redirects status page paths to www with their query intact", () => {
     for (const method of ["GET", "HEAD"]) {
       const response = presenceRedirect(
         new Request("https://status.fluncle.com/album/example/?q=a%2Fb", { method }),
       );
       expect(response?.status).toBe(308);
       expect(response?.headers.get("location")).toBe(
-        "https://www.fluncle.com/album/example/?q=a%2Fb",
+        "https://www.fluncle.com/album/example?q=a%2Fb",
       );
     }
   });
