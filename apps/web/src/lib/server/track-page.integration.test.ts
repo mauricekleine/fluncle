@@ -62,11 +62,11 @@ const EMBEDDED_NEXT = "cc-embedded-neighbour";
 async function makeEvidenceRich(trackId: string): Promise<void> {
   await db.execute(`insert or ignore into artists
     (id, name, slug, renderable_track_count, created_at, updated_at)
-    values ('sitemap-artist', 'Ashen Relay', 'ashen-relay', 200, '2026-01-01', '2026-01-01')`);
+    values ('sitemap-artist', 'Sitemap Artist', 'sitemap-artist', 200, '2026-01-01', '2026-01-01')`);
   await db.execute({
     args: [trackId],
     sql: `insert or ignore into track_artists (track_id, artist_id, position)
-          values (?, 'sitemap-artist', 0)`,
+          values (?, 'sitemap-artist', 1)`,
   });
   await db.execute({
     args: [trackId],
