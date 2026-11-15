@@ -986,9 +986,8 @@ export function catalogueTracksByArtistStatement(
     sql: `with winners as materialized (
             select tracks.track_id
             from track_artists
-            join tracks on tracks.track_id = track_artists.track_id
-            left join findings on findings.track_id = tracks.track_id
-            where track_artists.artist_id = ? and findings.track_id is null
+            cross join tracks on tracks.track_id = track_artists.track_id
+            where track_artists.artist_id = ? and tracks.is_catalogue = 1
                   and tracks.album_id is not ?
                   and ${catalogueTrackPublicWhere("tracks")}
                   and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
