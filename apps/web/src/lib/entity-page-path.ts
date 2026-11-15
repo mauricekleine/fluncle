@@ -11,7 +11,7 @@ export function isMalformedEntityPagePath(pathname: string): boolean {
   let value: string;
 
   try {
-    value = decodeURIComponent((match[2] ?? "").replace(/\/$/, ""));
+    value = decodeURIComponent((match[2] ?? "").replace(/\/+$/, ""));
   } catch {
     return true;
   }

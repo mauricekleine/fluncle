@@ -821,3 +821,16 @@ describe("valid entity paths", () => {
     expect(hoisted.routerFetch).toHaveBeenCalledOnce();
   });
 });
+
+describe("trailing-slash entity paths", () => {
+  it.each(["/album/some-album//", "/artist/4am-kru///"])(
+    "redirects %s to its canonical page",
+    async (path) => {
+      const response = await dispatch(`https://www.fluncle.com${path}`);
+      expect(response.status).toBe(308);
+      expect(response.headers.get("location")).toBe(
+        `https://www.fluncle.com${path.replace(/\/+$/, "")}`,
+      );
+    },
+  );
+});
