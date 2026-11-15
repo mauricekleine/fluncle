@@ -154,7 +154,7 @@ describe("production deploy migration boundary", () => {
       "drizzle-kit migrate && bun run scripts/backfill-label-name-folds.ts && bun run scripts/ensure-search-index.ts",
     );
     expect(pkg.scripts["db:migrate:production"]).toBe(
-      "bun run scripts/migrate.ts && bun run scripts/backfill-label-name-folds.ts && bun run scripts/ensure-search-index.ts",
+      "bun run scripts/migrate.ts && bun run scripts/backfill-label-name-folds.ts && bun run scripts/ensure-search-index.ts --schema",
     );
     expect(pkg.scripts["db:migrate:production:h4"]).toBeUndefined();
     expect(pkg.scripts["db:migrate:production:h8"]).toBeUndefined();
@@ -169,6 +169,15 @@ describe("production deploy migration boundary", () => {
     expect(deployAt).toBeGreaterThan(migrationAt);
     expect(chain).not.toContain("bun run db:backfill");
     expect(chain).not.toContain("bun run db:migrate &&");
+  });
+
+  it("publishes the Worker before the full search-index count", () => {
+    const chain = pkg.scripts["deploy:cf"] ?? "";
+    const deployAt = chain.indexOf("cf deploy --prebuilt");
+    const reconcileAt = chain.indexOf("bun run scripts/ensure-search-index.ts --reconcile");
+
+    expect(reconcileAt).toBeGreaterThan(deployAt);
+    expect(chain.endsWith("bun run scripts/ensure-search-index.ts --reconcile")).toBe(true);
   });
 
   it("keeps the standalone deploy command migration-free", () => {
