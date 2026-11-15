@@ -938,18 +938,20 @@ type CatalogueTrackRow = {
   track_id: string;
 };
 
+const CATALOGUE_TRACK_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, tracks.spotify_url,
+  tracks.album_image_url,
+  (select image_key from albums where albums.id = tracks.album_id) as album_image_key,
+  (select image_state from albums where albums.id = tracks.album_id) as album_image_state,
+  (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at,
+  tracks.duration_ms, tracks.bpm, tracks.key,
+  tracks.preview_url, tracks.isrc, tracks.release_date`;
+
 export async function listCatalogueTracksByAlbum(albumId: string): Promise<CatalogueSlice> {
   const db = await getDb();
   const result = await db.execute({
     args: [albumId, GRAPH_PAGE_CATALOGUE_LIMIT],
 
-    sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.spotify_url,
-                 tracks.album_image_url,
-                 (select image_key from albums where albums.id = tracks.album_id) as album_image_key,
-                 (select image_state from albums where albums.id = tracks.album_id) as album_image_state,
-                 (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at,
-                 tracks.duration_ms, tracks.bpm, tracks.key,
-                 tracks.preview_url, tracks.isrc, tracks.release_date, count(*) over () as total
+    sql: `select ${CATALOGUE_TRACK_SELECT}, count(*) over () as total
           from tracks
           left join findings on findings.track_id = tracks.track_id
           where tracks.album_id = ? and findings.track_id is null
@@ -961,35 +963,91 @@ export async function listCatalogueTracksByAlbum(albumId: string): Promise<Catal
   });
 
   const rows = typedRows<CatalogueTrackRow>(result.rows);
-  const deduped = dedupeByRecordingIdentity(rows, (row) => ({
+  const deduped = dedupeByRecordingIdentity(rows, catalogueRowIdentity);
+  const rawTotal = Number(rows[0]?.total ?? 0);
+
+  return {
+    total: Math.max(rawTotal - (rows.length - deduped.length), deduped.length),
+    tracks: deduped.map(toCatalogueTrackItem),
+  };
+}
+
+const ARTIST_CATALOGUE_ORDER = `tracks.release_date is null asc, tracks.release_date desc,
+  tracks.title collate nocase asc, tracks.track_id asc`;
+
+type ArtistCatalogueOptions = { excludeAlbumId: string | undefined; limit: number; today: string };
+
+export function catalogueTracksByArtistStatement(
+  artistId: string,
+  options: ArtistCatalogueOptions,
+): { args: (string | number | null)[]; sql: string } {
+  return {
+    args: [
+      artistId,
+      ...(options.excludeAlbumId ? [options.excludeAlbumId] : []),
+      options.today,
+      options.limit,
+    ],
+    sql: `with winners as materialized (
+            select tracks.track_id
+            from track_artists
+            cross join tracks on tracks.track_id = track_artists.track_id
+            where track_artists.artist_id = ? and tracks.is_catalogue = 1
+                  ${options.excludeAlbumId ? "and tracks.album_id is not ?" : ""}
+                  and ${catalogueTrackPublicWhere("tracks")}
+                  and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
+                  and ${releasedByTodaySql("tracks.release_date")}
+            order by ${ARTIST_CATALOGUE_ORDER}
+            limit ?
+          )
+          select ${CATALOGUE_TRACK_SELECT}
+          from winners
+          join tracks on tracks.track_id = winners.track_id
+          order by ${ARTIST_CATALOGUE_ORDER}`,
+  };
+}
+
+export async function listCatalogueTracksByArtist(
+  artistId: string,
+  options: ArtistCatalogueOptions,
+): Promise<CatalogueTrackItem[]> {
+  const db = await getDb();
+  const result = await db.execute(catalogueTracksByArtistStatement(artistId, options));
+
+  return dedupeByRecordingIdentity(
+    typedRows<Omit<CatalogueTrackRow, "total">>(result.rows),
+    catalogueRowIdentity,
+  ).map(toCatalogueTrackItem);
+}
+
+function catalogueRowIdentity(row: Omit<CatalogueTrackRow, "total">) {
+  return {
     artists: parseArtistsJson(row.artists_json),
     isrc: row.isrc,
     releaseDate: row.release_date,
     spotifyUrl: row.spotify_url,
     title: row.title,
     trackId: row.track_id,
-  }));
-  const rawTotal = Number(rows[0]?.total ?? 0);
+  };
+}
 
+function toCatalogueTrackItem(row: Omit<CatalogueTrackRow, "total">): CatalogueTrackItem {
   return {
-    total: Math.max(rawTotal - (rows.length - deduped.length), deduped.length),
-    tracks: deduped.map((row) => ({
-      albumImageUrl: bestAlbumCoverUrl({
-        imageKey: row.album_image_key,
-        imageState: row.album_image_state,
-        imageUpdatedAt: row.album_image_updated_at,
-        spotifyUrl: row.album_image_url,
-      }),
-      artists: parseArtistsJson(row.artists_json),
-      bpm: row.bpm ?? undefined,
-      durationMs: row.duration_ms || undefined,
-      key: row.key ?? undefined,
-      previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
-      releaseDate: row.release_date ?? undefined,
-      spotifyUrl: row.spotify_url ?? undefined,
-      title: row.title,
-      trackId: row.track_id,
-    })),
+    albumImageUrl: bestAlbumCoverUrl({
+      imageKey: row.album_image_key,
+      imageState: row.album_image_state,
+      imageUpdatedAt: row.album_image_updated_at,
+      spotifyUrl: row.album_image_url,
+    }),
+    artists: parseArtistsJson(row.artists_json),
+    bpm: row.bpm ?? undefined,
+    durationMs: row.duration_ms || undefined,
+    key: row.key ?? undefined,
+    previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
+    releaseDate: row.release_date ?? undefined,
+    spotifyUrl: row.spotify_url ?? undefined,
+    title: row.title,
+    trackId: row.track_id,
   };
 }
 

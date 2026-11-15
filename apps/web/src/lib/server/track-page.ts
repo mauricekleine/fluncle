@@ -68,8 +68,13 @@ export type TrackDestination = {
   trackId: string;
 };
 
+export type TrackGraphIds = {
+  albumId: string | undefined;
+  primaryArtist: { id: string; name: string } | undefined;
+};
+
 export type TrackPageRow =
-  | { kind: "found"; track: TrackDestination }
+  | { graph: TrackGraphIds; kind: "found"; track: TrackDestination }
   | { kind: "duplicate"; principalTrackId: string }
   | { kind: "certified"; logId: string }
   | { kind: "missing" };
@@ -78,6 +83,7 @@ type DestinationRow = {
   album_image_key: string | null;
   album_image_state: string | null;
   album_image_updated_at: string | null;
+  album_id: string | null;
   album_image_url: string | null;
   album_name: string | null;
   album_slug: string | null;
@@ -99,6 +105,8 @@ type DestinationRow = {
   log_id: string | null;
   mb_recording_id: string | null;
   preview_url: string | null;
+  primary_artist_id: string | null;
+  primary_artist_name: string | null;
   principal_log_id: string | null;
   release_date: string | null;
   title: string;
@@ -111,7 +119,13 @@ const ARTIST_SLUGS_SELECT = `(select json_group_array(json_object('name', a.name
      from track_artists ta join artists a on a.id = ta.artist_id
      where ta.track_id = tracks.track_id and ${listedArtistWhere("a")}) as artist_slugs_json`;
 
-const DESTINATION_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, tracks.album_image_url,
+const PRIMARY_ARTIST_FROM = `from track_artists ta join artists a on a.id = ta.artist_id
+     where ta.track_id = tracks.track_id and ta.role is null and ${listedArtistWhere("a")}
+     order by ta.position asc limit 1`;
+
+const DESTINATION_SELECT = `tracks.track_id, tracks.album_id,
+  (select a.id ${PRIMARY_ARTIST_FROM}) as primary_artist_id,
+  (select a.name ${PRIMARY_ARTIST_FROM}) as primary_artist_name, tracks.title, tracks.artists_json, tracks.album_image_url,
   tracks.bpm, tracks.key, tracks.duration_ms, tracks.release_date, tracks.isrc, tracks.mb_recording_id,
   tracks.label, tracks.preview_url, tracks.spotify_url, tracks.apple_music_url, tracks.beatport_url,
   tracks.deezer_track_id, tracks.youtube_video_id, tracks.youtube_video_official, tracks.in_release_id,
@@ -229,6 +243,13 @@ export async function readTrackDestination(trackId: string): Promise<TrackPageRo
   const slugs = artistSlugMap(row.artist_slugs_json);
 
   return {
+    graph: {
+      albumId: row.album_id ?? undefined,
+      primaryArtist:
+        row.primary_artist_id && row.primary_artist_name?.trim()
+          ? { id: row.primary_artist_id, name: row.primary_artist_name }
+          : undefined,
+    },
     kind: "found",
     track: {
       album: graphLink(row.album_name, row.album_slug),
