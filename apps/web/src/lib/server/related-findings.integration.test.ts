@@ -249,6 +249,50 @@ describe("what a related findings band never shows", () => {
     expect(row).not.toHaveProperty("keySource", expect.anything());
   });
 
+  it("hydrates cover and sonic eligibility without changing the card's fields", async () => {
+    await finding("card", "500.3.1A", "2026-07-01T00:00:00.000Z", {
+      albumId: "album-home",
+      artistIds: ["artist-home"],
+      releaseDate: "2026-06-01",
+    });
+    await db.execute(`update albums set image_key = 'albums/home.jpg', image_state = 'resolved',
+      image_updated_at = '2026-06-02' where id = 'album-home'`);
+    await db.execute(`insert into artist_centroids
+      (artist_id, centroid_blob, computed_at, rank_corpus, vector_count)
+      values ('artist-home', x'00000000', '2026-07-01', 'test', 4)`);
+    await db.execute(`update tracks set apple_music_url = 'https://music.apple.com/album/1',
+      album_image_url = 'https://example.com/fallback.jpg', bpm = 174, key = '8A',
+      isrc = 'GBTEST2600001', preview_url = 'https://example.com/preview.mp3', label = 'Home'
+      where track_id = 'card'`);
+    await db.execute(`update findings set added_to_spotify = 1, posted_to_telegram = 1
+      where track_id = 'card'`);
+
+    expect(await listRelatedFindings({ kind: "track", trackId: "missing" })).toStrictEqual([
+      {
+        addedAt: "2026-07-01T00:00:00.000Z",
+        addedToSpotify: true,
+        albumImageUrl: expect.stringContaining("/albums/home.jpg"),
+        appleMusicUrl: "https://music.apple.com/album/1",
+        artists: ["Test Artist"],
+        bpm: 174,
+        durationMs: 270_000,
+        enrichmentStatus: "pending",
+        isrc: "GBTEST2600001",
+        key: "8A",
+        label: "Home",
+        logId: "500.3.1A",
+        logPageUrl: "https://www.fluncle.com/log/500.3.1A",
+        postedToTelegram: true,
+        previewUrl: "https://example.com/preview.mp3",
+        releaseDate: "2026-06-01",
+        similar: true,
+        spotifyUrl: "https://open.spotify.com/track/card",
+        title: "card",
+        trackId: "card",
+      },
+    ]);
+  });
+
   it("stops at the band's size", async () => {
     await catalogueTrack("seed", {});
 
@@ -285,6 +329,24 @@ describe("the related findings statement at catalogue scale", () => {
         args: statement.args,
         sql: `explain query plan ${statement.sql}`,
       });
+      const winners = plan.rows.find((row) => row.detail === "MATERIALIZE winners");
+      expect(winners).toBeDefined();
+      const rankingIds = new Set([Number(winners?.id)]);
+      for (const row of plan.rows) {
+        if (rankingIds.has(Number(row.parent))) {
+          rankingIds.add(Number(row.id));
+        }
+      }
+      const hydration = plan.rows.filter(
+        (row) =>
+          typeof row.detail === "string" &&
+          /^SEARCH (albums|seed_ta|seed_a|seed_ac)\b/.test(row.detail),
+      );
+      expect(hydration).toHaveLength(6);
+      expect(hydration.every((row) => !rankingIds.has(Number(row.id)))).toBe(true);
+      expect(
+        plan.rows.filter((row) => Number(row.parent) === 0).map((row) => row.detail),
+      ).toContain("SCAN winners");
       const edgeSeeks = plan.rows
         .map((row) => (typeof row.detail === "string" ? row.detail : ""))
         .filter((detail) => detail.startsWith("SEARCH fa "));

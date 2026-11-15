@@ -2,7 +2,6 @@ import { releaseTodayUtc } from "@/lib/server/release-day";
 import {
   listSonicNeighbours,
   readTrackDestination,
-  SONIC_NEIGHBOUR_LIMIT,
   type SonicNeighbour,
   type TrackDestination,
 } from "@/lib/server/track-page";
@@ -52,9 +51,15 @@ export async function resolveTrackPageData(trackId: string): Promise<TrackPageDa
   const { primaryArtist } = row.graph;
   const albumId = row.track.album ? row.graph.albumId : undefined;
   const today = releaseTodayUtc(new Date());
+  const neighboursPromise = optionalSonicNeighbours(row.track.trackId);
   const [neighbours, related, record, byArtist] = await Promise.all([
-    optionalSonicNeighbours(row.track.trackId),
-    optionalRelatedFindings(row.track.trackId),
+    neighboursPromise,
+    neighboursPromise.then((neighbours) =>
+      optionalRelatedFindings(
+        row.track.trackId,
+        neighbours.map((neighbour) => neighbour.trackId),
+      ),
+    ),
     albumId
       ? listCatalogueTracksByAlbum(albumId).then(
           (slice) => slice.tracks,
@@ -69,7 +74,6 @@ export async function resolveTrackPageData(trackId: string): Promise<TrackPageDa
         }).catch((): CatalogueTrackItem[] => [])
       : [],
   ]);
-  const shown = new Set(neighbours.map((neighbour) => neighbour.trackId));
   const siblings = trackSiblingBands({
     artist: primaryArtist ? { name: primaryArtist.name, tracks: byArtist } : undefined,
     neighbours,
@@ -80,9 +84,7 @@ export async function resolveTrackPageData(trackId: string): Promise<TrackPageDa
   return {
     ...siblings,
     neighbours,
-    related: related
-      .filter((finding) => !shown.has(finding.trackId))
-      .slice(0, RELATED_FINDINGS_LIMIT),
+    related,
     status: "found",
     track: row.track,
   };
@@ -148,11 +150,14 @@ export async function optionalSonicNeighbours(
   }
 }
 
-async function optionalRelatedFindings(trackId: string): Promise<GraphFindingItem[]> {
+async function optionalRelatedFindings(
+  trackId: string,
+  excludeTrackIds: string[],
+): Promise<GraphFindingItem[]> {
   try {
     return await listRelatedFindings(
       { kind: "track", trackId },
-      { limit: RELATED_FINDINGS_LIMIT + SONIC_NEIGHBOUR_LIMIT, today: releaseTodayUtc(new Date()) },
+      { excludeTrackIds, limit: RELATED_FINDINGS_LIMIT, today: releaseTodayUtc(new Date()) },
     );
   } catch {
     return [];
