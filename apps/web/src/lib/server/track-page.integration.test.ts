@@ -18,7 +18,7 @@ import {
   sonicNeighbourScanStatement,
   trackSitemapIndexCountStatement,
 } from "./track-page";
-import { catalogueTracksByArtistStatement } from "./tracks";
+import { catalogueTracksByArtistStatement, listCatalogueTracksByArtist } from "./tracks";
 import { sameAsUrls } from "../track-page";
 import {
   optionalSonicNeighbours,
@@ -587,11 +587,12 @@ describe("the record and artist bands", () => {
           ...many,
         ],
       },
-      neighbours: [{ trackId: "mb_neighbour" }],
+      neighbours: [{ artists: ["Ashen Relay"], title: "Close One", trackId: "mb_neighbour" }],
       record: {
         name: "Signal Bloom",
         tracks: [
           row("mb_neighbour", "Close One"),
+          row("mb_neighbour-edition", "Close One"),
           row("mb_on-record", "Salt Choir"),
           row("mb_glass", "Glass Tide"),
         ],
@@ -606,6 +607,24 @@ describe("the record and artist bands", () => {
     expect(bands.artistTracks?.tracks.map((track) => track.trackId)).toStrictEqual(
       many.slice(0, TRACK_SIBLING_LIMIT).map((track) => track.trackId),
     );
+  });
+
+  it("keeps the artist's record-less tracks when the page's own track has no record", async () => {
+    await seedCatalogueTrack(db, {
+      artists: ["Ashen Relay"],
+      title: "Loose Signal",
+      trackId: "mb_no-record",
+    });
+    await placeTrack("mb_no-record", { releaseDate: "2025-03-03" });
+    await credit("mb_no-record", "artist-ashen");
+
+    const tracks = await listCatalogueTracksByArtist("artist-ashen", {
+      excludeAlbumId: undefined,
+      limit: 48,
+      today: "2026-11-15",
+    });
+
+    expect(tracks.map((track) => track.trackId)).toContain("mb_no-record");
   });
 
   it("reads the artist band by an artist-id seek", async () => {

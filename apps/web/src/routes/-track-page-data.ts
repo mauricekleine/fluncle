@@ -95,7 +95,7 @@ export function trackSiblingBands({
   track,
 }: {
   artist: TrackSiblingBand | undefined;
-  neighbours: { trackId: string }[];
+  neighbours: { artists: string[]; title: string; trackId: string }[];
   record: TrackSiblingBand | undefined;
   track: { artists: { name: string }[]; title: string; trackId: string };
 }): { artistTracks: TrackSiblingBand | undefined; recordTracks: TrackSiblingBand | undefined } {
@@ -105,6 +105,7 @@ export function trackSiblingBands({
       track.artists.map((credit) => credit.name),
       track.title,
     ),
+    ...neighbours.map((neighbour) => matchKey(neighbour.artists, neighbour.title)),
   ]);
 
   const take = (band: TrackSiblingBand | undefined): TrackSiblingBand | undefined => {
