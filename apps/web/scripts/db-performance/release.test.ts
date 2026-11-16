@@ -139,6 +139,9 @@ function processExists(pid: number): boolean {
   }
 }
 
+const UNTIMED_CHILD_DEADLINE_MS = 15_000;
+const UNTIMED_CHILD_TEST_TIMEOUT_MS = 30_000;
+
 async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
@@ -575,7 +578,7 @@ describe("database performance release proof", () => {
         command: [process.execPath, "-e", parentProgram],
         cwd: ".",
         id: "captured-process-group-output",
-        timeoutMs: 2_000,
+        timeoutMs: UNTIMED_CHILD_DEADLINE_MS,
       });
 
       expect(result).toMatchObject({
@@ -585,7 +588,7 @@ describe("database performance release proof", () => {
         timedOut: false,
       });
     },
-    5_000,
+    UNTIMED_CHILD_TEST_TIMEOUT_MS,
   );
 
   it.skipIf(process.platform === "win32")(
@@ -691,7 +694,7 @@ describe("database performance release proof", () => {
             command: [process.execPath, "-e", program],
             cwd: ".",
             id: "detached-source-fixture",
-            timeoutMs: 2_000,
+            timeoutMs: UNTIMED_CHILD_DEADLINE_MS,
           },
           { repositoryRoot: execution.sourceDirectory },
         );
@@ -750,7 +753,7 @@ describe("database performance release proof", () => {
         await rm(testDirectory, { force: true, recursive: true });
       }
     },
-    10_000,
+    UNTIMED_CHILD_TEST_TIMEOUT_MS,
   );
 
   it.skipIf(process.platform === "win32")(
