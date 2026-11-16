@@ -103,7 +103,7 @@ Media Transformation renditions retain their own cache keys after a master is ov
 
 Edge and browser caching on `found.fluncle.com` comes from Cloudflare Cache Rules configured in the Cloudflare dashboard for that zone. They are not in this repo; read or change them there.
 
-- **Masters: edge 30 days, browser 1 day.** `footage.mp4`, `footage.social.mp4`, `poster.jpg` and `cover.jpg`. The long edge TTL is safe only because finalize, `purge_video` and a clip re-cut purge these exact URLs through `videoPurgeUrls`. A path written outside those flows stays stale at the edge for up to 30 days unless purged by hand.
+- **Masters: edge 30 days, browser 1 day.** `footage.mp4`, `footage.social.mp4`, `poster.jpg` and `cover.jpg`. The long edge TTL is safe only because finalize and `purge_video` purge these exact URLs through `videoPurgeUrls`, and a clip re-cut purges its own through `clipPurgeUrls`. A path written outside those flows stays stale at the edge for up to 30 days unless purged by hand.
 - **Other media, matched by file extension: edge 1 day, browser 1 hour.** This covers album and artist masters under `albums/` and similar owned images.
 - **Excluded from caching:** `/cdn-cgi/` (Media Transformations and Images keep their own cache, keyed by `?v`), `plate.png` and `plate.background.png`, and `set.mp4`, which exceeds the 512 MB per-object cache limit on the Free plan.
 - **404s are cached for the same TTLs.** The rules set no status-code TTL override, so a request for a master before its upload lands can pin a 404 at the edge for up to 30 days. Purge the URL after a late upload; the finalize purge already does this for finding masters. A status-code TTL in the same Cache Rule would shorten or disable caching of error responses.

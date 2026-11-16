@@ -1,6 +1,6 @@
 # fluncle-artist-credits-timer — the MB credit sweep on a host timer
 
-The rave-02 host trigger for the `--no-agent` **MB credit sweep** (RFC artist-primary-capture, slice 1b). `fluncle-artist-credits` completes the artist graph for slice 0's zero-matched residual — the tracks the name-fold backfill (`fluncle-artist-edges`) could not identify — by minting **identity-true** artists from MusicBrainz credits.
+The rave-02 host trigger for the `--no-agent` **MB credit sweep** ([docs/artist-relationship.md § The MB credit sweep](../../../artist-relationship.md#the-mb-credit-sweep-backfill_artist_credits-agent-tier)). `fluncle-artist-credits` completes the artist graph for slice 0's zero-matched residual — the tracks the name-fold backfill (`fluncle-artist-edges`) could not identify — by minting **identity-true** artists from MusicBrainz credits.
 
 **Why it exists.** Slice 0 folded each edge-less track's `artists_json` NAMES onto EXISTING `artists` rows, but it **mints nothing** (a bare name is not enough identity to create an entity), so a track whose credited names matched no existing identity got the reliability stamp but no edge — the ~14.3k **zero-matched residual**. Those are exactly the tracks capture-authorization (slice 1) cannot reason about, because it matches BY IDENTITY through the `track_artists` graph. This sweep closes that gap.
 

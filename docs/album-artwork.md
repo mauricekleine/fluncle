@@ -1,6 +1,6 @@
 # Album & artist artwork — the owned cover master
 
-How Fluncle serves cover art. The rule is **own a bounded display derivative, never hotlink and never store the original.** Every album and every artist gets ONE ≤1200²-capped cover master in Fluncle's own R2, served at any display size through Cloudflare Images. This is the RFC-U3b half of the artwork story; the video render's full-res, render-time-only path is [docs/video-variants.md](./video-variants.md) territory. It is the album/artist cousin of the label logo ([docs/label-entity.md](./label-entity.md)).
+How Fluncle serves cover art. The rule is **own a bounded display derivative, never hotlink and never store the original.** Every album and every artist gets ONE ≤1200²-capped cover master in Fluncle's own R2, served at any display size through Cloudflare Images. This is the owned-master half of the artwork story; the video render's full-res, render-time-only path is [docs/video-variants.md](./video-variants.md) territory. It is the album/artist cousin of the label logo ([docs/label-entity.md](./label-entity.md)).
 
 ## The master model
 
