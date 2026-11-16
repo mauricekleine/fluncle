@@ -41,6 +41,8 @@ export default defineConfig({
     },
     environment: "node",
 
+    hookTimeout: 20000,
+
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.{ts,tsx}"],
 
     maxWorkers: process.env.FLEET_CPU_CAP === "1" ? "50%" : "100%",

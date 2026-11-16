@@ -1,5 +1,6 @@
 import { type Client, createClient, type InArgs, type ResultSet } from "@libsql/client";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -226,17 +227,41 @@ describe("pullSnapshot", () => {
       "bun",
       [
         "-e",
-        `const { createClient } = await import("@libsql/client"); const lock = createClient({ concurrency: 1, url: "file:${lockPath}" }); await lock.transaction("write"); console.log("held"); setTimeout(() => process.exit(0), 400);`,
+        `const { createClient } = await import("@libsql/client"); const lock = createClient({ concurrency: 1, url: ${JSON.stringify(`file:${lockPath}`)} }); await lock.transaction("write"); console.log("held"); process.stdin.resume();`,
       ],
-      { cwd: process.cwd(), stdio: ["ignore", "pipe", "inherit"] },
+      { cwd: process.cwd(), stdio: ["pipe", "pipe", "inherit"] },
     );
+    const exited = once(child, "exit");
 
-    await new Promise<void>((resolve) => child.stdout.on("data", () => resolve()));
+    try {
+      await Promise.race([
+        once(child.stdout, "data", { signal: AbortSignal.timeout(10_000) }),
+        exited.then(() => {
+          throw new Error("lock holder exited before acquiring the lock");
+        }),
+      ]);
 
-    const report = await pullSnapshot({ client: source, header: "-- test", outPath });
+      const lines: string[] = [];
+      const pull = pullSnapshot({
+        client: source,
+        header: "-- test",
+        log: (line) => lines.push(line),
+        outPath,
+      });
+      await vi.waitFor(
+        () => expect(lines.some((line) => line.includes("waiting for it to finish"))).toBe(true),
+        { interval: 20, timeout: 10_000 },
+      );
+      child.kill();
+      await exited;
+      const report = await pull;
 
-    expect(report.totalRows).toBeGreaterThan(0);
-    expect(await isCompleteSnapshot(outPath)).toBe(true);
+      expect(report.totalRows).toBeGreaterThan(0);
+      expect(await isCompleteSnapshot(outPath)).toBe(true);
+    } finally {
+      child.kill();
+      await exited;
+    }
   });
 
   it("restores every table byte-faithfully across many small pages", async () => {
