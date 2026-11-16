@@ -90,6 +90,10 @@ export async function resolveSearchPageData(
     if (error instanceof ApiError && error.status === 429) {
       return { status: "limited" };
     }
+    if (error instanceof ApiError && error.code === "database_busy") {
+      logEvent("warn", "search.page-busy", { query: q });
+      return { status: "failed" };
+    }
     logEvent("error", "search.page-fault", { error, query: q });
     Sentry.captureException(error, { tags: { source: "search.page" } });
 
