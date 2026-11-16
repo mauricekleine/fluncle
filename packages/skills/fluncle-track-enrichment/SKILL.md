@@ -36,7 +36,7 @@ The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero 
    bun scripts/analyze-track.ts --artist "<artist>" --title "<title>" [--isrc "<isrc>"] --archive-dir /tmp/fluncle-preview
    ```
 
-   The output: `{ archivePreview, bpm, bpmConfidence, key, keyConfidence, features, previews }`. It resolves **multiple** previews (Deezer + iTunes are often different 30s windows of the song) and keeps the most-confident read per field. The exported `archivePreview` is exactly the preview used for the feature vector; it is an operator-only archive path input for private analysis/model training, not public playback media. Both `bpm` and `key` are `null` when confidence is low — better null than wrong (e.g. a beatless build-up preview, or an atonal track). `features` is the raw spectral vector.
+   The output: `{ archivePreview, artist, bpm, bpmConfidence, bpmSource, features, key, keyConfidence, keySource, previews, title }`. It resolves **multiple** previews (Deezer + iTunes are often different 30s windows of the song) and keeps the most-confident read per field. The exported `archivePreview` is exactly the preview used for the feature vector; it is an operator-only archive path input for private analysis/model training, not public playback media. Both `bpm` and `key` are `null` when confidence is low — better null than wrong (e.g. a beatless build-up preview, or an atonal track). `features` is the raw spectral vector.
 
 3. **Archive the analysis preview.** When `archivePreview` is present, store that official 30-second preview through the admin API. The server rejects oversized bodies with `preview_too_large`.
 

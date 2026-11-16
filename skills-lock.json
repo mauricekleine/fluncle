@@ -96,12 +96,12 @@
     "fluncle-surfaces": {
       "source": "./packages/skills/fluncle-surfaces",
       "sourceType": "local",
-      "computedHash": "a0bad66779cc353c3aed7bb9928b16e00611cc5b992cb3a3ec5750b034f78abb"
+      "computedHash": "0ee35918d22646e04d227bb0650e22219148a2fb3e187296b7438b7eb3ac70fa"
     },
     "fluncle-track-enrichment": {
       "source": "./packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "b5be33e086ae35591308572c31d4bd7c9e9b9867782614354231a6fbdbaebfbe"
+      "computedHash": "07f924292de4e63e726af439df395da35adc20276c0c8fbe511c21a85748098d"
     },
     "fluncle-video": {
       "source": "./packages/skills/fluncle-video",

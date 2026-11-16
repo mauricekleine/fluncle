@@ -1,6 +1,6 @@
 # fluncle-artist-edges-timer — the track_artists graph backfill on a host timer
 
-The rave-02 host trigger for the `--no-agent` **track_artists graph-backfill** sweep (RFC artist-primary-capture, slice 0). `fluncle-artist-edges` folds each edge-less track's `artists_json` NAMES onto EXISTING `artists` identities — so the `track ↔ artist` graph is as full as honest matching can make it, which is what the capture-authorization slice reads.
+The rave-02 host trigger for the `--no-agent` **track_artists graph-backfill** sweep ([docs/artist-relationship.md § Artist-edge backfill](../../../artist-relationship.md#artist-edge-backfill)). `fluncle-artist-edges` folds each edge-less track's `artists_json` NAMES onto EXISTING `artists` identities — so the `track ↔ artist` graph is as full as honest matching can make it, which is what the capture-authorization slice reads.
 
 **Why it exists.** The graph is crawl-era-only (born 2026-07-15): only ~12.3k of ~37.5k tracks carry `track_artists` edges. Older rows carry artist names in `artists_json` but no identity link, so an artist Fluncle has certified is invisible to any identity-keyed read of its own back-catalogue. Slice 1's capture authorization — a track's audio may be bought iff a CREDITED ARTIST is qualified — matches BY IDENTITY through this graph, so slice 0 is the prerequisite.
 
