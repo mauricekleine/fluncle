@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const chargeRateLimit = vi.hoisted(() => vi.fn());
 const searchArchive = vi.hoisted(() => vi.fn());
 const searchLikeTrack = vi.hoisted(() => vi.fn());
+const captureException = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/server/rate-limit", () => ({ chargeRateLimit }));
 vi.mock("@/lib/server/env", async (importOriginal) => ({
@@ -10,7 +11,7 @@ vi.mock("@/lib/server/env", async (importOriginal) => ({
   readOptionalEnv: async () => undefined,
 }));
 vi.mock("@/lib/server/search", () => ({ searchArchive, searchLikeTrack }));
-vi.mock("@sentry/cloudflare", () => ({ captureException: vi.fn() }));
+vi.mock("@sentry/cloudflare", () => ({ captureException }));
 vi.mock("@/lib/server/log", () => ({ logEvent: vi.fn() }));
 
 import { ApiError } from "@/lib/server/api-error";
@@ -31,6 +32,7 @@ beforeEach(() => {
   chargeRateLimit.mockReset();
   searchArchive.mockReset();
   searchLikeTrack.mockReset();
+  captureException.mockReset();
   searchArchive.mockResolvedValue(answer);
   searchLikeTrack.mockResolvedValue({ ...answer, kind: "sonic" });
 });
@@ -89,6 +91,26 @@ describe("resolveSearchPageData charges the search_archive budget on every page 
       status: "limited",
     });
     expect(searchArchive).not.toHaveBeenCalled();
+  });
+
+  it("answers a saturated database queue as a failed search without a Sentry capture", async () => {
+    allowed();
+    searchArchive.mockRejectedValue(new ApiError("database_busy", "Try again in a minute.", 503));
+
+    await expect(resolveSearchPageData("liquid", { request })).resolves.toEqual({
+      status: "failed",
+    });
+    expect(captureException).not.toHaveBeenCalled();
+  });
+
+  it("captures an unexpected search fault", async () => {
+    allowed();
+    searchArchive.mockRejectedValue(new Error("boom"));
+
+    await expect(resolveSearchPageData("liquid", { request })).resolves.toEqual({
+      status: "failed",
+    });
+    expect(captureException).toHaveBeenCalledOnce();
   });
 
   it("charges nothing for the zero state", async () => {
