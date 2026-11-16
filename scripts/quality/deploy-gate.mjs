@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repositoryRoot } from "./classifier.mjs";
+import { verifyMainQuality } from "./deploy-verify-quality.mjs";
 
 const DEPLOYED = "--filter=@fluncle/web...";
 
@@ -54,5 +55,18 @@ export function runDeployGate(
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  process.exitCode = runDeployGate();
+  try {
+    const quality =
+      process.env.WORKERS_CI_BRANCH === "main" ? await verifyMainQuality() : { verified: false };
+    process.exitCode = runDeployGate(
+      quality.verified
+        ? DEPLOY_GATE_STEPS.filter((step) => step.name !== "test")
+        : DEPLOY_GATE_STEPS,
+    );
+  } catch (error) {
+    process.stderr.write(
+      `deploy gate: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exitCode = 1;
+  }
 }
