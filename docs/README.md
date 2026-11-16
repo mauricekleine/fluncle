@@ -10,6 +10,7 @@ Read the entry matching the area you are changing before editing it. [AGENTS.md]
 - [VOICE.md](../VOICE.md) - the language canon: persona, vocabulary, voice rules, surface registers.
 - [docs/local-database.md](../docs/local-database.md) - read before touching databases, dev/worktree DB setup, or the migrate step; holds the hosted-vs-local query shapes.
 - [docs/quality-system.md](../docs/quality-system.md) - read when changing CI, the classifier or deploy verification.
+- [docs/worker-rollback.md](../docs/worker-rollback.md) - production Worker rollback decision and operator runbook.
 - [docs/database-performance.md](../docs/database-performance.md) - read before any database performance or scale claim, budget, or fixture change.
 - [docs/track-lifecycle.md](../docs/track-lifecycle.md) - read when changing how a track is added, enriched, updated, or tagged.
 - [docs/admin-shell.md](../docs/admin-shell.md) - read before building or changing any `/admin` surface, admin auth, or the admin browser fixtures.
