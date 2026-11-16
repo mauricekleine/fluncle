@@ -299,12 +299,9 @@ describe("due-work definition versions", () => {
       }
     };
 
-    expect(definitionFingerprint("tz", transcriptUnder("UTC"))).toBe(
-      definitionFingerprint("tz", transcriptUnder("Asia/Kolkata")),
-    );
-    expect(definitionFingerprint("tz", transcriptUnder("UTC"))).toBe(
-      definitionFingerprint("tz", transcriptUnder("America/Los_Angeles")),
-    );
+    const utc = definitionFingerprint("tz", transcriptUnder("UTC"));
+    expect(utc).toBe(definitionFingerprint("tz", transcriptUnder("Asia/Kolkata")));
+    expect(utc).toBe(definitionFingerprint("tz", transcriptUnder("America/Los_Angeles")));
   });
 
   it("probes a timestamp column only with values whose parse is specified", () => {

@@ -84,20 +84,6 @@ async function rankCorpus(trackId: string): Promise<null | string> {
   return typeof value === "string" ? value : null;
 }
 
-beforeEach(async () => {
-  fixtureDirectory = await mkdtemp(join(tmpdir(), "fluncle-artist-link-"));
-  db = await createIntegrationDb({ url: `file:${join(fixtureDirectory, "fixture.db")}` });
-});
-
-afterEach(async () => {
-  db.close();
-
-  if (fixtureDirectory) {
-    await rm(fixtureDirectory, { force: true, recursive: true });
-    fixtureDirectory = undefined;
-  }
-});
-
 describe("creditMbidTriples", () => {
   it("emits one (track, 1-based position, mbid) triple per IDENTIFIED credit only", () => {
     const triples = creditMbidTriples(
@@ -122,6 +108,20 @@ describe("creditMbidTriples", () => {
 });
 
 describe("linkTracksToArtistEntities — the homonym seal", () => {
+  beforeEach(async () => {
+    fixtureDirectory = await mkdtemp(join(tmpdir(), "fluncle-artist-link-"));
+    db = await createIntegrationDb({ url: `file:${join(fixtureDirectory, "fixture.db")}` });
+  });
+
+  afterEach(async () => {
+    db?.close();
+
+    if (fixtureDirectory) {
+      await rm(fixtureDirectory, { force: true, recursive: true });
+      fixtureDirectory = undefined;
+    }
+  });
+
   type CollisionFixture = {
     artists: Array<{ id: string; mbid: null | string; name: string; slug: string }>;
     credit: null | string;
