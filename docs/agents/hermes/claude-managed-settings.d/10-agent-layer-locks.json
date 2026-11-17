@@ -11,5 +11,7 @@
     "OTEL_LOG_MANAGED_SETTINGS": "0"
   },
   "autoMemoryEnabled": false,
-  "enableArtifact": false
+  "enableArtifact": false,
+  "syncClaudeAiSkills": false,
+  "syncClaudeAiPlugins": false
 }
