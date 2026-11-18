@@ -94,40 +94,40 @@ Verify progress from the falling embed queue or the log over SSH; pod status alo
 
 **The short version, when the ask is just "drain the embed queue on RunPod".** Read `RUNPOD_API_KEY` + the four embed secrets from `op` (one biometric approval), size the queue, then:
 
-1. `POST https://rest.runpod.io/v1/pods` with the body below — no `dockerStartCmd`, `PUBLIC_KEY` set, the four secrets in `env`.
-2. Poll **GraphQL** for `runtime.ports` → the `privatePort: 22` entry; SSH in with `-o IdentitiesOnly=yes -o IdentityAgent=none`.
+1. `POST https://api.runpod.io/v2/pods` with the body below — no `args`/`cmd`/`entrypoint`, `PUBLIC_KEY` set, the four secrets in `env`.
+2. Poll `GET /v2/pods/{id}` until `status` is `RUNNING` and `ssh.direct` is set; SSH in with its host and port plus `-o IdentitiesOnly=yes -o IdentityAgent=none`.
 3. On the pod: `curl -fsSL <raw embed-batch.sh> | bash -s -- --minutes 540`. It installs everything, runs the **preflight** (torch/transformers/numpy/muq must agree — it exits non-zero with the fix if they don't), warms the weights, and runs the batch.
 4. Start the **detached** queue-poll monitor that `DELETE`s the pod on drain, then walk away.
 5. When it drains: `fluncle admin catalogue rank --limit 250 --json` until `remaining` is 0.
 
 Expect ~21 tracks/min and roughly `queued ÷ 1,300` hours of GPU. Everything after this line is the why, and the traps if a step misbehaves.
 
-### The API: two endpoints, split by job
+### The API
 
-| Need                                | Where                                                                                |
-| ----------------------------------- | ------------------------------------------------------------------------------------ |
-| create / status / **destroy** a pod | REST `https://rest.runpod.io/v1/pods` (`POST`, `GET /{id}`, `DELETE /{id}`)          |
-| list GPU types + prices             | **GraphQL only** — `POST https://api.runpod.io/graphql`, query `gpuTypes`            |
-| real uptime + the mapped SSH port   | **GraphQL only** — `pod(input:{podId})  { runtime { uptimeInSeconds ports { … } } }` |
-| container logs                      | nowhere — **there is no logs API**. SSH is the only way to see inside.               |
+Everything is REST under `https://api.runpod.io/v2`, with `Authorization: Bearer $RUNPOD_API_KEY`.
 
-Both take `Authorization: Bearer $RUNPOD_API_KEY`. Two shape traps: REST has **no** `gpu-types` path, and REST's `runtime` field reads `null` on a pod that is perfectly alive — read uptime from GraphQL or you will diagnose a healthy pod as dead.
+| Need                                | Call                                                                                            |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------- |
+| create / status / **destroy** a pod | `POST /v2/pods`, `GET /v2/pods/{id}`, `DELETE /v2/pods/{id}`                                    |
+| GPU types, VRAM, prices, stock      | `GET /v2/catalog/gpus?include=AVAILABILITY&product=POD`                                         |
+| uptime and the SSH endpoint         | `GET /v2/pods/{id}` → `status`, `runtime.uptime`, `ssh.direct` (`runtime.ports`: `private: 22`) |
+| container logs                      | `GET /v2/pods/{id}/logs` — Server-Sent Events, one `{source, line, ts}` per event               |
+
+`status` runs `PROVISIONING` → `STARTING` → `RUNNING`; treat `ERROR` as a failed create and destroy the pod. `ssh.direct` stays `null` until the running pod has a public port for `22/tcp`. Lists come wrapped (`{"pods": [...]}`) and paginated, and errors are RFC 9457 problem documents, so read `detail` when a call fails.
 
 ### Pick the GPU
 
-MuQ-large is ~300M params and the job is download- and VRAM-bound, not FLOPs-bound. Choose the cheapest available GPU with at least 16 GB VRAM; query current prices before provisioning. Pass several ids in `gpuTypeIds` (priority order) so provisioning falls through when the cheap one is unavailable.
+MuQ-large is ~300M params and the job is download- and VRAM-bound, not FLOPs-bound. Choose the cheapest GPU with at least 16 GB VRAM (`memory`) whose `availability` is not `NONE`, reading `price.secure` from the catalog before provisioning. A create takes exactly one `gpu.id`, with no fallback list: when it fails for capacity, create again with the next-cheapest id.
 
 ### Create the pod — let the image start itself
 
 ```jsonc
 {
   "name": "fluncle-embed-batch",
-  "imageName": "runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04",
-  "gpuTypeIds": ["NVIDIA RTX A5000", "NVIDIA RTX A4000", "NVIDIA GeForce RTX 3090"],
-  "gpuCount": 1,
-  "containerDiskInGb": 60,
-  "volumeInGb": 20,
-  "interruptible": false,
+  "image": "runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04",
+  "gpu": { "id": "NVIDIA RTX A5000", "count": 1 },
+  "disk": 60,
+  "mounts": { "persistent": { "size": 20, "path": "/workspace" } },
   "ports": ["22/tcp"],
   "env": {
     "PUBLIC_KEY": "<an ssh pubkey>",
@@ -141,11 +141,13 @@ MuQ-large is ~300M params and the job is download- and VRAM-bound, not FLOPs-bou
 }
 ```
 
-**Do not pass `dockerStartCmd`.** It replaces the template's own CMD — which is what installs `PUBLIC_KEY` and starts `sshd` — so the batch runs with no shell and no logs, and a failure is indistinguishable from slow progress. Let the image boot normally, then SSH in and launch the batch yourself. That one decision is the difference between a diagnosable run and a blind one.
+`cloud` defaults to `SECURE`, the tier `price.secure` quotes. List `22/tcp` yourself: `ports` has no default, and without it there is no direct SSH. The persistent mount is what gives the pod `/workspace`, where the bootstrap clones the repo and the run writes its log.
+
+**Do not pass `args`, `cmd` or `entrypoint`.** Any of them replaces the template's own CMD — which is what installs `PUBLIC_KEY` and starts `sshd` — so the batch runs with no shell and no logs, and a failure is indistinguishable from slow progress. Let the image boot normally, then SSH in and launch the batch yourself. That one decision is the difference between a diagnosable run and a blind one.
 
 ### Get in, and find the secrets
 
-`ssh -i <key> -p <publicPort> root@<ip>` using the port from the GraphQL `ports` entry with `privatePort: 22`. Add `-o IdentitiesOnly=yes -o IdentityAgent=none`, or a loaded agent offers every key first and the pod drops you with `Too many authentication failures`.
+`ssh -i <key> -p <port> root@<host>` using `ssh.direct` from `GET /v2/pods/{id}`. `ssh.proxy` also works without a public port, but carries an interactive shell only, with no `scp` or port forwarding. Add `-o IdentitiesOnly=yes -o IdentityAgent=none`, or a loaded agent offers every key first and the pod drops you with `Too many authentication failures`.
 
 Then the trap that stops the run dead: **the injected env vars are not in your SSH shell.** They live in **PID 1's** environment, and `/etc/rp_environment` holds only RunPod's own `RUNPOD_*` vars. Import them:
 
@@ -166,7 +168,7 @@ Confirm with `grep -c ': embedded' /workspace/embed-run.log` climbing within ~2 
 
 ### Monitor from the Mac, and make the destroy session-proof
 
-You cannot read the pod's log without SSH, but you do not need to: the **embed queue count is the progress bar**, and it is authoritative. Poll `list_track_work?kind=embed&count=true` and compare against the baseline you started from — noting that the queue also _climbs_ on its own as the analysis sweep feeds it, so judge progress relative to baseline, never by "the number went up".
+`GET /v2/pods/{id}/logs` streams the container log, which shows boot and `sshd`, not the batch started over SSH. The **embed queue count is the progress bar**, and it is authoritative. Poll `list_track_work?kind=embed&count=true` and compare against the baseline you started from — noting that the queue also _climbs_ on its own as the analysis sweep feeds it, so judge progress relative to baseline, never by "the number went up".
 
 Run the poll loop as a **detached process that holds the `DELETE`**, so the pod dies even if the session ends: bill stops on `DELETE`, not when the batch process exits. Give it a drained-exit (queue at floor), a plateau guard, and a never-started abort — but **set never-started well above an hour**. Cold setup (image pull + apt + bun + muq + weights) legitimately takes tens of minutes before the first embed, and a 45-minute abort will execute a healthy pod just as it gets going.
 
