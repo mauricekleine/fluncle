@@ -1,3 +1,4 @@
+import { type InStatement } from "@libsql/client";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { randomUUID } from "node:crypto";
 
@@ -1087,9 +1088,10 @@ export async function persistResolution(
   const db = await getDb();
   const nowIso = new Date().toISOString();
 
-  await db.execute({
-    args: [mbid, wikidataQid, anchors.discogsUrl, anchors.lastfmUrl, nowIso, nowIso, artistId],
-    sql: `update artists
+  const statements: InStatement[] = [
+    {
+      args: [mbid, wikidataQid, anchors.discogsUrl, anchors.lastfmUrl, nowIso, nowIso, artistId],
+      sql: `update artists
           set mbid = coalesce(?, mbid),
               wikidata_qid = coalesce(?, wikidata_qid),
               discogs_url = coalesce(?, discogs_url),
@@ -1097,13 +1099,10 @@ export async function persistResolution(
               resolved_at = ?,
               updated_at = ?
           where id = ?`,
-  });
-
-  for (const social of mbSocials) {
-    const id = randomUUID();
-    await db.execute({
+    },
+    ...mbSocials.map((social) => ({
       args: [
-        id,
+        randomUUID(),
         artistId,
         social.platform,
         social.url,
@@ -1112,7 +1111,6 @@ export async function persistResolution(
         nowIso,
         nowIso,
       ],
-
       sql: `insert into artist_socials
               (id, artist_id, platform, url, source, status, reviewed_at, created_at, updated_at)
             values (?, ?, ?, ?, ?, ?, null, ?, ?)
@@ -1127,30 +1125,33 @@ export async function persistResolution(
               updated_at = excluded.updated_at
             where artist_socials.source != 'operator'
               and artist_socials.status != 'confirmed'`,
-    });
-  }
-
-  for (const social of firecrawlSocials) {
-    const id = randomUUID();
-    await db.execute({
-      args: [id, artistId, social.platform, social.url, "firecrawl", "candidate", nowIso, nowIso],
-
+    })),
+    ...firecrawlSocials.map((social) => ({
+      args: [
+        randomUUID(),
+        artistId,
+        social.platform,
+        social.url,
+        "firecrawl",
+        "candidate",
+        nowIso,
+        nowIso,
+      ],
       sql: `insert into artist_socials
               (id, artist_id, platform, url, source, status, reviewed_at, created_at, updated_at)
             values (?, ?, ?, ?, ?, ?, null, ?, ?)
             on conflict(artist_id, platform) do nothing`,
-    });
-  }
-
-  for (const alias of mbAliases) {
-    await db.execute({
+    })),
+    ...mbAliases.map((alias) => ({
       args: [`aa_${randomUUID()}`, artistId, alias.alias, alias.slug, alias.kind, nowIso],
       sql: `insert into artist_aliases
               (id, artist_id, alias, alias_slug, source, kind, status, created_at)
             values (?, ?, ?, ?, 'musicbrainz', ?, 'auto', ?)
             on conflict(artist_id, alias_slug, source) do nothing`,
-    });
-  }
+    })),
+  ];
+
+  await db.batch(statements, "write");
 }
 
 export async function resolveArtist(artistId: string): Promise<ArtistResolutionResult> {
