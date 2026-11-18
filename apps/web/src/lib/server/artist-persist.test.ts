@@ -187,6 +187,72 @@ describe("persistResolution — operator rows are immune to a re-resolve", () =>
   });
 });
 
+describe("persistResolution — one atomic write per resolved artist", () => {
+  let db: Client;
+
+  beforeEach(async () => {
+    db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+    holder.db = db;
+
+    await db.execute(
+      `create table artists (id text primary key, mbid text, wikidata_qid text, discogs_url text,
+        lastfm_url text, resolved_at text, updated_at text)`,
+    );
+    await db.execute(
+      `create table artist_socials (id text primary key, artist_id text, platform text, url text,
+        source text, status text, reviewed_at text, created_at text, updated_at text, unique(artist_id, platform))`,
+    );
+    await db.execute({ args: ["a1"], sql: `insert into artists (id) values (?)` });
+  });
+
+  it("sends the artist stamp, every social and every alias as a single write batch", async () => {
+    await db.execute(
+      `create table artist_aliases (id text primary key, artist_id text, alias text, alias_slug text,
+        source text, kind text, status text, created_at text, unique(artist_id, alias_slug, source))`,
+    );
+    const execute = vi.spyOn(db, "execute");
+    const batch = vi.spyOn(db, "batch");
+
+    await persistResolution(
+      "a1",
+      "mb1",
+      null,
+      [
+        { platform: "instagram", source: "musicbrainz", url: "https://www.instagram.com/a" },
+        { platform: "soundcloud", source: "musicbrainz", url: "https://soundcloud.com/a" },
+      ],
+      "auto",
+      [{ platform: "youtube", source: "firecrawl", url: "https://www.youtube.com/@a" }],
+      [{ alias: "A.", kind: "name", slug: "a" }],
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(batch.mock.calls[0]?.[0]).toHaveLength(5);
+    expect(batch.mock.calls[0]?.[1]).toBe("write");
+    const socials = await db.execute(`select count(*) as n from artist_socials`);
+    expect(Number(socials.rows[0]?.n)).toBe(3);
+  });
+
+  it("leaves the artist unresolved and writes no link when any statement fails", async () => {
+    await expect(
+      persistResolution(
+        "a1",
+        "mb1",
+        null,
+        [{ platform: "instagram", source: "musicbrainz", url: "https://www.instagram.com/a" }],
+        "auto",
+        [],
+        [{ alias: "A.", kind: "name", slug: "a" }],
+      ),
+    ).rejects.toThrow();
+
+    const artist = await db.execute(`select resolved_at, mbid from artists where id = 'a1'`);
+    expect(artist.rows[0]).toMatchObject({ mbid: null, resolved_at: null });
+    expect(await readSocial(db, "instagram")).toBeUndefined();
+  });
+});
+
 describe("persistResolution — the per-link review stamp (reviewed_at)", () => {
   let db: Client;
 
