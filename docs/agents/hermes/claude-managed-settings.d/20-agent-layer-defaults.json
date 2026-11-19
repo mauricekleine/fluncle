@@ -1,6 +1,6 @@
 {
   "model": "claude-opus-5-5",
-  "effortLevel": "medium",
+  "effortLevel": "high",
   "pluginConfigs": {
     "cc-plugin-agents-md@builtin": {
       "options": {
