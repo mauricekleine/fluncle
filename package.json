@@ -112,7 +112,7 @@
   "engines": {
     "bun": ">=1.4.4"
   },
-  "packageManager": "bun@1.4.4",
+  "packageManager": "bun@1.4.5",
   "// overrides": {
     "@cloudflare/config>zod": "Drop when @cloudflare/config requires Zod 4.6.6 or newer instead of pinning 4.4.3.",
     "@modelcontextprotocol/sdk": "Drop when shadcn requires SDK 1.32.0 or newer; keep the root-export patch keyed to the resolved SDK version until upstream #2273 is fixed.",
