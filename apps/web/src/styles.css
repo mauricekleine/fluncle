@@ -4547,8 +4547,17 @@ a.catalogue-letter:focus-visible {
     transform: none !important;
   }
 
+  /* Tailwind v4 compiles the generated Button's `active:translate-y-px` to the standalone
+     `translate` property, which `transform: none` does not reach, so both are reset. The
+     Switch thumb slides by the same `translate` under `transition-transform`; it snaps to
+     its new side instead, and the track's colour carries the state change. */
   [data-slot="button"]:active {
     transform: none !important;
+    translate: none !important;
+  }
+
+  [data-slot="switch-thumb"] {
+    transition: none;
   }
 
   /* The alert dialog is the same object as the dialog and grounds with it: its content
