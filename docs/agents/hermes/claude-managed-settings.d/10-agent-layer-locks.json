@@ -13,5 +13,6 @@
   "autoMemoryEnabled": false,
   "enableArtifact": false,
   "syncClaudeAiSkills": false,
-  "syncClaudeAiPlugins": false
+  "syncClaudeAiPlugins": false,
+  "feedbackDrafts": "off"
 }
