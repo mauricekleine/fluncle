@@ -84,7 +84,7 @@ const TRACKLIST_SEPARATOR = /^\s*—\s*$/;
 
 const STYLESHEET_TOKEN = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|\/\*[\s\S]*?\*\//g;
 
-const STYLESHEET_RULE = /\{[^{}]*\}/;
+const STYLESHEET_IDENTIFIER = /(?:^STYLES|Css)$/;
 
 const SEPARATOR_FREE_PREFIXES = ["apps/web/src/pipeline/"];
 
@@ -99,7 +99,13 @@ type Rail = "banned-word" | "exclamation" | "prose-em-dash";
 
 type Violation = { file: string; line: number; rail: Rail; text: string };
 
-type Literal = { isCopy: boolean; isJsxText: boolean; line: number; text: string };
+type Literal = {
+  isCopy: boolean;
+  isJsxText: boolean;
+  isStylesheet?: boolean;
+  line: number;
+  text: string;
+};
 
 function emDashApplies(file: string): boolean {
   return !EM_DASH_EXEMPT_PREFIXES.some((prefix) => file.startsWith(prefix));
@@ -110,7 +116,7 @@ function separatorAllowed(file: string): boolean {
 }
 
 function withoutStylesheetComments(literal: Literal): string {
-  if (literal.isJsxText || !STYLESHEET_RULE.test(literal.text)) {
+  if (!literal.isStylesheet) {
     return literal.text;
   }
 
@@ -194,6 +200,19 @@ function literalFromRecord(
     : undefined;
 }
 
+function stylesheetRange(declarator: Record<string, unknown>): [number, number] | undefined {
+  const id = declarator.id as Record<string, unknown> | undefined;
+  const init = declarator.init as Record<string, unknown> | undefined;
+
+  if (typeof id?.name !== "string" || !STYLESHEET_IDENTIFIER.test(id.name)) {
+    return undefined;
+  }
+
+  return typeof init?.start === "number" && typeof init.end === "number"
+    ? [init.start, init.end]
+    : undefined;
+}
+
 function collectLiterals(file: string, source: string): Literal[] {
   const parsed = parseSync(file, source);
 
@@ -207,6 +226,7 @@ function collectLiterals(file: string, source: string): Literal[] {
 
   const inCopyModule = COPY_MODULE.test(file);
   const literals: Literal[] = [];
+  const stylesheetRanges: [number, number][] = [];
 
   const visit = (node: unknown, isCopy: boolean): void => {
     if (node === null || typeof node !== "object") {
@@ -221,15 +241,21 @@ function collectLiterals(file: string, source: string): Literal[] {
     }
 
     const record = node as Record<string, unknown>;
-    const line = sourceLineAt(lineStarts, typeof record.start === "number" ? record.start : 0);
+    const start = typeof record.start === "number" ? record.start : 0;
+    const line = sourceLineAt(lineStarts, start);
 
     const literal = literalFromRecord(record, line, isCopy, inCopyModule);
     if (literal) {
+      literal.isStylesheet = stylesheetRanges.some(([from, to]) => start >= from && start < to);
       literals.push(literal);
     }
 
     if (record.type === "VariableDeclarator") {
       const id = record.id as Record<string, unknown> | undefined;
+      const range = stylesheetRange(record);
+      if (range) {
+        stylesheetRanges.push(range);
+      }
       if (typeof id?.name === "string" && COPY_IDENTIFIER.test(id.name)) {
         visit(record.init, true);
         return;
@@ -451,7 +477,7 @@ describe("voice lint rails", () => {
     expect(texts).not.toContain("search-note search-note--degraded");
   });
 
-  it("holds an em dash inside a stylesheet comment and fires on one outside it", () => {
+  it("holds an em dash only inside a comment of a STYLES or *Css binding", () => {
     const css =
       "export const STYLES = `\n/* Veils lean warm — a lift is cream */\n.a{color:red}\n`;";
     expect(scanSource(FIXTURE_FILE, css, { emDash: true })).toEqual([]);
@@ -472,7 +498,13 @@ describe("voice lint rails", () => {
       "prose-em-dash",
     ]);
 
-    const plain = 'export const s = "/* One more run — the board is live */";';
+    const expression =
+      'export const B = ({ deck }: { deck: string }) => <code>{"/* Replay {deck} — then press Play */"}</code>;';
+    expect(scanSource(FIXTURE_FILE, expression, { emDash: true }).map((v) => v.rail)).toEqual([
+      "prose-em-dash",
+    ]);
+
+    const plain = 'export const s = "/* One more run — the board is live */ .a{color:red}";';
     expect(scanSource(FIXTURE_FILE, plain, { emDash: true }).map((v) => v.rail)).toEqual([
       "prose-em-dash",
     ]);
