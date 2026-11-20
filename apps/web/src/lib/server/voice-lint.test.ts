@@ -82,7 +82,7 @@ const SCANNED_EXTENSIONS = [".js", ".jsx", ".ts", ".tsx"];
 
 const TRACKLIST_SEPARATOR = /^\s*—\s*$/;
 
-const STYLESHEET_TOKEN = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|\/\*[\s\S]*?\*\//g;
+const STYLESHEET_TOKEN = /'(?:[^'\\\n]|\\[\s\S])*'|"(?:[^"\\\n]|\\[\s\S])*"|\/\*[\s\S]*?\*\//g;
 
 const STYLESHEET_IDENTIFIER = /(?:^STYLES|Css)$/;
 
@@ -513,6 +513,12 @@ describe("voice lint rails", () => {
     const interpolated =
       'const deck = "A"; export const STYLES = `.preview::after { content: "Deck ${deck}: /* One more run — the board is live */"; }`;';
     expect(scanSource(FIXTURE_FILE, interpolated, { emDash: true }).map((v) => v.rail)).toEqual([
+      "prose-em-dash",
+    ]);
+
+    const continued =
+      'export const STYLES = `.a::after { content: "Deck \\\\\n/* One more run — the board is live */"; }`;';
+    expect(scanSource(FIXTURE_FILE, continued, { emDash: true }).map((v) => v.rail)).toEqual([
       "prose-em-dash",
     ]);
 
