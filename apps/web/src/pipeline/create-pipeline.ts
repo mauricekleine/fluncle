@@ -461,7 +461,7 @@ export const STYLES = `
 .fpl .card .lb{font-size:12.5px;font-weight:600;letter-spacing:-.005em;line-height:1.22}
 .fpl .card .wh{font-size:10.5px;color:var(--cream-dim);margin-top:2px}
 .fpl .card .row{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
-/* Veils and scrims lean warm: a lift is Starlight Cream at low alpha, a scrim is Deep
+/* Veils and scrims lean warm — a lift is Starlight Cream at low alpha, a scrim is Deep
    Field, never neutral white or pure black (DESIGN.md §2, The Warm Dark Rule). The
    Lore-Art Paint Exemption buys this surface hue diversity for its node tints; it does
    not exempt the neutrals. */
@@ -493,7 +493,7 @@ export const STYLES = `
 @media (prefers-reduced-motion: reduce){
   .fpl .listener{animation:none}
   .fpl .wave{animation:none;opacity:.45;transform:none}
-  /* The cron heartbeat: the pulse ring stops, the dot keeps its status colour, so the
+  /* The cron heartbeat: the pulse ring stops, the dot keeps its status colour — the
      meaning rides the hue, never the motion. Every ambient movement on this surface is
      gated (DESIGN.md §5); a board can carry a dot per cron, so an ungated pulse would be
      dozens of them at once. The status classes are named one by one on purpose: the
@@ -528,7 +528,7 @@ export const STYLES = `
 .fpl .kiosk .lb{font-size:11px;font-weight:600;color:color-mix(in srgb,var(--tint) 66%,var(--cream))}
 .fpl .kiosk .wh{font-size:9.5px;color:var(--faint)}
 .fpl .kiosk:hover .wh{color:var(--cream-dim)}
-/* Floats are grounded, colour states are kept (DESIGN.md §5): the kiosk still heats its
+/* Floats are grounded, colour states are kept (DESIGN.md §5) — the kiosk still heats its
    glow and label on hover, it just no longer lifts. This block trails the kiosk rules it
    overrides rather than joining the reduced-motion block above: the two selectors tie on
    specificity, so source order is what decides them. */

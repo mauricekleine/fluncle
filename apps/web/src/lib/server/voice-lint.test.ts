@@ -82,6 +82,10 @@ const SCANNED_EXTENSIONS = [".js", ".jsx", ".ts", ".tsx"];
 
 const TRACKLIST_SEPARATOR = /^\s*—\s*$/;
 
+const STYLESHEET_COMMENT = /\/\*[\s\S]*?\*\//g;
+
+const SEPARATOR_FREE_PREFIXES = ["apps/web/src/pipeline/"];
+
 const KEY_VALUE_PREFIX = /^[A-Za-z][\w-]*(?: [\w-]+)?: /;
 
 const COPY_MODULE = /(?:^|\/)(?:copy|[\w-]+-copy)\.tsx?$/;
@@ -97,6 +101,15 @@ type Literal = { isCopy: boolean; isJsxText: boolean; line: number; text: string
 
 function emDashApplies(file: string): boolean {
   return !EM_DASH_EXEMPT_PREFIXES.some((prefix) => file.startsWith(prefix));
+}
+
+function separatorAllowed(file: string): boolean {
+  return !SEPARATOR_FREE_PREFIXES.some((prefix) => file.startsWith(prefix));
+}
+
+function isProseEmDash(file: string, literal: Literal): boolean {
+  const text = literal.text.replace(STYLESHEET_COMMENT, "");
+  return text.includes("—") && !(separatorAllowed(file) && TRACKLIST_SEPARATOR.test(text));
 }
 
 function collectFiles(root: string, files: string[]): void {
@@ -287,7 +300,7 @@ function scanSource(file: string, source: string, options: { emDash: boolean }):
       }
     }
 
-    if (options.emDash && literal.text.includes("—") && !TRACKLIST_SEPARATOR.test(literal.text)) {
+    if (options.emDash && isProseEmDash(file, literal)) {
       report("prose-em-dash", literal);
     }
   }
@@ -426,6 +439,28 @@ describe("voice lint rails", () => {
     expect(texts).not.toContain("Curation: off");
     expect(texts).not.toContain("Content-Type");
     expect(texts).not.toContain("search-note search-note--degraded");
+  });
+
+  it("holds an em dash inside a stylesheet comment and fires on one outside it", () => {
+    const css =
+      "export const STYLES = `\n/* Veils lean warm — a lift is cream */\n.a{color:red}\n`;";
+    expect(scanSource(FIXTURE_FILE, css, { emDash: true })).toEqual([]);
+
+    const leaked = "export const STYLES = `\n/* note */ .a::after{content:'one — two'}\n`;";
+    expect(scanSource(FIXTURE_FILE, leaked, { emDash: true }).map((v) => v.rail)).toEqual([
+      "prose-em-dash",
+    ]);
+  });
+
+  it("fires on a standalone dash segment in the pipeline, which renders no tracklist", () => {
+    const tooltip =
+      "export const t = (name: string, status: string, message: string) => `cron.${name} — ${status} · ${message}`;";
+    expect(scanSource(FIXTURE_FILE, tooltip, { emDash: true })).toEqual([]);
+    expect(
+      scanSource("apps/web/src/pipeline/create-pipeline.ts", tooltip, { emDash: true }).map(
+        (violation) => violation.rail,
+      ),
+    ).toEqual(["prose-em-dash"]);
   });
 
   it("holds every em dash when the file is in the CLI admin carve-out", () => {

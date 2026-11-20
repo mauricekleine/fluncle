@@ -73,9 +73,9 @@ function logHead(loaderData: LogPageData | undefined) {
     const pageUrl = logPageUrl(logId);
     const displayTitle = mixtapeDisplayTitle(mixtape.title);
     const title = `${logId} · ${displayTitle} · Fluncle`;
-    const description = mixtape.note
-      ? bioMetaDescription(mixtape.note)
-      : `Fluncle drum & bass mixtape: ${displayTitle}.`;
+    const description = bioMetaDescription(
+      mixtape.note ? mixtape.note : `Fluncle drum & bass mixtape: ${displayTitle}.`,
+    );
 
     const ogImageUrl = mixtape.logId
       ? mixtapeCoverUrl(logId, "og")
