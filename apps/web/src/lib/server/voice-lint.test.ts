@@ -208,7 +208,13 @@ function stylesheetRange(declarator: Record<string, unknown>): [number, number] 
     return undefined;
   }
 
-  return typeof init?.start === "number" && typeof init.end === "number"
+  const isStatic =
+    init?.type === "Literal" ||
+    (init?.type === "TemplateLiteral" &&
+      Array.isArray(init.expressions) &&
+      init.expressions.length === 0);
+
+  return isStatic && typeof init?.start === "number" && typeof init.end === "number"
     ? [init.start, init.end]
     : undefined;
 }
@@ -477,7 +483,7 @@ describe("voice lint rails", () => {
     expect(texts).not.toContain("search-note search-note--degraded");
   });
 
-  it("holds an em dash only inside a comment of a STYLES or *Css binding", () => {
+  it("holds an em dash only inside a comment of a static STYLES or *Css literal", () => {
     const css =
       "export const STYLES = `\n/* Veils lean warm — a lift is cream */\n.a{color:red}\n`;";
     expect(scanSource(FIXTURE_FILE, css, { emDash: true })).toEqual([]);
@@ -501,6 +507,12 @@ describe("voice lint rails", () => {
     const expression =
       'export const B = ({ deck }: { deck: string }) => <code>{"/* Replay {deck} — then press Play */"}</code>;';
     expect(scanSource(FIXTURE_FILE, expression, { emDash: true }).map((v) => v.rail)).toEqual([
+      "prose-em-dash",
+    ]);
+
+    const interpolated =
+      'const deck = "A"; export const STYLES = `.preview::after { content: "Deck ${deck}: /* One more run — the board is live */"; }`;';
+    expect(scanSource(FIXTURE_FILE, interpolated, { emDash: true }).map((v) => v.rail)).toEqual([
       "prose-em-dash",
     ]);
 
