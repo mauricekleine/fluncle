@@ -84,6 +84,8 @@ const TRACKLIST_SEPARATOR = /^\s*—\s*$/;
 
 const STYLESHEET_TOKEN = /'(?:[^'\\\n]|\\[\s\S])*'|"(?:[^"\\\n]|\\[\s\S])*"|\/\*[\s\S]*?\*\//g;
 
+const CSS_NEWLINE = /\r\n?|\f/g;
+
 const STYLESHEET_IDENTIFIER = /(?:^STYLES|Css)$/;
 
 const SEPARATOR_FREE_PREFIXES = ["apps/web/src/pipeline/"];
@@ -120,7 +122,9 @@ function withoutStylesheetComments(literal: Literal): string {
     return literal.text;
   }
 
-  return literal.text.replace(STYLESHEET_TOKEN, (token) => (token.startsWith("/*") ? "" : token));
+  return literal.text
+    .replace(CSS_NEWLINE, "\n")
+    .replace(STYLESHEET_TOKEN, (token) => (token.startsWith("/*") ? "" : token));
 }
 
 function isProseEmDash(file: string, literal: Literal): boolean {
@@ -521,6 +525,13 @@ describe("voice lint rails", () => {
     expect(scanSource(FIXTURE_FILE, continued, { emDash: true }).map((v) => v.rail)).toEqual([
       "prose-em-dash",
     ]);
+
+    for (const newline of ["\\r\\n", "\\r", "\\f"]) {
+      const escaped = `export const STYLES = \`.a::after { content: "Deck \\\\${newline}/* One more run — the board is live */"; }\`;`;
+      expect(scanSource(FIXTURE_FILE, escaped, { emDash: true }).map((v) => v.rail)).toEqual([
+        "prose-em-dash",
+      ]);
+    }
 
     const plain = 'export const s = "/* One more run — the board is live */ .a{color:red}";';
     expect(scanSource(FIXTURE_FILE, plain, { emDash: true }).map((v) => v.rail)).toEqual([
