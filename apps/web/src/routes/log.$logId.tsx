@@ -75,7 +75,7 @@ function logHead(loaderData: LogPageData | undefined) {
     const title = `${logId} · ${displayTitle} · Fluncle`;
     const description = mixtape.note
       ? bioMetaDescription(mixtape.note)
-      : "A checkpoint in Fluncle's Findings.";
+      : `Fluncle drum & bass mixtape: ${displayTitle}.`;
 
     const ogImageUrl = mixtape.logId
       ? mixtapeCoverUrl(logId, "og")
@@ -693,8 +693,8 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
             <span className="log-decode-part">{sector}</span> is the sector: the days between the
             epoch, 2026-05-30, and the day this set was recorded.{" "}
             <span className="log-decode-part">F</span> marks a mixtape.{" "}
-            <span className="log-decode-part">{tail}</span> is its checkpoint number, stamped once
-            and never changed. <Link to="/about">More on Log IDs and the Galaxy</Link>.
+            <span className="log-decode-part">{tail}</span> is its mixtape number, stamped once and
+            never changed. <Link to="/about">More on Log IDs and the Galaxy</Link>.
           </p>
         </section>
 

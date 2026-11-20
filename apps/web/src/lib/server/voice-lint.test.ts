@@ -21,6 +21,8 @@ const SCAN_ROOTS = [
 
   "apps/web/src/game",
 
+  "apps/web/src/pipeline",
+
   "apps/web/src/lib/tool-specs.ts",
 
   "apps/web/src/lib/server/agent-discovery.ts",
@@ -330,6 +332,7 @@ describe("voice lint", () => {
     expect(scanned.has("apps/cli/src/cli.ts")).toBe(true);
     expect(scanned.has("apps/cli/scripts/build-npm.ts")).toBe(true);
     expect(scanned.has("apps/web/src/game/game.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/pipeline/create-pipeline.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/tool-specs.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/agent-discovery.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/identity.ts")).toBe(true);

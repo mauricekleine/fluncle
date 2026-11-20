@@ -55,9 +55,9 @@ describe("/log mixtape head", () => {
     expect(metaValue(mixtapeHead(longNote), "property", "og:description")).toBe(description);
   });
 
-  it("falls back to the checkpoint line when the mixtape has no note", () => {
+  it("falls back to the plain mixtape line its JSON-LD also carries when the mixtape has no note", () => {
     expect(metaValue(mixtapeHead(), "name", "description")).toBe(
-      "A checkpoint in Fluncle's Findings.",
+      "Fluncle drum & bass mixtape: Fluncle Drum & Bass Mixtape #1.",
     );
   });
 });

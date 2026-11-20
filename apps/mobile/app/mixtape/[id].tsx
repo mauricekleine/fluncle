@@ -24,7 +24,7 @@ function displayTitle(title: string): string {
 }
 
 function metaLine(mixtape: MixtapeDTO): string {
-  const bangers = `${mixtape.memberCount} bangers`;
+  const bangers = `${mixtape.memberCount} ${mixtape.memberCount === 1 ? "banger" : "bangers"}`;
   const minutes = mixtape.durationMs
     ? ` · ${Math.max(1, Math.round(mixtape.durationMs / 60_000))} min`
     : "";
