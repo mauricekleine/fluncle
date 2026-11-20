@@ -46,7 +46,7 @@ import {
   videoObjectJsonLd,
 } from "@/lib/log-schema";
 import { mixtapeSetVideoUrl, albumCoverAtSize, trackMedia } from "@/lib/media";
-import { bioMetaDescription } from "@/lib/meta-description";
+import { bioMetaDescription, labelledMetaDescription } from "@/lib/meta-description";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { type LogPageData } from "./-log-page-data";
 import { fold } from "@/lib/server/track-match";
@@ -73,9 +73,9 @@ function logHead(loaderData: LogPageData | undefined) {
     const pageUrl = logPageUrl(logId);
     const displayTitle = mixtapeDisplayTitle(mixtape.title);
     const title = `${logId} · ${displayTitle} · Fluncle`;
-    const description = bioMetaDescription(
-      mixtape.note ? mixtape.note : `Fluncle drum & bass mixtape: ${displayTitle}.`,
-    );
+    const description = mixtape.note
+      ? bioMetaDescription(mixtape.note)
+      : labelledMetaDescription("Fluncle drum & bass mixtape: ", displayTitle);
 
     const ogImageUrl = mixtape.logId
       ? mixtapeCoverUrl(logId, "og")

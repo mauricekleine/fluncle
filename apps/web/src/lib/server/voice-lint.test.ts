@@ -82,7 +82,9 @@ const SCANNED_EXTENSIONS = [".js", ".jsx", ".ts", ".tsx"];
 
 const TRACKLIST_SEPARATOR = /^\s*—\s*$/;
 
-const STYLESHEET_COMMENT = /\/\*[\s\S]*?\*\//g;
+const STYLESHEET_TOKEN = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|\/\*[\s\S]*?\*\//g;
+
+const STYLESHEET_RULE = /\{[^{}]*\}/;
 
 const SEPARATOR_FREE_PREFIXES = ["apps/web/src/pipeline/"];
 
@@ -107,8 +109,16 @@ function separatorAllowed(file: string): boolean {
   return !SEPARATOR_FREE_PREFIXES.some((prefix) => file.startsWith(prefix));
 }
 
+function withoutStylesheetComments(literal: Literal): string {
+  if (literal.isJsxText || !STYLESHEET_RULE.test(literal.text)) {
+    return literal.text;
+  }
+
+  return literal.text.replace(STYLESHEET_TOKEN, (token) => (token.startsWith("/*") ? "" : token));
+}
+
 function isProseEmDash(file: string, literal: Literal): boolean {
-  const text = literal.text.replace(STYLESHEET_COMMENT, "");
+  const text = withoutStylesheetComments(literal);
   return text.includes("—") && !(separatorAllowed(file) && TRACKLIST_SEPARATOR.test(text));
 }
 
@@ -448,6 +458,22 @@ describe("voice lint rails", () => {
 
     const leaked = "export const STYLES = `\n/* note */ .a::after{content:'one — two'}\n`;";
     expect(scanSource(FIXTURE_FILE, leaked, { emDash: true }).map((v) => v.rail)).toEqual([
+      "prose-em-dash",
+    ]);
+
+    const quoted =
+      "export const STYLES = `\n.a::after{content:'/* One more run — the board is live */'}\n`;";
+    expect(scanSource(FIXTURE_FILE, quoted, { emDash: true }).map((v) => v.rail)).toEqual([
+      "prose-em-dash",
+    ]);
+
+    const rendered = "export const B = () => <p>/* One more run — the board is live */</p>;";
+    expect(scanSource(FIXTURE_FILE, rendered, { emDash: true }).map((v) => v.rail)).toEqual([
+      "prose-em-dash",
+    ]);
+
+    const plain = 'export const s = "/* One more run — the board is live */";';
+    expect(scanSource(FIXTURE_FILE, plain, { emDash: true }).map((v) => v.rail)).toEqual([
       "prose-em-dash",
     ]);
   });

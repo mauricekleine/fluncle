@@ -76,4 +76,15 @@ describe("/log mixtape head", () => {
     expect(metaValue(head, "property", "og:description")).toBe(description);
     expect(metaValue(head, "name", "twitter:description")).toBe(description);
   });
+
+  it("keeps a leading part of a long title with no spaces in the no-note fallback", () => {
+    const head = mixtapeHead(undefined, `${"夜の流れ".repeat(35)} | 019.F.1A`);
+    const description = metaValue(head, "name", "description") as string;
+
+    expect(description.length).toBeLessThanOrEqual(160);
+    expect(description.startsWith("Fluncle drum & bass mixtape: 夜の流れ夜の流れ")).toBe(true);
+    expect(description.endsWith("…")).toBe(true);
+    expect(metaValue(head, "property", "og:description")).toBe(description);
+    expect(metaValue(head, "name", "twitter:description")).toBe(description);
+  });
 });
