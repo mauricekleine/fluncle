@@ -613,7 +613,7 @@ function SentLedger({ submissions }: { submissions: Submission[] }) {
       <h2>Sent to Fluncle</h2>
       {submissions.length === 0 ? (
         <p className="account-muted">
-          Heard something Fluncle should log? Use Submit a track to send it his way.
+          Heard a tune I should log? Use Submit a track to send it my way.
         </p>
       ) : (
         <ul className="account-list saves-sent-list">

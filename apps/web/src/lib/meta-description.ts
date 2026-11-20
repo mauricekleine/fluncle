@@ -2,6 +2,8 @@ export const META_DESCRIPTION_MAX = 160;
 
 const SENTENCE_END_MIN_FRACTION = 0.6;
 
+const TRAILING_PUNCTUATION = /[\s.,;:!?—–-]+$/u;
+
 export function bioMetaDescription(bio: string): string {
   const normalized = bio.replace(/\s+/gu, " ").trim();
 
@@ -23,9 +25,33 @@ export function bioMetaDescription(bio: string): string {
 
   const room = normalized.slice(0, META_DESCRIPTION_MAX - 1);
   const lastSpace = room.lastIndexOf(" ");
-  const head = (lastSpace > 0 ? room.slice(0, lastSpace) : room).replace(/[\s.,;:!?—–-]+$/u, "");
+  const head = (lastSpace > 0 ? room.slice(0, lastSpace) : room).replace(TRAILING_PUNCTUATION, "");
 
   return `${head}…`;
+}
+
+export function labelledMetaDescription(label: string, subject: string): string {
+  const normalized = subject.replace(/\s+/gu, " ").trim();
+  const line = `${label}${normalized}.`;
+
+  if (line.length <= META_DESCRIPTION_MAX) {
+    return line;
+  }
+
+  const room = META_DESCRIPTION_MAX - label.length - 1;
+  let head = "";
+
+  for (const char of normalized) {
+    if (head.length + char.length > room) {
+      break;
+    }
+    head += char;
+  }
+
+  const lastSpace = head.lastIndexOf(" ");
+  const cut = lastSpace >= room / 2 ? head.slice(0, lastSpace) : head;
+
+  return `${label}${cut.replace(TRAILING_PUNCTUATION, "")}…`;
 }
 
 const ABBREVIATION_END = /(?:^|[\s.(])(?:\p{L}|Dr|Jr|Mr|Mrs|Ms|Mt|No|Sr|St|Vol|feat|ft|vs)\.$/iu;

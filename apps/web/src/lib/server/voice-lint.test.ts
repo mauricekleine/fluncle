@@ -21,6 +21,8 @@ const SCAN_ROOTS = [
 
   "apps/web/src/game",
 
+  "apps/web/src/pipeline",
+
   "apps/web/src/lib/tool-specs.ts",
 
   "apps/web/src/lib/server/agent-discovery.ts",
@@ -80,6 +82,14 @@ const SCANNED_EXTENSIONS = [".js", ".jsx", ".ts", ".tsx"];
 
 const TRACKLIST_SEPARATOR = /^\s*—\s*$/;
 
+const STYLESHEET_TOKEN = /'(?:[^'\\\n]|\\[\s\S])*'|"(?:[^"\\\n]|\\[\s\S])*"|\/\*[\s\S]*?\*\//g;
+
+const CSS_NEWLINE = /\r\n?|\f/g;
+
+const STYLESHEET_IDENTIFIER = /(?:^STYLES|Css)$/;
+
+const SEPARATOR_FREE_PREFIXES = ["apps/web/src/pipeline/"];
+
 const KEY_VALUE_PREFIX = /^[A-Za-z][\w-]*(?: [\w-]+)?: /;
 
 const COPY_MODULE = /(?:^|\/)(?:copy|[\w-]+-copy)\.tsx?$/;
@@ -91,10 +101,35 @@ type Rail = "banned-word" | "exclamation" | "prose-em-dash";
 
 type Violation = { file: string; line: number; rail: Rail; text: string };
 
-type Literal = { isCopy: boolean; isJsxText: boolean; line: number; text: string };
+type Literal = {
+  isCopy: boolean;
+  isJsxText: boolean;
+  isStylesheet?: boolean;
+  line: number;
+  text: string;
+};
 
 function emDashApplies(file: string): boolean {
   return !EM_DASH_EXEMPT_PREFIXES.some((prefix) => file.startsWith(prefix));
+}
+
+function separatorAllowed(file: string): boolean {
+  return !SEPARATOR_FREE_PREFIXES.some((prefix) => file.startsWith(prefix));
+}
+
+function withoutStylesheetComments(literal: Literal): string {
+  if (!literal.isStylesheet) {
+    return literal.text;
+  }
+
+  return literal.text
+    .replace(CSS_NEWLINE, "\n")
+    .replace(STYLESHEET_TOKEN, (token) => (token.startsWith("/*") ? "" : token));
+}
+
+function isProseEmDash(file: string, literal: Literal): boolean {
+  const text = withoutStylesheetComments(literal);
+  return text.includes("—") && !(separatorAllowed(file) && TRACKLIST_SEPARATOR.test(text));
 }
 
 function collectFiles(root: string, files: string[]): void {
@@ -169,6 +204,25 @@ function literalFromRecord(
     : undefined;
 }
 
+function stylesheetRange(declarator: Record<string, unknown>): [number, number] | undefined {
+  const id = declarator.id as Record<string, unknown> | undefined;
+  const init = declarator.init as Record<string, unknown> | undefined;
+
+  if (typeof id?.name !== "string" || !STYLESHEET_IDENTIFIER.test(id.name)) {
+    return undefined;
+  }
+
+  const isStatic =
+    init?.type === "Literal" ||
+    (init?.type === "TemplateLiteral" &&
+      Array.isArray(init.expressions) &&
+      init.expressions.length === 0);
+
+  return isStatic && typeof init?.start === "number" && typeof init.end === "number"
+    ? [init.start, init.end]
+    : undefined;
+}
+
 function collectLiterals(file: string, source: string): Literal[] {
   const parsed = parseSync(file, source);
 
@@ -182,6 +236,7 @@ function collectLiterals(file: string, source: string): Literal[] {
 
   const inCopyModule = COPY_MODULE.test(file);
   const literals: Literal[] = [];
+  const stylesheetRanges: [number, number][] = [];
 
   const visit = (node: unknown, isCopy: boolean): void => {
     if (node === null || typeof node !== "object") {
@@ -196,15 +251,21 @@ function collectLiterals(file: string, source: string): Literal[] {
     }
 
     const record = node as Record<string, unknown>;
-    const line = sourceLineAt(lineStarts, typeof record.start === "number" ? record.start : 0);
+    const start = typeof record.start === "number" ? record.start : 0;
+    const line = sourceLineAt(lineStarts, start);
 
     const literal = literalFromRecord(record, line, isCopy, inCopyModule);
     if (literal) {
+      literal.isStylesheet = stylesheetRanges.some(([from, to]) => start >= from && start < to);
       literals.push(literal);
     }
 
     if (record.type === "VariableDeclarator") {
       const id = record.id as Record<string, unknown> | undefined;
+      const range = stylesheetRange(record);
+      if (range) {
+        stylesheetRanges.push(range);
+      }
       if (typeof id?.name === "string" && COPY_IDENTIFIER.test(id.name)) {
         visit(record.init, true);
         return;
@@ -285,7 +346,7 @@ function scanSource(file: string, source: string, options: { emDash: boolean }):
       }
     }
 
-    if (options.emDash && literal.text.includes("—") && !TRACKLIST_SEPARATOR.test(literal.text)) {
+    if (options.emDash && isProseEmDash(file, literal)) {
       report("prose-em-dash", literal);
     }
   }
@@ -330,6 +391,7 @@ describe("voice lint", () => {
     expect(scanned.has("apps/cli/src/cli.ts")).toBe(true);
     expect(scanned.has("apps/cli/scripts/build-npm.ts")).toBe(true);
     expect(scanned.has("apps/web/src/game/game.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/pipeline/create-pipeline.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/tool-specs.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/agent-discovery.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/identity.ts")).toBe(true);
@@ -423,6 +485,69 @@ describe("voice lint rails", () => {
     expect(texts).not.toContain("Curation: off");
     expect(texts).not.toContain("Content-Type");
     expect(texts).not.toContain("search-note search-note--degraded");
+  });
+
+  it("holds an em dash only inside a comment of a static STYLES or *Css literal", () => {
+    const css =
+      "export const STYLES = `\n/* Veils lean warm — a lift is cream */\n.a{color:red}\n`;";
+    expect(scanSource(FIXTURE_FILE, css, { emDash: true })).toEqual([]);
+
+    const leaked = "export const STYLES = `\n/* note */ .a::after{content:'one — two'}\n`;";
+    expect(scanSource(FIXTURE_FILE, leaked, { emDash: true }).map((v) => v.rail)).toEqual([
+      "prose-em-dash",
+    ]);
+
+    const quoted =
+      "export const STYLES = `\n.a::after{content:'/* One more run — the board is live */'}\n`;";
+    expect(scanSource(FIXTURE_FILE, quoted, { emDash: true }).map((v) => v.rail)).toEqual([
+      "prose-em-dash",
+    ]);
+
+    const rendered = "export const B = () => <p>/* One more run — the board is live */</p>;";
+    expect(scanSource(FIXTURE_FILE, rendered, { emDash: true }).map((v) => v.rail)).toEqual([
+      "prose-em-dash",
+    ]);
+
+    const expression =
+      'export const B = ({ deck }: { deck: string }) => <code>{"/* Replay {deck} — then press Play */"}</code>;';
+    expect(scanSource(FIXTURE_FILE, expression, { emDash: true }).map((v) => v.rail)).toEqual([
+      "prose-em-dash",
+    ]);
+
+    const interpolated =
+      'const deck = "A"; export const STYLES = `.preview::after { content: "Deck ${deck}: /* One more run — the board is live */"; }`;';
+    expect(scanSource(FIXTURE_FILE, interpolated, { emDash: true }).map((v) => v.rail)).toEqual([
+      "prose-em-dash",
+    ]);
+
+    const continued =
+      'export const STYLES = `.a::after { content: "Deck \\\\\n/* One more run — the board is live */"; }`;';
+    expect(scanSource(FIXTURE_FILE, continued, { emDash: true }).map((v) => v.rail)).toEqual([
+      "prose-em-dash",
+    ]);
+
+    for (const newline of ["\\r\\n", "\\r", "\\f"]) {
+      const escaped = `export const STYLES = \`.a::after { content: "Deck \\\\${newline}/* One more run — the board is live */"; }\`;`;
+      expect(scanSource(FIXTURE_FILE, escaped, { emDash: true }).map((v) => v.rail)).toEqual([
+        "prose-em-dash",
+      ]);
+    }
+
+    const plain = 'export const s = "/* One more run — the board is live */ .a{color:red}";';
+    expect(scanSource(FIXTURE_FILE, plain, { emDash: true }).map((v) => v.rail)).toEqual([
+      "prose-em-dash",
+    ]);
+  });
+
+  it("fires on a standalone dash segment in the pipeline, which renders no tracklist", () => {
+    const tooltip =
+      "export const t = (name: string, status: string, message: string) => `cron.${name} — ${status} · ${message}`;";
+    expect(scanSource(FIXTURE_FILE, tooltip, { emDash: true })).toEqual([]);
+    expect(
+      scanSource("apps/web/src/pipeline/create-pipeline.ts", tooltip, { emDash: true }).map(
+        (violation) => violation.rail,
+      ),
+    ).toEqual(["prose-em-dash"]);
   });
 
   it("holds every em dash when the file is in the CLI admin carve-out", () => {

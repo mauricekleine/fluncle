@@ -9,7 +9,12 @@ type HeadResult = {
 const longNote =
   "My first mixtape. Seventeen findings I couldn't stop rewinding, so I mixed them live on Twitch in one pass, all liquid. Put it on with the lights off, and I hope it gets an oof out of you too. Enjoy, cosmonauts.";
 
-function mixtapeHead(note?: string): HeadResult {
+const legacyTitle = `${"Liquid rollers for the long drive home ".repeat(4).trim()} | 019.F.1A`;
+
+function mixtapeHead(
+  note?: string,
+  title = "Fluncle Drum & Bass Mixtape #1 | 019.F.1A",
+): HeadResult {
   return LogRoute.options.head?.({
     loaderData: {
       mixtape: {
@@ -21,7 +26,7 @@ function mixtapeHead(note?: string): HeadResult {
         members: [],
         note,
         status: "published",
-        title: "Fluncle Drum & Bass Mixtape #1 | 019.F.1A",
+        title,
         type: "mixtape",
       },
       status: "found-mixtape",
@@ -55,9 +60,31 @@ describe("/log mixtape head", () => {
     expect(metaValue(mixtapeHead(longNote), "property", "og:description")).toBe(description);
   });
 
-  it("falls back to the checkpoint line when the mixtape has no note", () => {
+  it("falls back to the plain mixtape line its JSON-LD also carries when the mixtape has no note", () => {
     expect(metaValue(mixtapeHead(), "name", "description")).toBe(
-      "A checkpoint in Fluncle's Findings.",
+      "Fluncle drum & bass mixtape: Fluncle Drum & Bass Mixtape #1.",
     );
+  });
+
+  it("keeps the no-note fallback inside the search-snippet budget for a long legacy title", () => {
+    const head = mixtapeHead(undefined, legacyTitle);
+    const description = metaValue(head, "name", "description");
+
+    expect(typeof description).toBe("string");
+    expect((description as string).length).toBeLessThanOrEqual(160);
+    expect(description).toMatch(/^Fluncle drum & bass mixtape: Liquid rollers/);
+    expect(metaValue(head, "property", "og:description")).toBe(description);
+    expect(metaValue(head, "name", "twitter:description")).toBe(description);
+  });
+
+  it("keeps a leading part of a long title with no spaces in the no-note fallback", () => {
+    const head = mixtapeHead(undefined, `${"夜の流れ".repeat(35)} | 019.F.1A`);
+    const description = metaValue(head, "name", "description") as string;
+
+    expect(description.length).toBeLessThanOrEqual(160);
+    expect(description.startsWith("Fluncle drum & bass mixtape: 夜の流れ夜の流れ")).toBe(true);
+    expect(description.endsWith("…")).toBe(true);
+    expect(metaValue(head, "property", "og:description")).toBe(description);
+    expect(metaValue(head, "name", "twitter:description")).toBe(description);
   });
 });

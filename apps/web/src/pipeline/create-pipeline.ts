@@ -93,7 +93,7 @@ const S: Station[] = [
   {
     col: 1,
     id: "disc",
-    label: "Discogs resolve",
+    label: "Discogs match",
     lane: 1,
     m: "worker",
     svc: ["Discogs", "MusicBrainz"],
@@ -103,7 +103,7 @@ const S: Station[] = [
     col: 2,
     id: "logid",
     img: "press",
-    label: "Log ID mint",
+    label: "Log ID stamp",
     lane: 0,
     m: "worker",
     wh: "the coordinate",
@@ -214,7 +214,7 @@ const S: Station[] = [
     col: 5.9,
     cron: "backfill",
     id: "bkf",
-    label: "Backfill",
+    label: "Fill gaps",
     lane: 1.85,
     m: "rave02",
     svc: ["Discogs", "Last.fm"],
@@ -331,7 +331,7 @@ const D: Station[] = [
     m: "rave02",
     wh: "9:16 sweep",
   },
-  { col: 16.2, id: "prom", label: "Promote", lane: 0, m: "m5", wh: "mint F-coordinate" },
+  { col: 16.2, id: "prom", label: "Promote", lane: 0, m: "m5", wh: "stamp F-coordinate" },
   {
     col: 17.1,
     id: "dist",
@@ -1145,7 +1145,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
         if (svc && svc.status === "ok" && !/no runs yet/i.test(svc.message ?? "")) {
           hbFresh++;
         }
-        dot.title = svc ? `cron.${name} — ${svc.status} · ${svc.message ?? ""}` : "no data";
+        dot.title = svc ? `cron.${name} · ${svc.status} · ${svc.message ?? ""}` : "no data";
       });
       hbSince = data.freshestReportAt ? new Date(data.freshestReportAt).getTime() : null;
       renderHbStat();
