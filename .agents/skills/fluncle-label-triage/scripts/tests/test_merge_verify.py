@@ -127,6 +127,43 @@ def test_a_conflation_the_verifier_found_reaches_the_split_brief():
     assert [found["slug"] for found in render.conflations(merged)] == ["split"]
 
 
+SPLIT = {"dnbStrandWorthRecovering": True, "keep": "the JNG jungle catalogue", "moveOut": "a namesake afrobeats act"}
+SWAPPED = {"dnbStrandWorthRecovering": True, "keep": "a namesake afrobeats act", "moveOut": "the JNG jungle catalogue"}
+
+
+def _split_answer(conflation: dict | None) -> dict:
+    answer = _answer("split", "unclear", "medium", False)
+    return {**answer, "conflation": conflation} if conflation else answer
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_a_lone_split_proposal_survives_a_repeat_answer_without_one(reverse):
+    answers = [_split_answer(SPLIT), _split_answer(None)]
+    merged, _ = merge_verify.merge(
+        _round([("split", "dnb", "medium")]),
+        [_checked("split", "dnb")],
+        answers[::-1] if reverse else answers,
+    )
+
+    bucket, row = _find(merged, "split")
+    assert (bucket, row["verifyOutcome"], row["conflation"]) == ("unclear", "refuted", SPLIT)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_two_different_split_proposals_leave_the_row_as_it_was(reverse):
+    answers = [_split_answer(SPLIT), _split_answer(SWAPPED)]
+    merged, report = merge_verify.merge(
+        _round([("split", "dnb", "medium")]),
+        [_checked("split", "dnb")],
+        answers[::-1] if reverse else answers,
+    )
+
+    bucket, row = _find(merged, "split")
+    assert (bucket, row["verifyOutcome"]) == ("dnb", "conflicting")
+    assert "conflation" not in row
+    assert any("conflicting answers" in line for line in merge_verify.report_lines(report))
+
+
 @pytest.mark.parametrize(
     ("answers", "outcome", "warning"),
     [

@@ -174,7 +174,11 @@ def outcome_for(bucket: str, answers: list[dict[str, Any]]) -> tuple[str, dict[s
     if len(distinct) > 1:
         return CONFLICTING, None
 
-    answer = next(iter(distinct.values()))
+    proposals = {json.dumps(a["conflation"], sort_keys=True): a for a in answers if a.get("conflation")}
+    if len(proposals) > 1:
+        return CONFLICTING, None
+
+    answer = next(iter(proposals.values()), None) or next(iter(distinct.values()))
     if answer.get("verdict") != bucket:
         return REFUTED, answer
     if answer.get("agrees") and answer.get("confidence") == "high":
