@@ -7,6 +7,7 @@ type FallbackImage = {
 };
 
 type ErrorTarget = {
+  fluncleImageTransformFallback?: boolean;
   addEventListener: (
     type: "error",
     listener: (event: { target: unknown }) => void,
@@ -35,6 +36,12 @@ export function installImageTransformFallback(
   sourceOf: (url: string | undefined) => string | undefined,
   managedAttribute: string,
 ): void {
+  if (root.fluncleImageTransformFallback) {
+    return;
+  }
+
+  root.fluncleImageTransformFallback = true;
+
   root.addEventListener(
     "error",
     (event) => {

@@ -8,21 +8,32 @@ import { labelLogoUrl } from "./media";
 
 type Listener = (event: { target: unknown }) => void;
 
-function runShippedScript(): { capture: boolean; fire: (target: unknown) => void } {
-  let listener: Listener | undefined;
+function runShippedScript(runs = 1): {
+  capture: boolean;
+  fire: (target: unknown) => void;
+  listeners: number;
+} {
+  const listeners: Listener[] = [];
   let capture = false;
   const fakeDocument = {
     addEventListener: (_type: string, handler: Listener, useCapture: boolean) => {
-      listener = handler;
+      listeners.push(handler);
       capture = useCapture;
     },
   };
 
-  runInNewContext(imageTransformFallbackScript, { document: fakeDocument });
+  for (let run = 0; run < runs; run += 1) {
+    runInNewContext(imageTransformFallbackScript, { document: fakeDocument });
+  }
 
   return {
     capture,
-    fire: (target) => listener?.({ target }),
+    fire: (target) => {
+      for (const listener of listeners) {
+        listener({ target });
+      }
+    },
+    listeners: listeners.length,
   };
 }
 
@@ -86,6 +97,10 @@ describe("image transform fallback script", () => {
     fire(image);
 
     expect(image.src).toBe(logo);
+  });
+
+  it("registers one listener per document however often the head re-injects it", () => {
+    expect(runShippedScript(3).listeners).toBe(1);
   });
 
   it("ignores errors from elements other than images", () => {
