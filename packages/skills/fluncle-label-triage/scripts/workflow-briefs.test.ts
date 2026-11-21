@@ -19,16 +19,18 @@ async function runWorkflow(
   script: string,
   research: Verdict[],
   extra: Record<string, unknown> = {},
-): Promise<{ briefs: string[]; peaks: Record<string, number> }> {
+): Promise<{ briefs: string[]; peaks: Record<string, number>; schemas: unknown[] }> {
   const source = readFileSync(join(import.meta.dir, script), "utf8").replace(
     "export const meta",
     "const meta",
   );
   const briefs: string[] = [];
+  const schemas: unknown[] = [];
   let inFlight = 0;
   const peaks: Record<string, number> = {};
-  const agent = async (prompt: string, options: { phase?: string }) => {
+  const agent = async (prompt: string, options: { phase?: string; schema?: unknown }) => {
     const index = briefs.push(prompt);
+    schemas.push(options.schema);
     inFlight += 1;
     const phase = options.phase ?? "Verify";
     peaks[phase] = Math.max(peaks[phase] ?? 0, inFlight);
@@ -63,7 +65,7 @@ async function runWorkflow(
 
   await run(JSON.stringify(args), agent, parallel, noop, noop);
 
-  return { briefs, peaks };
+  return { briefs, peaks, schemas };
 }
 
 async function renderBriefs(script: string, research: Verdict[]): Promise<string[]> {
@@ -78,6 +80,22 @@ const mixed: Verdict = {
   slug: "mixed",
   verdict: "dnb",
 };
+
+type VerdictSchema = {
+  properties: { verdicts: { items: { properties: Record<string, unknown> } } };
+};
+
+const verdictFields = (schema: unknown) =>
+  (schema as VerdictSchema).properties.verdicts.items.properties;
+
+describe("conflation handoff", () => {
+  test("the verify pass reports a conflation in the same shape the split brief reads from research", async () => {
+    const research = (await runWorkflow("triage-workflow.js", [])).schemas[0];
+    const verify = (await runWorkflow("verify-workflow.js", [])).schemas[0];
+
+    expect(verdictFields(verify).conflation).toEqual(verdictFields(research).conflation);
+  });
+});
 
 describe("worker briefs", () => {
   for (const script of ["triage-workflow.js", "verify-workflow.js"]) {

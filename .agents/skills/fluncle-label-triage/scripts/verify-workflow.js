@@ -5,6 +5,33 @@ export const meta = {
   phases: [{ detail: "Refute-framed re-research, one agent per batch", title: "Verify" }],
 };
 
+const CONFLATION = {
+  properties: {
+    dnbStrandWorthRecovering: {
+      description:
+        "True when one of the conflated labels IS a drum & bass / jungle catalogue Fluncle would crawl once separated. False when the entity is broken but no strand is in lane.",
+      type: "boolean",
+    },
+    keep: {
+      description:
+        "The strand that should remain on this MBID: name it with its catalogue-number scheme and the evidence that ties it there.",
+      type: "string",
+    },
+    moveOut: {
+      description:
+        "The foreign release(s) to move, each with its catalogue number, artist, year and the evidence that it belongs elsewhere.",
+      type: "string",
+    },
+    trap: {
+      description:
+        "Optional: anything that makes the obvious move BACKWARDS — the entity's own metadata or Discogs url-rel describing the strand being moved out, a third same-named label, or a reverse split where the in-lane half is the one that must move.",
+      type: "string",
+    },
+  },
+  required: ["dnbStrandWorthRecovering", "keep", "moveOut"],
+  type: "object",
+};
+
 const VERIFY_ITEM = {
   properties: {
     agrees: {
@@ -12,6 +39,7 @@ const VERIFY_ITEM = {
       type: "boolean",
     },
     confidence: { enum: ["high", "medium", "low"], type: "string" },
+    conflation: CONFLATION,
     evidence: {
       description:
         "One line: the concrete NEW finding that confirmed or refuted the original (artists seen, Discogs styles, release titles). Never a restatement of the original evidence.",
@@ -99,7 +127,7 @@ ${EVIDENCE_SHAPE}
 ## Rules
 - \`agrees: true\` ONLY when you reach the same bucket from your OWN evidence. Restating the first pass's evidence is not confirmation.
 - \`confidence: high\` ONLY when the catalogue is unambiguous on what you read — every (or nearly every) release in one lane, or a clear major/distributor/aggregator shape.
-- A label whose MBID mixes two real labels' catalogues (conflation) is \`unclear\` when a DnB strand needs recovering, otherwise \`not_dnb\`; name the conflation.
+- A label whose MBID mixes two real labels' catalogues (conflation) is \`unclear\` when a DnB strand needs recovering, otherwise \`not_dnb\`; name the conflation. For an \`unclear\` conflation, FILL THE \`conflation\` OBJECT: the upstream MusicBrainz split brief is generated from it, so a conflation named only in \`evidence\` never reaches the editor. Give the strand that stays (with its catalogue-number scheme), each release that moves (catalogue number, artist, year, and why it belongs elsewhere), whether a drum & bass catalogue is worth recovering, and any \`trap\` that makes the obvious move backwards.
 - A label with too little evidence to call stays \`unclear\` / \`low\`. Do not rescue a guess with a better guess.
 - A mixed label (meaningful DnB minority on an off-lane label, or a recurring off-lane act on a DnB label) is \`unclear\` here — the census pass handles carving, not you.
 

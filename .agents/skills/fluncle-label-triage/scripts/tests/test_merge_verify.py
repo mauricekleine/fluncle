@@ -109,6 +109,24 @@ def test_a_refuted_enable_drops_the_block_rules_it_was_proposed_with():
     assert merged["counts"]["rules"] == 0
 
 
+def test_a_conflation_the_verifier_found_reaches_the_split_brief():
+    render = _import(os.path.join(_SCRIPTS_DIR, "render-conflation-brief.py"), "render_brief")
+    conflation = {
+        "dnbStrandWorthRecovering": True,
+        "keep": "the JNG jungle catalogue",
+        "moveOut": "a 2010 afrobeats album by a namesake act",
+    }
+    answer = {**_answer("split", "unclear", "medium", False), "conflation": conflation}
+    merged, _ = merge_verify.merge(
+        _round([("split", "dnb", "medium")]), [_checked("split", "dnb")], [answer]
+    )
+
+    bucket, row = _find(merged, "split")
+    assert bucket == "unclear"
+    assert row["conflation"] == conflation
+    assert [found["slug"] for found in render.conflations(merged)] == ["split"]
+
+
 @pytest.mark.parametrize(
     ("answers", "outcome", "warning"),
     [

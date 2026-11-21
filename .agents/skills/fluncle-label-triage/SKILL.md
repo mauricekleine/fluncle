@@ -147,7 +147,7 @@ A local file, never a hosted artifact. The page **leads with the rule proposals*
 
 **Do not apply anything the operator has not ratified.**
 
-A round's `unclear` conflations — the ones with a drum & bass strand — get their own artefact, because they are never ruled here: they are fixed upstream and picked up clean by a later round:
+A round's `unclear` conflations — the ones with a drum & bass strand — get their own artefact, because they are never ruled here: they are fixed upstream and picked up clean by a later round. Both passes fill the same `conflation` object, and `merge-verify.py` carries the verifier's onto the row it refutes, so a conflation only the second opinion caught is briefed too:
 
 ```bash
 python3 <skill>/scripts/render-conflation-brief.py   # writes mb-split-brief.md

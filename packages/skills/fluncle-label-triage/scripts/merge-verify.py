@@ -10,7 +10,8 @@ ends in exactly one outcome:
               confidence, and its evidence carries both readings, so it stays a judgment call.
   refuted     the verifier reached a different bucket: the row moves there at the verifier's
               confidence and drops any artist rules it carried (they were proposed for a verdict
-              that no longer stands). Both readings stay in its evidence.
+              that no longer stands). Both readings stay in its evidence. A conflation the
+              verifier found travels with the row, so render-conflation-brief.py briefs it.
   conflicting two answers for the same label disagree: the row is left exactly as it was.
   missing     no answer came back (a dead agent, a label an agent dropped): the row is left
               exactly as it was.
@@ -245,6 +246,8 @@ def merge(
                     row["confidence"] = answer.get("confidence")
                     row["refutedFrom"] = bucket
                     row.pop("rules", None)
+                    if answer.get("conflation"):
+                        row["conflation"] = answer["conflation"]
                     flips.append((slug, bucket, destination, str(answer.get("confidence"))))
 
                 per_row[outcome] += 1
