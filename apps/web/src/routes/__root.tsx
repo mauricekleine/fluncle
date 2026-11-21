@@ -15,6 +15,7 @@ import { RootErrorState } from "@/components/root-error-state";
 import { DiscoveryListener } from "@/components/discovery-listener";
 import { PublicChrome } from "@/components/nav/public-chrome";
 import { galaxyMapAvailabilitySnapshot } from "@/lib/server/galaxies-map";
+import { imageTransformFallbackScript } from "@/lib/image-transform-fallback";
 import { isStaleBuildError, recoverFromStaleBuild } from "@/lib/stale-build-recovery";
 import { siteUrl } from "../lib/fluncle-links";
 import { fluncleMetaDescription, fluncleSiteTitle } from "../lib/identity";
@@ -167,6 +168,9 @@ export const Route = createRootRoute({
       },
     ],
     scripts: [
+      {
+        children: imageTransformFallbackScript,
+      },
       {
         async: true,
         "data-ignore-pages": "/admin,/admin/*",
