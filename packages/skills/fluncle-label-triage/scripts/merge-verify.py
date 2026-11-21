@@ -10,7 +10,8 @@ ends in exactly one outcome:
               confidence, and its evidence carries both readings, so it stays a judgment call.
   refuted     the verifier reached a different bucket: the row moves there at the verifier's
               confidence and drops any artist rules it carried (they were proposed for a verdict
-              that no longer stands). Both readings stay in its evidence.
+              that no longer stands). Both readings stay in its evidence. A conflation the
+              verifier found travels with the row, so render-conflation-brief.py briefs it.
   conflicting two answers for the same label disagree: the row is left exactly as it was.
   missing     no answer came back (a dead agent, a label an agent dropped): the row is left
               exactly as it was.
@@ -166,6 +167,23 @@ def resolve_slugs(
     return grouped, unmatched
 
 
+def split_of(conflation: dict[str, Any]) -> tuple[bool, str, str]:
+    return (
+        bool(conflation.get("dnbStrandWorthRecovering")),
+        (conflation.get("keep") or "").strip(),
+        (conflation.get("moveOut") or "").strip(),
+    )
+
+
+def agreed_conflation(split: tuple[bool, str, str], proposals: list[dict[str, Any]]) -> dict[str, Any]:
+    strand, keep, move_out = split
+    agreed: dict[str, Any] = {"dnbStrandWorthRecovering": strand, "keep": keep, "moveOut": move_out}
+    traps = sorted({(conflation.get("trap") or "").strip() for conflation in proposals} - {""})
+    if traps:
+        agreed["trap"] = " ".join(traps)
+    return agreed
+
+
 def outcome_for(bucket: str, answers: list[dict[str, Any]]) -> tuple[str, dict[str, Any] | None]:
     distinct = {(a.get("verdict"), a.get("confidence"), bool(a.get("agrees"))): a for a in answers}
     if not distinct:
@@ -173,7 +191,14 @@ def outcome_for(bucket: str, answers: list[dict[str, Any]]) -> tuple[str, dict[s
     if len(distinct) > 1:
         return CONFLICTING, None
 
-    answer = next(iter(distinct.values()))
+    proposals = [a["conflation"] for a in answers if a.get("conflation")]
+    splits = {split_of(conflation) for conflation in proposals}
+    if len(splits) > 1:
+        return CONFLICTING, None
+
+    answer = next((a for a in answers if a.get("conflation")), None) or next(iter(distinct.values()))
+    if splits:
+        answer = {**answer, "conflation": agreed_conflation(next(iter(splits)), proposals)}
     if answer.get("verdict") != bucket:
         return REFUTED, answer
     if answer.get("agrees") and answer.get("confidence") == "high":
@@ -245,6 +270,8 @@ def merge(
                     row["confidence"] = answer.get("confidence")
                     row["refutedFrom"] = bucket
                     row.pop("rules", None)
+                    if answer.get("conflation"):
+                        row["conflation"] = answer["conflation"]
                     flips.append((slug, bucket, destination, str(answer.get("confidence"))))
 
                 per_row[outcome] += 1
