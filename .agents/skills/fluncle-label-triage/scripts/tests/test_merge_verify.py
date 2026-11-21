@@ -150,6 +150,32 @@ def test_a_lone_split_proposal_survives_a_repeat_answer_without_one(reverse):
 
 
 @pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize(
+    ("first_trap", "second_trap", "merged_trap"),
+    [
+        (None, "", None),
+        (None, "  ", None),
+        (None, "the Discogs link points at the namesake", "the Discogs link points at the namesake"),
+        ("b warning", "a warning", "a warning b warning"),
+    ],
+)
+def test_split_proposals_that_differ_only_in_their_warning_agree(reverse, first_trap, second_trap, merged_trap):
+    def with_trap(trap: str | None) -> dict:
+        return SPLIT if trap is None else {**SPLIT, "trap": trap}
+
+    answers = [_split_answer(with_trap(first_trap)), _split_answer(with_trap(second_trap))]
+    merged, _ = merge_verify.merge(
+        _round([("split", "dnb", "medium")]),
+        [_checked("split", "dnb")],
+        answers[::-1] if reverse else answers,
+    )
+
+    bucket, row = _find(merged, "split")
+    assert (bucket, row["verifyOutcome"]) == ("unclear", "refuted")
+    assert row["conflation"] == with_trap(merged_trap)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
 def test_two_different_split_proposals_leave_the_row_as_it_was(reverse):
     answers = [_split_answer(SPLIT), _split_answer(SWAPPED)]
     merged, report = merge_verify.merge(

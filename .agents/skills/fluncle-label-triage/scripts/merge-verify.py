@@ -167,6 +167,23 @@ def resolve_slugs(
     return grouped, unmatched
 
 
+def split_of(conflation: dict[str, Any]) -> tuple[bool, str, str]:
+    return (
+        bool(conflation.get("dnbStrandWorthRecovering")),
+        (conflation.get("keep") or "").strip(),
+        (conflation.get("moveOut") or "").strip(),
+    )
+
+
+def agreed_conflation(split: tuple[bool, str, str], proposals: list[dict[str, Any]]) -> dict[str, Any]:
+    strand, keep, move_out = split
+    agreed: dict[str, Any] = {"dnbStrandWorthRecovering": strand, "keep": keep, "moveOut": move_out}
+    traps = sorted({(conflation.get("trap") or "").strip() for conflation in proposals} - {""})
+    if traps:
+        agreed["trap"] = " ".join(traps)
+    return agreed
+
+
 def outcome_for(bucket: str, answers: list[dict[str, Any]]) -> tuple[str, dict[str, Any] | None]:
     distinct = {(a.get("verdict"), a.get("confidence"), bool(a.get("agrees"))): a for a in answers}
     if not distinct:
@@ -174,11 +191,14 @@ def outcome_for(bucket: str, answers: list[dict[str, Any]]) -> tuple[str, dict[s
     if len(distinct) > 1:
         return CONFLICTING, None
 
-    proposals = {json.dumps(a["conflation"], sort_keys=True): a for a in answers if a.get("conflation")}
-    if len(proposals) > 1:
+    proposals = [a["conflation"] for a in answers if a.get("conflation")]
+    splits = {split_of(conflation) for conflation in proposals}
+    if len(splits) > 1:
         return CONFLICTING, None
 
-    answer = next(iter(proposals.values()), None) or next(iter(distinct.values()))
+    answer = next((a for a in answers if a.get("conflation")), None) or next(iter(distinct.values()))
+    if splits:
+        answer = {**answer, "conflation": agreed_conflation(next(iter(splits)), proposals)}
     if answer.get("verdict") != bucket:
         return REFUTED, answer
     if answer.get("agrees") and answer.get("confidence") == "high":
