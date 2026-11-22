@@ -2808,7 +2808,7 @@ JSON field reference:
   frontier
     .command("refresh")
     .description("Re-mirror every crew member's Frontier playlist from their recommendations")
-    .option("--limit <limit>", "Playlists per tick (default 500)")
+    .option("--limit <limit>", "Playlists per tick (default 5, max 10)")
     .option("--json", "Print JSON", false)
     .action(async (options: FrontierRefreshOptions) => {
       const { frontierRefreshCommand } = await import("./commands/admin-frontier");
