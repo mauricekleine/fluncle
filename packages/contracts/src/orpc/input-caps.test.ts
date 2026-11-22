@@ -26,6 +26,12 @@ import {
   recordCost,
 } from "./admin-costs";
 import { LABEL_OUTLIER_TIMESTAMP_MAX, recordLabelOutliers } from "./admin-label-outliers";
+import {
+  FRONTIER_COVER_LIMIT_MAX,
+  FRONTIER_REFRESH_LIMIT_MAX,
+  refreshFrontierPlaylists,
+  uploadFrontierCovers,
+} from "./admin-frontier";
 import { rankArtists } from "./admin-artists";
 import { migratePreviewArchive } from "./admin-migrations";
 import { listTrackWork } from "./admin-tracks";
@@ -1110,5 +1116,33 @@ console.log("input-caps: ok");
     accepts(recordLabelOutliers, run("x".repeat(LABEL_OUTLIER_TIMESTAMP_MAX + 1))),
     false,
     "a replica stamp one character past the cap is rejected",
+  );
+}
+
+{
+  assert.equal(
+    accepts(refreshFrontierPlaylists, {}),
+    true,
+    "a refresh tick with no limit takes the server's paced batch",
+  );
+  assert.equal(
+    accepts(refreshFrontierPlaylists, { limit: FRONTIER_REFRESH_LIMIT_MAX }),
+    true,
+    "a refresh batch AT the cap is accepted",
+  );
+  assert.equal(
+    accepts(refreshFrontierPlaylists, { limit: FRONTIER_REFRESH_LIMIT_MAX + 1 }),
+    false,
+    "one playlist past the refresh batch cap is rejected",
+  );
+  assert.equal(
+    accepts(uploadFrontierCovers, { limit: FRONTIER_COVER_LIMIT_MAX }),
+    true,
+    "a cover drain AT the cap is accepted",
+  );
+  assert.equal(
+    accepts(uploadFrontierCovers, { limit: FRONTIER_COVER_LIMIT_MAX + 1 }),
+    false,
+    "one cover past the drain cap is rejected",
   );
 }

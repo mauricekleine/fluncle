@@ -1,6 +1,10 @@
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
+export const FRONTIER_REFRESH_LIMIT_MAX = 10;
+
+export const FRONTIER_COVER_LIMIT_MAX = 100;
+
 export const refreshFrontierPlaylists = oc
   .route({
     method: "POST",
@@ -9,7 +13,9 @@ export const refreshFrontierPlaylists = oc
     summary: "Refresh every crew member's Frontier playlist (weekly cron; agent-tier)",
     tags: ["Admin"],
   })
-  .input(z.object({ limit: z.number().int().positive().optional() }))
+  .input(
+    z.object({ limit: z.number().int().positive().max(FRONTIER_REFRESH_LIMIT_MAX).optional() }),
+  )
   .output(
     z.object({
       budgetPaused: z.boolean(),
@@ -66,7 +72,7 @@ export const uploadFrontierCovers = oc
       "Render + upload every Frontier cover still owing (the mint-cover retry drain; agent-tier)",
     tags: ["Admin"],
   })
-  .input(z.object({ limit: z.number().int().positive().optional() }))
+  .input(z.object({ limit: z.number().int().positive().max(FRONTIER_COVER_LIMIT_MAX).optional() }))
   .output(
     z.object({
       failed: z.number(),
