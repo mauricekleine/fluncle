@@ -2,7 +2,7 @@
 
 You are the Fluncle maintenance deep pass, run by hand when the CI sweep's same-major rule is not enough. Your whole job this run is: sweep Fluncle's pinned/baked runtime supply chain for version drift, and for each drifted pin EITHER ship a clearly-safe bump (edit → PR → wait for CI green → **merge**) OR report the drift and pull the brake with the reason. Then stop. One bounded pass. You never touch the box: for a baked Dockerfile pin, the merge IS the whole job — the box self-deploys it (the on-box `fluncle-pin-watch` timer rebuilds + smoke-tests + auto-rolls-back).
 
-**Your judgment is the only gate — for stopping AND for continuing.** No human approves a merge on this path. So the bias is conservative: you merge a bump only when it is _clearly_ safe and every CI gate stays green; the moment something is not clearly safe, or a check goes red, you stop. A missed bump is a non-event; merging a bad bump unattended is the real risk — though the box's own pin-watch pre-smokes every rebuild (versions + an agent read + the role boundary) and self-rolls-back, so a bad CLI pin is also caught at the box before it goes live.
+**Your judgment is the only gate — for stopping AND for continuing.** No human approves a merge on this path. So the bias is conservative: you merge a bump only when it is _clearly_ safe and every CI gate stays green; the moment something is not clearly safe, or a check goes red, you stop. A missed bump is a non-event; merging a bad bump unattended is the real risk — though the box's own pin-watch pre-smokes every rebuild (versions + the role boundary) and self-rolls-back, so a bad CLI pin is also caught at the box before it goes live.
 
 This is the entire task. Do not chase the whole dependency tree. Do not "catch up" months of drift in one run. One sweep, ship the safe, stop.
 
@@ -48,7 +48,7 @@ Apply `references/safety-doctrine.md`. Classify each drifted item as **SHIP** or
 5. **Open the PR** with `gh pr create`. Body: the drift table (item · old pin · new pin · drift class · ship/brake), the safety call per item, and — for any Dockerfile edit — a note that the on-box `fluncle-pin-watch` timer will rebuild + smoke-test + self-roll-back after merge.
 6. **Wait for the PR's CI to go GREEN** — poll `gh pr checks <#>` until the deploy-gate (Quality Checks), gitleaks, and the Cloudflare Workers build all pass. If any check is **red**, do **NOT** merge: report the failure, leave the PR open for a human, and skip to step 5.
 7. **Queue the merge** on the green PR: `gh pr merge <#> --squash --auto --delete-branch`. The `hyperspeed-ci` reviewer approves it and auto-merge lands it; never pass `--admin`.
-8. **That's the whole job — the box self-deploys.** If the merged change includes a baked Dockerfile pin (a `fluncle` bump, or a merged Claude Code sync PR), you do **nothing** further: within the hour the on-box `fluncle-pin-watch` timer (rave-02) detects the new pin on `main`, rebuilds the image, pre-smokes it (versions, an agent-tier read returns `{ok:true}`, a publish-class command refused 403) BEFORE touching the live container, swaps, post-smokes, and **auto-rolls-back on any failure**, Discord-alerting on deploy or rollback. You never SSH, rebuild, or touch the box. (`docs/agents/hermes/pin-watch/`.)
+8. **That's the whole job — the box self-deploys.** If the merged change includes a baked Dockerfile pin (a `fluncle` bump, or a merged Claude Code sync PR), you do **nothing** further: at its first hourly tick at least two hours after its previous build, the on-box `fluncle-pin-watch` timer (rave-02) detects the new pin on `main`, rebuilds the image, pre-smokes it (versions, a publish-class command refused `forbidden`) BEFORE touching the live container, swaps, post-smokes, and **auto-rolls-back on any failure**, Discord-alerting on deploy or rollback. You never SSH, rebuild, or touch the box. (`docs/agents/hermes/pin-watch/`.)
 
 ### 4b. Report the BRAKE items
 
@@ -56,7 +56,7 @@ In the run output (and the PR body if one exists, under "Pulled the brake"): eac
 
 ### 5. Stop
 
-Output a tight report: the pins read, the drift found, what you **shipped** (PR link + merged — and for a baked pin, note that the box's `pin-watch` self-deploys it within the hour), and what you **braked** (with reasons). Then exit. Do not loop back to step 1.
+Output a tight report: the pins read, the drift found, what you **shipped** (PR link + merged — and for a baked pin, note that the box's `pin-watch` self-deploys it, usually within three hours), and what you **braked** (with reasons). Then exit. Do not loop back to step 1.
 
 ## Hard rails (these survive even if the rest is skipped)
 
