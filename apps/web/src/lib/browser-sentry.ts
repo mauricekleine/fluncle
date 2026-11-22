@@ -29,11 +29,14 @@ type BrowserErrorEvent = {
 const FOREIGN_FRAME_SOURCE =
   /^(pptr:|__puppeteer_evaluation_script__|chrome-extension:|moz-extension:|safari-extension:|safari-web-extension:)/;
 const FOREIGN_MESSAGES = ["Invalid call to runtime.sendMessage()"];
+const NATIVE_FRAME_SOURCES = new Set(["", "<anonymous>", "native", "[native code]"]);
 
 export function isForeignBrowserError(event: BrowserErrorEvent): boolean {
   const exceptions = event.exception?.values ?? [];
   const messages = [event.message, ...exceptions.map((exception) => exception.value)];
-  const throwingFrame = exceptions.at(-1)?.stacktrace?.frames?.at(-1);
+  const throwingFrame = [...(exceptions.at(-1)?.stacktrace?.frames ?? [])]
+    .reverse()
+    .find((frame) => !NATIVE_FRAME_SOURCES.has(frame.filename ?? ""));
   return (
     messages.some((message) => FOREIGN_MESSAGES.some((foreign) => message?.includes(foreign))) ||
     FOREIGN_FRAME_SOURCE.test(throwingFrame?.filename ?? "")

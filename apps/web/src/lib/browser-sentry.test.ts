@@ -112,6 +112,25 @@ describe("foreign browser errors", () => {
     expect(browserBeforeSend(event, () => false)).toEqual(event);
   });
 
+  it.each([
+    ["Puppeteer evaluation", "pptr:evaluate;parse", null],
+    ["browser extension", "chrome-extension://abc/content.js", null],
+    ["Fluncle bundle", "https://www.fluncle.com/assets/index-abc.js", "sent"],
+  ])("classifies a native throw called from a %s by its caller", (_, caller, expected) => {
+    const event = {
+      exception: {
+        values: [
+          {
+            stacktrace: { frames: [{ filename: caller }, { filename: "<anonymous>" }] },
+            value: "Unexpected end of JSON input",
+          },
+        ],
+      },
+    };
+
+    expect(browserBeforeSend(event, () => false)).toEqual(expected === "sent" ? event : null);
+  });
+
   it("drops an error thrown inside a Puppeteer evaluation at the send boundary", () => {
     expect(browserBeforeSend(thrownFrom("pptr:evaluate;triggerLazyLoad"), () => false)).toBeNull();
   });
