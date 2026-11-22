@@ -19,6 +19,7 @@ import {
   workerTelemetryDatabaseConcurrencyGate,
 } from "../database-concurrency";
 import { SENTRY_RELEASE } from "../sentry-config";
+import { ApiError } from "./api-error";
 import {
   canonicalSqlShape,
   classifyDatabaseAccess,
@@ -171,6 +172,9 @@ async function acquireDatabaseLease(
     recordAdmission(span, lease);
     return lease;
   } catch (error) {
+    if (error instanceof ApiError && error.code === "database_busy") {
+      noteTransientDatabaseFailure();
+    }
     const queueWaitMs = Math.max(0, Date.now() - startedAt);
     span?.setAttribute("fluncle.queue_wait_ms", queueWaitMs);
     span?.setAttribute("fluncle.duration_ms", queueWaitMs);
@@ -200,7 +204,10 @@ export const DB_MAX_RETRIES = DB_RETRY_BACKOFF_MS.length;
 const DB_RETRY_JITTER_MS = 50;
 
 const RETRYABLE_GATEWAY_STATUSES = new Set([502, 503, 504, 520, 522, 525, 530]);
-const TRANSIENT_GATEWAY_STATUSES = new Set([...RETRYABLE_GATEWAY_STATUSES, 524]);
+export const TRANSIENT_GATEWAY_STATUSES: ReadonlySet<number> = new Set([
+  ...RETRYABLE_GATEWAY_STATUSES,
+  524,
+]);
 const TRANSIENT_DATABASE_FAILURE = Symbol("fluncle.transient-database-failure");
 
 export function noteTransientDatabaseFailure(): void {

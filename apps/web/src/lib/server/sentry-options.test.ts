@@ -350,3 +350,51 @@ describe("the Worker scrub sees through encodings", () => {
     expect(JSON.stringify(event)).not.toContain(secret);
   });
 });
+
+describe("database gateway grouping", () => {
+  function libsqlEvent(status: number, type = "LibsqlError") {
+    return {
+      exception: {
+        values: [
+          { type: "HttpServerError", value: `Server returned HTTP status ${status}` },
+          { type, value: `SERVER_ERROR: Server returned HTTP status ${status}` },
+        ],
+      },
+      type: undefined,
+    };
+  }
+
+  it.each([502, 503, 504, 520, 522, 524, 525, 530])(
+    "groups every %i gateway failure into one issue regardless of call site",
+    (status) => {
+      const event = scrubServerSentryEvent(libsqlEvent(status));
+
+      expect(event.fingerprint).toEqual(["libsql-gateway", String(status)]);
+      expect(event.tags).toMatchObject({ "fluncle.db_gateway_status": status });
+    },
+  );
+
+  it("groups a gateway failure whose response carried a text body", () => {
+    const event = scrubServerSentryEvent({
+      exception: {
+        values: [
+          {
+            type: "LibsqlError",
+            value: "SERVER_ERROR: Server returned HTTP status 504: upstream timeout",
+          },
+        ],
+      },
+      type: undefined,
+    });
+
+    expect(event.fingerprint).toEqual(["libsql-gateway", "504"]);
+  });
+
+  it.each<[string, ReturnType<typeof libsqlEvent>]>([
+    ["a 4xx response", libsqlEvent(400)],
+    ["an unclassified 5xx", libsqlEvent(500)],
+    ["a non-libSQL error", libsqlEvent(524, "Error")],
+  ])("keeps default grouping for %s", (_, input) => {
+    expect(scrubServerSentryEvent(input).fingerprint).toBeUndefined();
+  });
+});

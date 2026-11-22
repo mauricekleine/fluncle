@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { browserSpanStart, browserTracesSampler, bufferBrowserErrors } from "./browser-sentry";
+import {
+  browserBeforeSend,
+  browserSpanStart,
+  browserTracesSampler,
+  bufferBrowserErrors,
+  isForeignBrowserError,
+} from "./browser-sentry";
 
 const HUMAN_UA = "Mozilla/5.0 Chrome/130.0.0.0 Safari/537.36";
 
@@ -58,5 +64,74 @@ describe("early browser errors", () => {
     const captured: unknown[] = [];
     flush((error) => captured.push(error));
     expect(captured).toEqual(Array.from({ length: 20 }, (_, index) => index + 5));
+  });
+});
+
+describe("foreign browser errors", () => {
+  const thrownFrom = (filename: string) => ({
+    exception: { values: [{ stacktrace: { frames: [{ filename }] }, value: "boom" }] },
+  });
+
+  it.each([
+    ["a Puppeteer evaluation", thrownFrom("pptr:evaluate;triggerLazyLoad")],
+    ["a Chrome extension", thrownFrom("chrome-extension://abc/content.js")],
+    ["a Safari web extension", thrownFrom("safari-web-extension://abc/inject.js")],
+    [
+      "an extension messaging fault",
+      {
+        exception: { values: [{ value: "Invalid call to runtime.sendMessage(). Tab not found." }] },
+      },
+    ],
+  ])("drops %s", (_, event) => {
+    expect(isForeignBrowserError(event)).toBe(true);
+  });
+
+  it("keeps errors thrown from Fluncle's own bundle", () => {
+    expect(isForeignBrowserError(thrownFrom("https://www.fluncle.com/assets/index-abc.js"))).toBe(
+      false,
+    );
+  });
+
+  it("sends a Fluncle error that an extension or Puppeteer evaluation called into", () => {
+    const event = {
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [
+                { filename: "pptr:evaluate;triggerLazyLoad" },
+                { filename: "https://www.fluncle.com/assets/index-abc.js" },
+              ],
+            },
+            value: "boom",
+          },
+        ],
+      },
+    };
+
+    expect(browserBeforeSend(event, () => false)).toEqual(event);
+  });
+
+  it.each([
+    ["Puppeteer evaluation", "pptr:evaluate;parse", null],
+    ["browser extension", "chrome-extension://abc/content.js", null],
+    ["Fluncle bundle", "https://www.fluncle.com/assets/index-abc.js", "sent"],
+  ])("classifies a native throw called from a %s by its caller", (_, caller, expected) => {
+    const event = {
+      exception: {
+        values: [
+          {
+            stacktrace: { frames: [{ filename: caller }, { filename: "<anonymous>" }] },
+            value: "Unexpected end of JSON input",
+          },
+        ],
+      },
+    };
+
+    expect(browserBeforeSend(event, () => false)).toEqual(expected === "sent" ? event : null);
+  });
+
+  it("drops an error thrown inside a Puppeteer evaluation at the send boundary", () => {
+    expect(browserBeforeSend(thrownFrom("pptr:evaluate;triggerLazyLoad"), () => false)).toBeNull();
   });
 });

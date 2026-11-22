@@ -169,6 +169,27 @@ describe("database admission timeout instrumentation", () => {
       expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(0);
     },
   );
+
+  it("marks a saturated queue as a transient database failure for the request", async () => {
+    const held = await Promise.all(
+      Array.from({ length: WORKER_DB_AGGREGATE_CONCURRENCY }, () =>
+        workerDatabaseConcurrencyGate.acquire("write"),
+      ),
+    );
+    try {
+      await runWithDatabaseRequestScope(async () => {
+        const db = await getDb();
+        const pending = db.execute("select 1").catch((error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(WORKER_DB_QUEUE_WAIT_MAX_MS);
+        expect(await pending).toMatchObject({ code: "database_busy" });
+        expect(requestSawTransientDatabaseFailure()).toBe(true);
+      });
+    } finally {
+      for (const lease of held) {
+        lease.release();
+      }
+    }
+  });
 });
 
 describe("optional page database work", () => {

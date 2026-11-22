@@ -19,6 +19,39 @@ export function browserSpanStart(options: StartSpanOptions, timeOrigin: number):
   return options.op === "pageload" ? { ...options, startTime: timeOrigin / 1000 } : options;
 }
 
+type BrowserErrorEvent = {
+  exception?: {
+    values?: { stacktrace?: { frames?: { filename?: string }[] }; value?: string }[];
+  };
+  message?: string;
+};
+
+const FOREIGN_FRAME_SOURCE =
+  /^(pptr:|__puppeteer_evaluation_script__|chrome-extension:|moz-extension:|safari-extension:|safari-web-extension:)/;
+const FOREIGN_MESSAGES = ["Invalid call to runtime.sendMessage()"];
+const NATIVE_FRAME_SOURCES = new Set(["", "<anonymous>", "native", "[native code]"]);
+
+export function isForeignBrowserError(event: BrowserErrorEvent): boolean {
+  const exceptions = event.exception?.values ?? [];
+  const messages = [event.message, ...exceptions.map((exception) => exception.value)];
+  const throwingFrame = [...(exceptions.at(-1)?.stacktrace?.frames ?? [])]
+    .reverse()
+    .find((frame) => !NATIVE_FRAME_SOURCES.has(frame.filename ?? ""));
+  return (
+    messages.some((message) => FOREIGN_MESSAGES.some((foreign) => message?.includes(foreign))) ||
+    FOREIGN_FRAME_SOURCE.test(throwingFrame?.filename ?? "")
+  );
+}
+
+export function browserBeforeSend<Event extends BrowserErrorEvent>(
+  event: Event,
+  dropError: () => boolean,
+): Event | null {
+  return dropError() || isForeignBrowserError(event)
+    ? null
+    : browserSentryScrubHooks.beforeSend(event);
+}
+
 export function bufferBrowserErrors(
   target: Pick<Window, "addEventListener" | "removeEventListener">,
 ) {
@@ -64,8 +97,7 @@ async function loadBrowserSentry() {
     const capture = initBrowserSentry(
       {
         ...browserSentryScrubHooks,
-        beforeSend: (event) =>
-          shouldDropError() ? null : browserSentryScrubHooks.beforeSend(event),
+        beforeSend: (event) => browserBeforeSend(event, shouldDropError),
         dsn: BROWSER_SENTRY_DSN,
         environment: sentryEnvironmentForHost(window.location.hostname),
         release: SENTRY_RELEASE,
