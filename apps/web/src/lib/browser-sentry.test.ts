@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  browserBeforeSend,
   browserSpanStart,
   browserTracesSampler,
   bufferBrowserErrors,
@@ -89,5 +90,29 @@ describe("foreign browser errors", () => {
     expect(isForeignBrowserError(thrownFrom("https://www.fluncle.com/assets/index-abc.js"))).toBe(
       false,
     );
+  });
+
+  it("sends a Fluncle error that an extension or Puppeteer evaluation called into", () => {
+    const event = {
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [
+                { filename: "pptr:evaluate;triggerLazyLoad" },
+                { filename: "https://www.fluncle.com/assets/index-abc.js" },
+              ],
+            },
+            value: "boom",
+          },
+        ],
+      },
+    };
+
+    expect(browserBeforeSend(event, () => false)).toEqual(event);
+  });
+
+  it("drops an error thrown inside a Puppeteer evaluation at the send boundary", () => {
+    expect(browserBeforeSend(thrownFrom("pptr:evaluate;triggerLazyLoad"), () => false)).toBeNull();
   });
 });

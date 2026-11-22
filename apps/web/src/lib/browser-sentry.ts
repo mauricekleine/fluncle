@@ -33,14 +33,20 @@ const FOREIGN_MESSAGES = ["Invalid call to runtime.sendMessage()"];
 export function isForeignBrowserError(event: BrowserErrorEvent): boolean {
   const exceptions = event.exception?.values ?? [];
   const messages = [event.message, ...exceptions.map((exception) => exception.value)];
+  const throwingFrame = exceptions.at(-1)?.stacktrace?.frames?.at(-1);
   return (
     messages.some((message) => FOREIGN_MESSAGES.some((foreign) => message?.includes(foreign))) ||
-    exceptions.some((exception) =>
-      exception.stacktrace?.frames?.some((frame) =>
-        FOREIGN_FRAME_SOURCE.test(frame.filename ?? ""),
-      ),
-    )
+    FOREIGN_FRAME_SOURCE.test(throwingFrame?.filename ?? "")
   );
+}
+
+export function browserBeforeSend<Event extends BrowserErrorEvent>(
+  event: Event,
+  dropError: () => boolean,
+): Event | null {
+  return dropError() || isForeignBrowserError(event)
+    ? null
+    : browserSentryScrubHooks.beforeSend(event);
 }
 
 export function bufferBrowserErrors(
@@ -88,10 +94,7 @@ async function loadBrowserSentry() {
     const capture = initBrowserSentry(
       {
         ...browserSentryScrubHooks,
-        beforeSend: (event) =>
-          shouldDropError() || isForeignBrowserError(event)
-            ? null
-            : browserSentryScrubHooks.beforeSend(event),
+        beforeSend: (event) => browserBeforeSend(event, shouldDropError),
         dsn: BROWSER_SENTRY_DSN,
         environment: sentryEnvironmentForHost(window.location.hostname),
         release: SENTRY_RELEASE,

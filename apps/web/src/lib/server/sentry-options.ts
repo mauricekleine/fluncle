@@ -93,7 +93,7 @@ function scrubEventCoordinates<
   return event;
 }
 
-const LIBSQL_GATEWAY_MESSAGE = /^SERVER_ERROR: Server returned HTTP status (\d{3})$/;
+const LIBSQL_GATEWAY_MESSAGE = /^SERVER_ERROR: Server returned HTTP status (\d{3})(?::|$)/;
 
 export function databaseGatewayStatus(event: ErrorEvent): number | undefined {
   for (const exception of event.exception?.values ?? []) {

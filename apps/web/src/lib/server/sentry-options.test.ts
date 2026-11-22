@@ -374,6 +374,22 @@ describe("database gateway grouping", () => {
     },
   );
 
+  it("groups a gateway failure whose response carried a text body", () => {
+    const event = scrubServerSentryEvent({
+      exception: {
+        values: [
+          {
+            type: "LibsqlError",
+            value: "SERVER_ERROR: Server returned HTTP status 504: upstream timeout",
+          },
+        ],
+      },
+      type: undefined,
+    });
+
+    expect(event.fingerprint).toEqual(["libsql-gateway", "504"]);
+  });
+
   it.each<[string, ReturnType<typeof libsqlEvent>]>([
     ["a 4xx response", libsqlEvent(400)],
     ["an unclassified 5xx", libsqlEvent(500)],
