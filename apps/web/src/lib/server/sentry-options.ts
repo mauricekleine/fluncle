@@ -15,6 +15,7 @@ import {
   TRACE_RATE_NONE,
 } from "../sentry-sampling";
 import { scrubSensitiveValue } from "../sentry-scrub";
+import { TRANSIENT_GATEWAY_STATUSES } from "./db";
 
 const HIGH_VALUE_TRACE_MATCHERS = ["recommend", "search", "frontier"];
 const NOISE_TRACE_MATCHERS = [
@@ -92,8 +93,29 @@ function scrubEventCoordinates<
   return event;
 }
 
+const LIBSQL_GATEWAY_MESSAGE = /^SERVER_ERROR: Server returned HTTP status (\d{3})$/;
+
+export function databaseGatewayStatus(event: ErrorEvent): number | undefined {
+  for (const exception of event.exception?.values ?? []) {
+    const status = Number(LIBSQL_GATEWAY_MESSAGE.exec(exception.value ?? "")?.[1]);
+    if (exception.type === "LibsqlError" && TRANSIENT_GATEWAY_STATUSES.has(status)) {
+      return status;
+    }
+  }
+  return undefined;
+}
+
+export function groupDatabaseGatewayFailure(event: ErrorEvent): ErrorEvent {
+  const status = databaseGatewayStatus(event);
+  if (status !== undefined) {
+    event.fingerprint = ["libsql-gateway", String(status)];
+    event.tags = { ...event.tags, "fluncle.db_gateway_status": status };
+  }
+  return event;
+}
+
 export function scrubServerSentryEvent(event: ErrorEvent): ErrorEvent {
-  return scrubSensitiveValue(scrubEventCoordinates(event));
+  return scrubSensitiveValue(groupDatabaseGatewayFailure(scrubEventCoordinates(event)));
 }
 
 export function scrubServerSentryBreadcrumb<T>(breadcrumb: T): T {

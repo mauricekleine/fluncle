@@ -19,6 +19,30 @@ export function browserSpanStart(options: StartSpanOptions, timeOrigin: number):
   return options.op === "pageload" ? { ...options, startTime: timeOrigin / 1000 } : options;
 }
 
+type BrowserErrorEvent = {
+  exception?: {
+    values?: { stacktrace?: { frames?: { filename?: string }[] }; value?: string }[];
+  };
+  message?: string;
+};
+
+const FOREIGN_FRAME_SOURCE =
+  /^(pptr:|__puppeteer_evaluation_script__|chrome-extension:|moz-extension:|safari-extension:|safari-web-extension:)/;
+const FOREIGN_MESSAGES = ["Invalid call to runtime.sendMessage()"];
+
+export function isForeignBrowserError(event: BrowserErrorEvent): boolean {
+  const exceptions = event.exception?.values ?? [];
+  const messages = [event.message, ...exceptions.map((exception) => exception.value)];
+  return (
+    messages.some((message) => FOREIGN_MESSAGES.some((foreign) => message?.includes(foreign))) ||
+    exceptions.some((exception) =>
+      exception.stacktrace?.frames?.some((frame) =>
+        FOREIGN_FRAME_SOURCE.test(frame.filename ?? ""),
+      ),
+    )
+  );
+}
+
 export function bufferBrowserErrors(
   target: Pick<Window, "addEventListener" | "removeEventListener">,
 ) {
@@ -65,7 +89,9 @@ async function loadBrowserSentry() {
       {
         ...browserSentryScrubHooks,
         beforeSend: (event) =>
-          shouldDropError() ? null : browserSentryScrubHooks.beforeSend(event),
+          shouldDropError() || isForeignBrowserError(event)
+            ? null
+            : browserSentryScrubHooks.beforeSend(event),
         dsn: BROWSER_SENTRY_DSN,
         environment: sentryEnvironmentForHost(window.location.hostname),
         release: SENTRY_RELEASE,
