@@ -88,7 +88,7 @@ The image is built `FROM oven/bun:<ver>-debian@sha256:<digest>` (Debian trixie),
   npm view @anthropic-ai/claude-code version
   ```
 
-- **How to bump:** never by hand or by this routine. The operator's agent layer opens a sync PR that sets this version line together with the managed settings in `docs/agents/hermes/claude-managed-settings.d`; on merge the on-box `fluncle-pin-watch` timer rebuilds, pre-smokes (`claude --version` == the pin, an agent-tier `{ok:true}` check), and auto-rolls-back on any failure. This is the `claude -p` binary the box sweeps shell out to (subscription auth at run time; zero OpenRouter tokens). Never float `latest`.
+- **How to bump:** never by hand or by this routine. The operator's agent layer opens a sync PR that sets this version line together with the managed settings in `docs/agents/hermes/claude-managed-settings.d`; on merge the on-box `fluncle-pin-watch` timer rebuilds, pre-smokes (`claude --version` == the pin, the agent token's `forbidden` role-boundary check), and auto-rolls-back on any failure. This is the `claude -p` binary the box sweeps shell out to (subscription auth at run time; zero OpenRouter tokens). Never float `latest`.
 - **Safety:** report drift only. The sync PR keeps the CLI and its managed settings in step, so a routine bump of the version line alone would split them.
 
 ---

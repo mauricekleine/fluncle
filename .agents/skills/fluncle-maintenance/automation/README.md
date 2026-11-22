@@ -12,7 +12,7 @@ Together they cover the inventory: the workflow owns `fluncle` / `bun` (the base
 The bump-PR half needs **write credentials** (push a branch, open a PR); the box deliberately holds **none** — `fluncle-pin-watch` is credential-free (a read-only public clone plus the running container's own env). So the two halves live apart on purpose:
 
 - **GitHub Actions / nightly dependency routine** (they have the repo + a token) → open the PR that moves the pin.
-- **rave-02 `fluncle-pin-watch`** (credential-free) → deploy the merged pin within the hour.
+- **rave-02 `fluncle-pin-watch`** (credential-free) → deploy the merged pin at the first hourly tick at least two hours after its previous build.
 
 That keeps the box token-free while the galaxy still self-maintains, **repo AND box**.
 

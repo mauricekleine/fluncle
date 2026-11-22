@@ -137,7 +137,7 @@ if [ ${#CHANGES[@]} -gt 0 ]; then
 		echo
 		printf '%s\n' "${CHANGES[@]/#/- }"
 		echo
-		echo "On merge, the rave-02 \`fluncle-pin-watch\` timer rebuilds the Hermes image, pre-smokes it (versions + an agent \`{ok:true}\` read + a publish-class 403), swaps the container, and auto-rolls-back on any failure — within the hour. The repo-side bun change ships on the merge via CI."
+		echo "On merge, the rave-02 \`fluncle-pin-watch\` timer rebuilds the Hermes image, pre-smokes it (pinned versions, the agent token refused with \`forbidden\` on a publish-class command, a hermes-writable runtime, the embed engine imports), swaps the container, and auto-rolls-back on a failed post-swap smoke. It builds at the first hourly tick at least two hours after its previous build, so a merge deploys within about three hours. The repo-side bun change ships on the merge via CI."
 		if [ ${#BRAKE_LINES[@]} -gt 0 ]; then
 			echo
 			echo "> Risky drift was also found and left for an operator (see the open maintenance issue): not in this PR."
