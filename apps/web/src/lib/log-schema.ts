@@ -283,6 +283,7 @@ export function mixtapeVideoObjectJsonLd(
     creator: fluncleEntityRef,
     description:
       mixtape.note ?? `Fluncle drum & bass mixtape: ${mixtapeDisplayTitle(mixtape.title)}.`,
+    ...(mixtape.durationMs ? { duration: formatIsoDuration(mixtape.durationMs) } : {}),
     name: mixtapeDisplayTitle(mixtape.title),
     publisher: fluncleEntityRef,
     thumbnailUrl,
