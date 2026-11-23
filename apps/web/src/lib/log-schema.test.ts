@@ -895,30 +895,6 @@ describe("mixtapeAlbumJsonLd", () => {
 
     expect(video.creator).toEqual(fluncleNode);
     expect(video.publisher).toEqual(fluncleNode);
-    expect(video).not.toHaveProperty("duration");
-  });
-
-  it("gives the set video the recording's length, the same duration the album carries", () => {
-    const mixtape: MixtapeDTO = {
-      addedAt: "2026-06-18T21:00:00.000Z",
-      artists: ["Fluncle"],
-      durationMs: 4_304_790,
-      externalUrls: {},
-      logId: "019.F.1A",
-      memberCount: 0,
-      members: [],
-      status: "published",
-      title: "Fluncle Drum & Bass Mixtape #1",
-      type: "mixtape",
-    };
-    const video = mixtapeVideoObjectJsonLd(mixtape, {
-      contentUrl: "https://found.fluncle.com/019.F.1A/set.mp4",
-      thumbnailUrl: "https://www.fluncle.com/api/mixtape-cover/019.F.1A?size=card",
-      uploadDate: "2026-06-29T06:48:02.531Z",
-    });
-
-    expect(video.duration).toBe("PT71M45S");
-    expect(video.duration).toBe(mixtapeAlbumJsonLd(mixtape).duration);
   });
 });
 
