@@ -64,3 +64,4 @@ Read the entry matching the area you are changing before editing it. [AGENTS.md]
 - [docs/reach-tier2-activation.md](../docs/reach-tier2-activation.md) - runbook for the `/reach` page's platform numbers.
 - [docs/audit-backlog.md](../docs/audit-backlog.md) - the nightly audit's findings ledger; a worklist, never specification.
 - [docs/db-scale-backlog.md](../docs/db-scale-backlog.md) - the DB query-shape scale ledger; a worklist, never specification.
+- [docs/sentry-backlog.md](../docs/sentry-backlog.md) - the nightly Sentry triage's filed-issues ledger; a worklist, never specification.
