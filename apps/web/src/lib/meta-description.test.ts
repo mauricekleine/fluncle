@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { bioMetaDescription, leadingSentences } from "./meta-description";
+import {
+  bioMetaDescription,
+  labelledMetaDescription,
+  leadingSentences,
+  META_DESCRIPTION_MAX,
+} from "./meta-description";
 
 describe("bioMetaDescription (the entity bio → ≤160 meta description trim)", () => {
   it("returns a bio already within the cap verbatim, with no ellipsis", () => {
@@ -94,5 +99,66 @@ describe("leadingSentences (whole bio sentences that fit a room)", () => {
 
   it("refuses a bio that ends mid-sentence", () => {
     expect(leadingSentences("A producer from Leeds", 200)).toBeUndefined();
+  });
+});
+
+describe("labelledMetaDescription (a fixed label plus a subject cut to the snippet budget)", () => {
+  const LABEL = "Fluncle drum & bass mixtape: ";
+
+  it("returns the label, the whitespace-collapsed subject and a full stop when it fits", () => {
+    expect(labelledMetaDescription(LABEL, "  Night   bus \n home  ")).toBe(
+      "Fluncle drum & bass mixtape: Night bus home.",
+    );
+  });
+
+  it("keeps a line of exactly the budget verbatim", () => {
+    const subject = "a".repeat(META_DESCRIPTION_MAX - LABEL.length - 1);
+    const line = labelledMetaDescription(LABEL, subject);
+
+    expect(line).toBe(`${LABEL}${subject}.`);
+    expect(line).toHaveLength(META_DESCRIPTION_MAX);
+  });
+
+  it("cuts one character over the budget to the budget, ending on an ellipsis", () => {
+    const line = labelledMetaDescription(LABEL, "a".repeat(META_DESCRIPTION_MAX - LABEL.length));
+
+    expect(line).toHaveLength(META_DESCRIPTION_MAX);
+    expect(line.startsWith(LABEL)).toBe(true);
+    expect(line.endsWith("a…")).toBe(true);
+  });
+
+  it("cuts a long subject at its last whole word", () => {
+    const line = labelledMetaDescription(LABEL, "rollers ".repeat(30));
+
+    expect(line).toBe(`${LABEL}${Array.from({ length: 16 }, () => "rollers").join(" ")}…`);
+    expect(line.length).toBeLessThanOrEqual(META_DESCRIPTION_MAX);
+  });
+
+  it.each([", ", " — "])(
+    "drops the punctuation a word cut leaves before the ellipsis (%j)",
+    (separator) => {
+      const line = labelledMetaDescription(
+        LABEL,
+        `${"x".repeat(100)} ${"y".repeat(20)}${separator}${"z".repeat(50)}`,
+      );
+
+      expect(line).toBe(`${LABEL}${"x".repeat(100)} ${"y".repeat(20)}…`);
+    },
+  );
+
+  it("hard-cuts a subject whose only space falls in the first half of the room", () => {
+    const line = labelledMetaDescription(LABEL, `ab ${"z".repeat(200)}`);
+
+    expect(line).toHaveLength(META_DESCRIPTION_MAX);
+    expect(line.startsWith(`${LABEL}ab zzz`)).toBe(true);
+    expect(line.endsWith("z…")).toBe(true);
+  });
+
+  it("never splits a character that takes two UTF-16 units", () => {
+    const line = labelledMetaDescription(LABEL, "🌌".repeat(80));
+
+    expect(line.length).toBeLessThanOrEqual(META_DESCRIPTION_MAX);
+    expect(line).toBe(`${LABEL}${"🌌".repeat(65)}…`);
+    expect(line).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
   });
 });
