@@ -210,6 +210,9 @@ function placeholders(count: number): string {
   return Array.from({ length: count }, () => "?").join(", ");
 }
 
+export const TRACKS_SCORED_SQL = `select count(*) as n from tracks indexed by tracks_demand_score_idx
+  where demand_score is not null`;
+
 export async function recordDemand(
   options: RecordDemandOptions = {},
 ): Promise<RecordDemandSummary> {
@@ -431,16 +434,7 @@ export async function recordDemand(
   let tracksScored = 0;
 
   if (demandedArtistIds.length > 0 || demandedLabelSlugs.length > 0) {
-    const scoredResult = await db.execute({
-      args: [...demandedArtistIds, ...demandedLabelSlugs],
-      sql: `select count(*) as n from (
-              select track_id from track_artists
-                where ${demandedArtistIds.length > 0 ? `artist_id in (${placeholders(demandedArtistIds.length)})` : "0 = 1"}
-              union
-              select track_id from tracks
-                where ${demandedLabelSlugs.length > 0 ? `label_id in (select id from labels where slug in (${placeholders(demandedLabelSlugs.length)}))` : "0 = 1"}
-            )`,
-    });
+    const scoredResult = await db.execute({ args: [], sql: TRACKS_SCORED_SQL });
 
     tracksScored = Number(typedRows<{ n: number }>(scoredResult.rows)[0]?.n ?? 0);
   }
