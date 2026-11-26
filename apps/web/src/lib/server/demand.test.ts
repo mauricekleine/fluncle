@@ -17,6 +17,7 @@ import {
   recordDemand,
   summarizeDemand,
   summarizeReferrers,
+  TRACKS_SCORED_SQL,
 } from "./demand";
 import { setCatalogueCapturePaused } from "./capture-budget";
 import { listTrackWork } from "./track-work";
@@ -189,6 +190,32 @@ describe("recordDemand — the rewrite", () => {
     expect(await demandScore("t2")).toBe(4);
     expect(await demandScore("t3")).toBe(14);
     expect(await demandScore("t4")).toBeNull();
+  });
+
+  it("counts tracksScored from the stored scores, so an orphaned credit edge is not a scored track", async () => {
+    await seedArtist("art_a", "artist-a", null);
+    await seedTrack({ artistIds: ["art_a"], trackId: "t1" });
+    await db.execute("pragma foreign_keys = off");
+    await db.execute({
+      args: ["t_orphan", "art_a"],
+      sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 2)`,
+    });
+    await db.execute("pragma foreign_keys = on");
+
+    const summary = await recordDemand({
+      fetchImpl: saFetch([{ pageviews: 10, value: "/artist/artist-a" }]),
+      now: NOW,
+    });
+
+    expect(summary.tracksScored).toBe(1);
+  });
+
+  it("reads the scored count off the partial demand-score index alone", async () => {
+    const plan = await db.execute(`explain query plan ${TRACKS_SCORED_SQL}`);
+    const detail = plan.rows.map((row) => String(row.detail)).join(" | ");
+
+    expect(detail).toContain("tracks_demand_score_idx");
+    expect(detail).not.toMatch(/track_artists|labels/);
   });
 
   it("is idempotent: a second run CLEARS the prior scores then re-sets", async () => {
