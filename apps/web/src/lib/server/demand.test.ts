@@ -212,7 +212,9 @@ describe("recordDemand — the rewrite", () => {
 
   it("reads the scored count off the partial demand-score index alone", async () => {
     const plan = await db.execute(`explain query plan ${TRACKS_SCORED_SQL}`);
-    const detail = plan.rows.map((row) => String(row.detail)).join(" | ");
+    const detail = plan.rows
+      .map((row) => (typeof row.detail === "string" ? row.detail : ""))
+      .join(" | ");
 
     expect(detail).toContain("tracks_demand_score_idx");
     expect(detail).not.toMatch(/track_artists|labels/);
