@@ -144,7 +144,7 @@ describe("renderEditionEmailHtml — Frontier teaser (email-only chrome)", () =>
 function expandHex(hex: string): string {
   const digits = hex.replace(/^#/, "");
 
-  return digits.length === 3 ? [...digits].map((digit) => `${digit}${digit}`).join("") : digits;
+  return digits.length === 3 ? digits.replace(/./g, "$&$&") : digits;
 }
 
 function relativeLuminance(hex: string): number {
