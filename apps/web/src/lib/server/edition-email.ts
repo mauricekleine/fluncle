@@ -7,7 +7,7 @@ export const POSTAL_ADDRESS = "With love, from somewhere deep in the Galaxy, Flu
 const FRONTIER_TEASER_URL = `${siteUrl}/recommendations`;
 
 const FRONTIER_TEASER_HTML =
-  `<p style="border-top:1px solid #ddd;margin-top:24px;padding-top:16px;font-size:14px;color:#555">` +
+  `<p style="border-top:1px solid #e2dacb;margin-top:24px;padding-top:16px;font-size:14px;color:#5c554a">` +
   `<strong>The frontier</strong><br />` +
   `Point me at the tracks you love and I'll dig through the archive for more.<br />` +
   `<a href="${FRONTIER_TEASER_URL}">Open the frontier</a></p>`;
@@ -77,7 +77,7 @@ export async function renderEditionEmailHtml(edition: EditionDTO): Promise<strin
       const label = track ? trackLabel(track) : finding.logId;
 
       const why = finding.why?.trim()
-        ? `<br /><span style="color:#555">${escapeHtml(finding.why)}</span>`
+        ? `<br /><span style="color:#5c554a">${escapeHtml(finding.why)}</span>`
         : "";
       parts.push(`<li><a href="${escapeHtml(href)}">${escapeHtml(label)}</a>${why}</li>`);
     }
@@ -112,7 +112,7 @@ export async function renderEditionEmailHtml(edition: EditionDTO): Promise<strin
   parts.push(FRONTIER_TEASER_HTML);
 
   parts.push(
-    `<hr /><p style="font-size:12px;color:#888">` +
+    `<hr /><p style="font-size:12px;color:#6e6657">` +
       `<a href="{{{RESEND_UNSUBSCRIBE_URL}}}">Unsubscribe</a> · ` +
       `<a href="${siteUrl}/newsletter">Back issues</a><br />${escapeHtml(POSTAL_ADDRESS)}</p>`,
   );
