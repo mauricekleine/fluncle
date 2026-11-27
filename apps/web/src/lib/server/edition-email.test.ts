@@ -140,3 +140,67 @@ describe("renderEditionEmailHtml — Frontier teaser (email-only chrome)", () =>
     expect(unsubscribe).toBeGreaterThan(teaser);
   });
 });
+
+function expandHex(hex: string): string {
+  const digits = hex.replace(/^#/, "");
+
+  return digits.length === 3 ? digits.replace(/./g, "$&$&") : digits;
+}
+
+function relativeLuminance(hex: string): number {
+  const digits = expandHex(hex);
+  const channels = [0, 2, 4].map((start) => {
+    const value = Number.parseInt(digits.slice(start, start + 2), 16) / 255;
+
+    return value <= 0.040_45 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  const [red = 0, green = 0, blue = 0] = channels;
+
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+function contrastOnWhite(hex: string): number {
+  return 1.05 / (relativeLuminance(hex) + 0.05);
+}
+
+describe("renderEditionEmailHtml — inline palette", () => {
+  beforeEach(() => {
+    getTracksByLogIds.mockReset();
+    getTracksByLogIds.mockResolvedValue({ "021.7.1A": track() });
+  });
+
+  async function fullEdition(): Promise<string> {
+    return renderEditionEmailHtml(
+      edition({
+        galaxies: [{ findings: [{ logId: "021.7.1A", why: "the snare alone" }], galaxy: "Astral" }],
+      }),
+    );
+  }
+
+  it("holds every inline text colour at WCAG AA on the client's white canvas", async () => {
+    const textColours = [
+      ...(await fullEdition()).matchAll(/(?<![-\w])color:(#(?:[0-9a-f]{6}|[0-9a-f]{3}))\b/gi),
+    ].map((match) => match[1] ?? "");
+
+    expect(textColours.length).toBeGreaterThan(0);
+
+    for (const colour of textColours) {
+      expect(contrastOnWhite(colour), colour).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("leans every inline neutral warm, never a cool or neutral grey (DESIGN.md, The Warm Dark Rule)", async () => {
+    const colours = [...(await fullEdition()).matchAll(/#((?:[0-9a-f]{6}|[0-9a-f]{3}))\b/gi)].map(
+      (match) => expandHex(match[1] ?? ""),
+    );
+
+    expect(colours.length).toBeGreaterThan(0);
+
+    for (const colour of colours) {
+      const red = Number.parseInt(colour.slice(0, 2), 16);
+      const blue = Number.parseInt(colour.slice(4, 6), 16);
+
+      expect(red, `#${colour}`).toBeGreaterThan(blue);
+    }
+  });
+});
