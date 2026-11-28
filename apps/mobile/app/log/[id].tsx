@@ -151,7 +151,7 @@ export default function LogScreen() {
           </View>
         ) : (
           <Text style={[font.body, { color: color.stardust, padding: 16 }]}>
-            {isLoading ? "Recovering finding…" : "Finding not found."}
+            {isLoading ? "Recovering finding…" : "Nothing at this coordinate."}
           </Text>
         )}
       </SafeAreaView>
