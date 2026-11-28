@@ -90,7 +90,7 @@ function EditionDialogInner({
         ) : editionQuery.isError || !detail ? (
           <p className="rec-muted">Could not pull that edition. Try again in a moment.</p>
         ) : detail.tracks.length === 0 ? (
-          <p className="rec-muted">Nothing in this one.</p>
+          <p className="rec-muted">No tracks in this edition.</p>
         ) : (
           <ol className="rec-shelf">
             {detail.tracks.map((track) => (
